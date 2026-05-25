@@ -5,9 +5,7 @@ from datetime import datetime, timezone
 from core.database import SessionLocal
 from core.errors import ErrorCodes, raise_error
 from repositories import RoleRepository, UserRepository
-from services.auth_service import auth_service
-
-_MAX_EMAIL_LEN = 30
+from services.auth_service import EMAIL_MAX_LEN, auth_service
 
 
 class UserService:
@@ -46,7 +44,7 @@ class UserService:
             email = email.strip()
             if not email:
                 email = None
-            elif len(email) > _MAX_EMAIL_LEN:
+            elif len(email) > EMAIL_MAX_LEN:
                 raise_error(ErrorCodes.EMAIL_TOO_LONG)
         with SessionLocal() as db:
             if UserRepository.get_by_username(db, username):
