@@ -159,8 +159,8 @@ func registerAllRoutes(r *mux.Router) {
 	handleAPI(r, "POST", "/user-preference:confirm", []string{"qa.read"}, preference.Confirm)
 	handleAPI(r, "POST", "/user-preference:discard", []string{"qa.read"}, preference.Discard)
 
-	// :detail text {name} text，text /conversations/xxx:detail text {name} text GetConversation（text history）
 	handleAPI(r, "GET", "/conversations/{name}:detail", []string{"qa.read"}, chat.GetConversationDetail)
+	handleAPI(r, "GET", "/conversations/{name}:history", []string{"qa.read"}, chat.GetConversationHistory)
 	handleAPI(r, "GET", "/conversations/{name}", []string{"qa.read"}, chat.GetConversation)
 	handleAPI(r, "DELETE", "/conversations/{name}", []string{"qa.read"}, chat.DeleteConversation)
 	handleAPI(r, "POST", "/conversations:batchDelete", []string{"qa.read"}, chat.BatchDeleteConversations)
