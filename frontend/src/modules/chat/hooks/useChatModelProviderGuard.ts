@@ -2,6 +2,11 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { AgentAppsAuth, AUTH_USER_CHANGE_EVENT } from "@/components/auth";
 import { axiosInstance, BASE_URL } from "@/components/request";
 import { fetchCurrentUser } from "@/modules/signin/utils/request";
+import {
+  fetchModelFeatures,
+  isImageEmbedRequired,
+  MODEL_FEATURES_CHANGED_EVENT,
+} from "@/hooks/useModelFeatures";
 
 type ApiEnvelope<T> = {
   data?: T;
@@ -27,7 +32,7 @@ function unwrapResponse<T>(payload: ApiEnvelope<T> | T): T {
 }
 
 export function useChatModelProviderGuard() {
-  const [status, setStatus] = useState<ChatModelProviderStatus>("idle");
+  const [status, setStatus] = useState<ChatModelProviderStatus>("loading");
   const [requiresModelProviderConfig, setRequiresModelProviderConfig] =
     useState<boolean | null>(() => {
       const dynamic = AgentAppsAuth.getUserInfo()?.dynamic;
@@ -38,54 +43,62 @@ export function useChatModelProviderGuard() {
   const [rerankReady, setRerankReady] = useState<boolean | null>(null);
   const [vlmReady, setVlmReady] = useState<boolean | null>(null);
   const requestIdRef = useRef(0);
-  const mountedRef = useRef(true);
 
-  const refresh = useCallback(async () => {
+  const runCheck = useCallback(async () => {
     const requestId = requestIdRef.current + 1;
     requestIdRef.current = requestId;
     setStatus("loading");
+
+    const isStale = () => requestIdRef.current !== requestId;
 
     let shouldCheckModelProvider = false;
 
     try {
       const currentUser = await fetchCurrentUser();
-      if (!mountedRef.current || requestIdRef.current !== requestId) {
+      if (isStale()) {
         return false;
       }
       shouldCheckModelProvider = currentUser.dynamic === true;
       setRequiresModelProviderConfig(shouldCheckModelProvider);
     } catch {
-      if (mountedRef.current && requestIdRef.current === requestId) {
+      if (!isStale()) {
         setStatus("error");
       }
       return false;
     }
 
     if (!shouldCheckModelProvider) {
-      setStatus("ready");
+      if (!isStale()) {
+        setStatus("ready");
+      }
       return true;
     }
 
     try {
+      const features = await fetchModelFeatures(true);
+      const imageEmbedRequired = isImageEmbedRequired(features);
+
       const [chatReadyResp, embeddingResp, multimodalEmbeddingResp, rerankResp, vlmResp] = await Promise.all([
         axiosInstance.get<ApiEnvelope<ModelReadyResponse> | ModelReadyResponse>(
-          `${BASE_URL}/api/core/model_providers/models/ready?model_type=llm-chat`
+          `${BASE_URL}/api/core/model_providers/models/ready?model_type=llm`
         ).catch(() => null),
         axiosInstance.get<ApiEnvelope<ModelReadyResponse> | ModelReadyResponse>(
-          `${BASE_URL}/api/core/model_providers/models/ready?model_type=embedding`
+          `${BASE_URL}/api/core/model_providers/models/ready?model_type=embed_main`
+        ).catch(() => null),
+        imageEmbedRequired
+          ? axiosInstance.get<ApiEnvelope<ModelReadyResponse> | ModelReadyResponse>(
+              `${BASE_URL}/api/core/model_providers/models/ready?model_type=embed_image`
+            ).catch(() => null)
+          : Promise.resolve(null),
+        axiosInstance.get<ApiEnvelope<ModelReadyResponse> | ModelReadyResponse>(
+          `${BASE_URL}/api/core/model_providers/models/ready?model_type=reranker`
         ).catch(() => null),
         axiosInstance.get<ApiEnvelope<ModelReadyResponse> | ModelReadyResponse>(
-          `${BASE_URL}/api/core/model_providers/models/ready?model_type=multimodal_embedding`
-        ).catch(() => null),
-        axiosInstance.get<ApiEnvelope<ModelReadyResponse> | ModelReadyResponse>(
-          `${BASE_URL}/api/core/model_providers/models/ready?model_type=rerank`
-        ).catch(() => null),
-        axiosInstance.get<ApiEnvelope<ModelReadyResponse> | ModelReadyResponse>(
-          `${BASE_URL}/api/core/model_providers/models/ready?model_type=VLM`
+          `${BASE_URL}/api/core/model_providers/models/ready?model_type=vlm`
         ).catch(() => null),
       ]);
 
-      if (!mountedRef.current || requestIdRef.current !== requestId) {
+      if (isStale()) {
         return false;
       }
 
@@ -99,18 +112,23 @@ export function useChatModelProviderGuard() {
         return unwrapResponse<ModelReadyResponse>(resp.data).ready ?? null;
       };
       setEmbeddingReady(getReady(embeddingResp));
-      setMultimodalEmbeddingReady(getReady(multimodalEmbeddingResp));
+      // null means "not applicable" (image embed not configured) — does not trigger disabled state.
+      setMultimodalEmbeddingReady(imageEmbedRequired ? getReady(multimodalEmbeddingResp) : null);
       setRerankReady(getReady(rerankResp));
       setVlmReady(getReady(vlmResp));
 
       return ready;
     } catch {
-      if (mountedRef.current && requestIdRef.current === requestId) {
+      if (!isStale()) {
         setStatus("error");
       }
       return false;
     }
   }, []);
+
+  const refresh = useCallback(() => {
+    void runCheck();
+  }, [runCheck]);
 
   useEffect(() => {
     const updateDynamicUserState = () => {
@@ -131,17 +149,30 @@ export function useChatModelProviderGuard() {
   }, []);
 
   useEffect(() => {
-    mountedRef.current = true;
-    void refresh();
+    void runCheck();
+
+    const onFeaturesChanged = () => {
+      void runCheck();
+    };
+    window.addEventListener(MODEL_FEATURES_CHANGED_EVENT, onFeaturesChanged);
+    const onVisibilityChange = () => {
+      if (document.visibilityState === "visible") {
+        void runCheck();
+      }
+    };
+    document.addEventListener("visibilitychange", onVisibilityChange);
 
     return () => {
-      mountedRef.current = false;
+      window.removeEventListener(MODEL_FEATURES_CHANGED_EVENT, onFeaturesChanged);
+      document.removeEventListener("visibilitychange", onVisibilityChange);
+      // Invalidate in-flight work from a previous mount (e.g. React Strict Mode).
+      requestIdRef.current += 1;
     };
-  }, [refresh]);
+  }, [runCheck]);
 
   return {
     canChat: status === "ready",
-    isChecking: status === "idle" || status === "loading",
+    isChecking: status === "loading",
     needsModelProviderConfig: status === "missing",
     requiresModelProviderConfig: requiresModelProviderConfig === true,
     embeddingReady,

@@ -1,13 +1,12 @@
 from typing import Annotated, Any, Dict, List, Optional
 
-from fastapi import APIRouter, Body, Request
+from fastapi import APIRouter, Body
 from chat.app.core.chat_service import handle_chat
 from chat.config import DEFAULT_CHAT_DATASET
 
 router = APIRouter()
 
 
-@router.post('/api/chat', summary='Chat with the knowledge base')
 @router.post('/api/chat/stream', summary='Chat with the knowledge base (streaming)')
 async def chat(
     query: Annotated[str, Body(description='User question')],
@@ -49,11 +48,17 @@ async def chat(
             )
         ),
     ] = None,
-    *,
-    request: Request,
+    tool_config: Annotated[
+        Optional[Dict[str, str]],
+        Body(
+            description=(
+                'Per-request tool credentials. Keys are tool/provider names, values are tokens. '
+                'For OAuth2 providers (e.g. feishu) pass a valid, unexpired access token. '
+                'Example: {"feishu": "u-xxx", "bing": "sk-xxx"}'
+            )
+        ),
+    ] = None,
 ):
-    is_stream = request.url.path.endswith('/stream')
-
     return await handle_chat(
         query=query,
         history=history,
@@ -71,8 +76,8 @@ async def chat(
         memory=memory,
         user_preference=user_preference,
         use_memory=use_memory,
-        is_stream=is_stream,
         environment_context=environment_context,
         user_id=(user_id or '').strip(),
         model_config=llm_config,
+        tool_config=tool_config,
     )

@@ -64,6 +64,10 @@ x-llm-api-keys: &llm-api-keys
 x-upload-paths: &upload-paths
   LAZYMIND_UPLOAD_HOST_DIR: ./data/core/uploads
   LAZYMIND_SHARED_UPLOAD_DIR: /var/lib/lazymind/uploads
+  LAZYMIND_OCR_CACHE_DIR: /var/lib/lazymind/uploads/.image_cache
+
+# Local lazyllm source -> /opt/lazyllm (edit on host, docker compose restart; no image rebuild).
+x-lazyllm-src-mount: &lazyllm-src-mount ./algorithm/lazyllm:/opt/lazyllm
 
 x-runtime-home: &runtime-home
   LAZYMIND_HOME: /tmp/.lazyllm_rag
@@ -374,9 +378,6 @@ services:
     volumes:
       - ./data/core/uploads:/var/lib/lazymind/uploads
       - ./data/traces:/var/lib/lazymind/traces
-      # Image bakes /app/algorithm; Python may import lazyllm from there (not /opt/lazyllm). Mount repo
-      # so doc_manager matches Core /v1/docs/add (kb bound to general_algo, no algo_id in body).
-      - ./algorithm/lazyllm:/opt/lazyllm:ro
     environment:
       <<: [*db-conn, *upload-paths, *llm-api-keys, *trace-config]
       LAZYMIND_DOCUMENT_SERVICE_PORT: "8000"
@@ -429,18 +430,16 @@ services:
     expose:
       - "8000"
     volumes:
-      - rag-uploads:/app/uploads
+      - ./data/core/uploads:/var/lib/lazymind/uploads
+      - ./algorithm/config.py:/app/algorithm/config.py
+      - ./algorithm/parsing/mineru.py:/app/algorithm/parsing/mineru.py
       - mineru-model-cache:/root/.cache
-      - mineru-cache:/app/.mineru-cache
-      - mineru-images:/app/.mineru-images
-      - ./algorithm/lazyllm:/opt/lazyllm:ro
+      - *lazyllm-src-mount
     environment:
-      <<: *llm-api-keys
+      <<: [*upload-paths, *llm-api-keys]
       LAZYLLM_EXPECTED_LOG_MODULES: "all"
       LAZYMIND_MINERU_SERVER_PORT: "8000"
       LAZYMIND_MINERU_BACKEND: pipeline
-      LAZYMIND_MINERU_CACHE_DIR: /app/.mineru-cache
-      LAZYMIND_MINERU_IMAGE_SAVE_DIR: /app/.mineru-images
     command: ["python", "parsing/mineru.py"]
 
   # PaddleOCR-VL document parsing service (official images).
@@ -514,7 +513,7 @@ services:
     volumes:
       - ./data/core/uploads:/var/lib/lazymind/uploads
       - ./data/traces:/var/lib/lazymind/traces
-      - ./algorithm/lazyllm:/opt/lazyllm:ro
+      - *lazyllm-src-mount
     environment:
       LAZYMIND_DOCUMENT_PROCESSOR_PORT: "8000"
       <<: [*runtime-home, *db-conn, *upload-paths, *llm-api-keys, *trace-config]
@@ -550,7 +549,7 @@ services:
     volumes:
       - ./data/core/uploads:/var/lib/lazymind/uploads
       - ./data/traces:/var/lib/lazymind/traces
-      - ./algorithm/lazyllm:/opt/lazyllm:ro
+      - *lazyllm-src-mount
     environment:
       LAZYMIND_DOCUMENT_WORKER_PORT: "8001"
       LAZYMIND_DOCUMENT_WORKER_NUM_WORKERS: "1"
@@ -595,16 +594,9 @@ services:
     volumes:
       - ./data/core/uploads:/var/lib/lazymind/uploads
       - ./data/traces:/var/lib/lazymind/traces
-      - ./algorithm/chat:/app/chat:ro
-      - ./algorithm/common:/app/common:ro
-      - ./algorithm/vocab:/app/vocab:ro
-      - ./algorithm/parsing:/app/parsing:ro
-      - ./algorithm/processor:/app/processor:ro
-      - ./algorithm/config.py:/app/config.py:ro
-      - ./algorithm/config.py:/app/algorithm/config.py:ro
-      - ./algorithm/lazyllm:/opt/lazyllm:ro
+      - *lazyllm-src-mount
     healthcheck:
-      test: ['CMD-SHELL', 'python parsing/healthcheck.py']
+      test: ['CMD-SHELL', 'python algorithm/parsing/healthcheck.py']
       interval: 15s
       timeout: 10s
       retries: 10
@@ -615,7 +607,6 @@ services:
       LAZYMIND_DOCUMENT_PROCESSOR_URL: http://processor-server:8000
       LAZYMIND_ALGO_SERVER_PORT: "8000"
       LAZYMIND_MODEL_CONFIG_PATH: ${LAZYMIND_MODEL_CONFIG_PATH:-dynamic}
-      PYTHONPATH: /opt/lazyllm:/app
       LAZYLLM_ALGO_REGISTER_POLICY: ${LAZYLLM_ALGO_REGISTER_POLICY:-}
       LAZYMIND_USE_INNER_MODEL: "true"
       LAZYMIND_MILVUS_URI: ${LAZYMIND_MILVUS_URI:-http://milvus:19530}
@@ -649,13 +640,7 @@ services:
     volumes:
       - ./data/core/uploads:/var/lib/lazymind/uploads
       - ./data/traces:/var/lib/lazymind/traces
-      - ./algorithm/chat:/app/chat:ro
-      - ./algorithm/common:/app/common:ro
-      - ./algorithm/vocab:/app/vocab:ro
-      - ./algorithm/parsing:/app/parsing:ro
-      - ./algorithm/processor:/app/processor:ro
-      - ./algorithm/config.py:/app/config.py:ro
-      - ./algorithm/lazyllm:/opt/lazyllm:ro
+      - *lazyllm-src-mount
     healthcheck:
       test: ['CMD-SHELL', 'curl -sf http://localhost:8046/docs || exit 1']
       interval: 10s
@@ -664,6 +649,7 @@ services:
       start_period: 180s
     environment:
       LAZYMIND_DOCUMENT_SERVER_URL: http://parsing:8000,general_algo
+      LAZYMIND_DOCUMENT_PROCESSOR_URL: http://processor-server:8000
       LAZYMIND_SHARED_UPLOAD_DIR: /var/lib/lazymind/uploads
       LAZYMIND_MOUNT_BASE_DIR: /var/lib/lazymind/uploads
       LAZYMIND_USE_INNER_MODEL: "true"
@@ -679,6 +665,7 @@ services:
       LAZYMIND_SKILL_REVIEW_INTERVAL: "5"
       LAZYMIND_SKILL_REVIEW_DEBUG: "false"
       LAZYMIND_SKIP_STARTUP_PIPELINE: "1"
+      LAZYLLM_INIT_DOC: 1
       # Chat uses the shared model config selector. Default dynamic mode enables
       # per-user model/API-key selection from core; set LAZYMIND_MODEL_CONFIG_PATH=online
       # or inner only when forcing a static config.
@@ -706,7 +693,7 @@ services:
     environment:
       LAZYMIND_EVO_API_PORT: "8047"
       LAZYMIND_EVO_BASE_DIR: /var/lib/lazymind/evo
-      LAZYMIND_EVO_CHAT_SOURCE: /var/lib/lazymind/chat-source
+      LAZYMIND_EVO_CHAT_SOURCE: /app/algorithm/chat
       LAZYMIND_EVO_CODE_MAP: /app/evo/code_map.json
       LAZYMIND_EVO_CODE_BINARY: /usr/local/bin/opencode
       LAZYMIND_EVO_CODE_PROVIDER: ${LAZYMIND_EVO_CODE_PROVIDER:-qwen}
@@ -720,15 +707,14 @@ services:
       LAZYMIND_EVO_CHUNK_BASE_URL: http://doc-server:8000
       LAZYMIND_EVO_TARGET_CHAT_URL: http://chat:8046/api/chat
       LAZYMIND_MODEL_CONFIG_PATH: ${LAZYMIND_MODEL_CONFIG_PATH:-dynamic}
+      LAZYLLM_INIT_DOC: 1
+      PYTHONPATH: /app/algorithm/lazyllm:/opt/lazyllm:/app/algorithm
       <<: [*runtime-home, *trace-config, *proxy-env, *llm-api-keys]
     volumes:
       - ./data/evo:/var/lib/lazymind/evo
       - ./data/traces:/var/lib/lazymind/traces
       - ./data/core/uploads:/var/lib/lazymind/uploads:ro
-      - ./algorithm/chat:/var/lib/lazymind/chat-source:ro
-      - ./algorithm/config.py:/app/config.py:ro
-      - ./algorithm/config.py:/app/algorithm/config.py:ro
-      - ./algorithm/lazyllm:/opt/lazyllm:ro
+      - ./algorithm:/app/algorithm:ro
       - ./evo:/app/evo:ro
     healthcheck:
       test: ["CMD-SHELL", "curl -sf http://localhost:8047/healthz || exit 1"]
@@ -858,10 +844,7 @@ services:
 volumes:
   pgdata:
   redisdata:
-  rag-uploads:
   mineru-model-cache:
-  mineru-cache:
-  mineru-images:
   milvus-etcd:
   milvus-minio:
   milvus-data:
