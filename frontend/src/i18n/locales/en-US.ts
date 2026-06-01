@@ -230,6 +230,7 @@ const enUS = {
     noModelSelectedForShare: "Please select a model before enabling sharing",
     shareOn: "Sharing enabled",
     shareOff: "Sharing disabled",
+    shareAdminTip: "Only admins can share. Once shared, all users on the platform can use this model.",
     shared: "Shared",
     unshared: "Not shared",
     shareEnabled: "Sharing enabled",
@@ -240,6 +241,7 @@ const enUS = {
     embeddingReadyTip: "Embedding model is ready",
     modelNotReadyTip: "Model is not ready",
     modelReadyTip: "Model is ready",
+    modelReadySharedTip: "Model is ready (shared by {{name}} · {{provider}} / {{model}})",
     error: {
       searchFailed: "Model provider search failed",
       loadProvidersFailed: "Failed to load model providers",
@@ -313,6 +315,9 @@ const enUS = {
     newChat: "New Chat",
     chatHistory: "Chat History",
     recentConversations: "Recent Conversations",
+    conversationGroupToday: "Today",
+    conversationGroupRecentWeek: "Past Week",
+    conversationGroupEarlier: "Earlier",
     noConversations: "No conversations yet",
     promptTemplate: "Common Phrases",
     inputPlaceholder: "Ask a question, supports multi-turn conversation and image understanding",
@@ -1541,8 +1546,10 @@ const enUS = {
     memoryGlossaryAliasMaxLength: "Each word must not exceed {{count}} characters",
     memoryGlossaryContentMaxLength: "Content must not exceed {{count}} characters",
     memorySkillTagMaxCount: "A skill can have at most {{count}} tags",
+    memoryGlossaryTermAliasExactDuplicate:
+      "The phrase cannot be exactly the same as a word in this group: {{word}}. Please edit it before saving.",
     memoryGlossaryWordsAlreadyExist:
-      "This phrase or word already exists: {{words}}. Edit the existing glossary entry or choose another value.",
+      "This phrase or word already exists: {{words}}. Saving will continue; check whether it should be merged or edited.",
     memoryGlossaryInboxButton: "Message Center ({{count}})",
     memoryGlossaryInboxTitle: "Glossary Message Center",
     memoryGlossaryInboxEmpty: "No pending glossary messages",

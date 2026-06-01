@@ -179,8 +179,8 @@ func registerAllRoutes(r *mux.Router) {
 	handleAPI(r, "POST", "/user-preference:confirm", []string{"qa.read"}, preference.Confirm)
 	handleAPI(r, "POST", "/user-preference:discard", []string{"qa.read"}, preference.Discard)
 
-	// :detail text {name} text，text /conversations/xxx:detail text {name} text GetConversation（text history）
 	handleAPI(r, "GET", "/conversations/{name}:detail", []string{"qa.read"}, chat.GetConversationDetail)
+	handleAPI(r, "GET", "/conversations/{name}:history", []string{"qa.read"}, chat.GetConversationHistory)
 	handleAPI(r, "GET", "/conversations/{name}", []string{"qa.read"}, chat.GetConversation)
 	handleAPI(r, "DELETE", "/conversations/{name}", []string{"qa.read"}, chat.DeleteConversation)
 	handleAPI(r, "POST", "/conversations:batchDelete", []string{"qa.read"}, chat.BatchDeleteConversations)
@@ -213,6 +213,7 @@ func registerAllRoutes(r *mux.Router) {
 	handleAPI(r, "POST", "/inner/word_group:apply", []string{}, wordgroup.ApplyWordGroupAction)
 
 	// ----- Model provider -----
+	handleAPI(r, "GET", "/model_providers/features", nil, modelprovider.GetModelFeatures)
 	handleAPI(r, "GET", "/model_providers", []string{}, modelprovider.ListUserProviders)
 	handleAPI(r, "GET", "/model_providers:with_groups", []string{}, modelprovider.ListUserProvidersWithGroups)
 	handleAPI(r, "POST", "/model_providers/{model_provider_id}/groups/{group_id}:check", []string{}, modelprovider.CheckGroup)
@@ -221,6 +222,10 @@ func registerAllRoutes(r *mux.Router) {
 	handleAPI(r, "GET", "/model_providers/selected_models", []string{}, modelprovider.GetSelectedModels)
 	handleAPI(r, "PUT", "/model_providers/selected_models", []string{}, modelprovider.SetSelectedModels)
 	handleAPI(r, "PUT", "/model_providers/selected_models/share", []string{"document.write"}, modelprovider.SetSharedModel)
+	handleAPI(r, "GET", "/model_providers/verified", []string{}, modelprovider.GetVerifiedProvider)
+	handleAPI(r, "GET", "/model_providers/selected_providers", []string{}, modelprovider.GetSelectedProviders)
+	handleAPI(r, "PUT", "/model_providers/selected_providers", []string{}, modelprovider.SetSelectedProvider)
+	handleAPI(r, "PUT", "/model_providers/selected_providers/share", []string{"document.write"}, modelprovider.SetSharedProvider)
 	handleAPI(r, "GET", "/model_providers/{model_provider_id}/groups", []string{}, modelprovider.ListGroups)
 	handleAPI(r, "POST", "/model_providers/{model_provider_id}/groups", []string{}, modelprovider.CreateGroup)
 	handleAPI(r, "PATCH", "/model_providers/{model_provider_id}/groups/{group_id}", []string{}, modelprovider.UpdateGroup)

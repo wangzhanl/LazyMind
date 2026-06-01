@@ -44,6 +44,11 @@ import type { TreeNode } from "@/modules/knowledge/pages/detail/components/Knowl
 import { useTranslation } from "react-i18next";
 import { axiosInstance, BASE_URL } from "@/components/request";
 import { AgentAppsAuth } from "@/components/auth";
+import {
+  fetchModelFeatures,
+  isImageEmbedRequired,
+  MODEL_FEATURES_CHANGED_EVENT,
+} from "@/hooks/useModelFeatures";
 
 import "./index.scss";
 
@@ -98,17 +103,37 @@ const KnowledgePage: FC = () => {
     getTags();
     getTableData();
     void checkEmbeddingReady();
+
+    const onFeaturesChanged = () => {
+      void checkEmbeddingReady();
+    };
+    window.addEventListener(MODEL_FEATURES_CHANGED_EVENT, onFeaturesChanged);
+    const onVisibilityChange = () => {
+      if (document.visibilityState === "visible") {
+        void checkEmbeddingReady();
+      }
+    };
+    document.addEventListener("visibilitychange", onVisibilityChange);
+    return () => {
+      window.removeEventListener(MODEL_FEATURES_CHANGED_EVENT, onFeaturesChanged);
+      document.removeEventListener("visibilitychange", onVisibilityChange);
+    };
   }, []);
 
   async function checkEmbeddingReady() {
     try {
+      const features = await fetchModelFeatures(true);
+      const imageEmbedRequired = isImageEmbedRequired(features);
+
       const [embResp, multiResp] = await Promise.all([
         axiosInstance.get<{ data?: { ready: boolean } } | { ready: boolean }>(
-          `${BASE_URL}/api/core/model_providers/models/ready?model_type=embedding`
+          `${BASE_URL}/api/core/model_providers/models/ready?model_type=embed_main`
         ).catch(() => null),
-        axiosInstance.get<{ data?: { ready: boolean } } | { ready: boolean }>(
-          `${BASE_URL}/api/core/model_providers/models/ready?model_type=multimodal_embedding`
-        ).catch(() => null),
+        imageEmbedRequired
+          ? axiosInstance.get<{ data?: { ready: boolean } } | { ready: boolean }>(
+              `${BASE_URL}/api/core/model_providers/models/ready?model_type=embed_image`
+            ).catch(() => null)
+          : Promise.resolve(null),
       ]);
       const unwrap = (resp: typeof embResp): boolean | null => {
         if (!resp) return null;
@@ -118,7 +143,8 @@ const KnowledgePage: FC = () => {
         return d?.ready ?? null;
       };
       setEmbeddingReady(unwrap(embResp));
-      setMultimodalEmbeddingReady(unwrap(multiResp));
+      // null means "not applicable" — does not trigger disabled state.
+      setMultimodalEmbeddingReady(imageEmbedRequired ? unwrap(multiResp) : null);
     } catch {
       setEmbeddingReady(null);
       setMultimodalEmbeddingReady(null);

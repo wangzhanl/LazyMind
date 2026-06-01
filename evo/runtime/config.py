@@ -16,7 +16,7 @@ EVO_EVAL_JUDGE_TIMEOUT_S = 30.0
 EVO_EVAL_JUDGE_MAX_RETRIES = 1
 EVO_KB_BASE_URL = 'http://doc-server:8000'
 EVO_CHUNK_BASE_URL = 'http://doc-server:8000'
-EVO_TARGET_CHAT_URL = 'http://chat:8046/api/chat'
+EVO_TARGET_CHAT_URL = 'http://chat:8046/api/chat/stream'
 EVO_CANDIDATE_CHAT_HEALTH_PATH = '/health'
 EVO_CANDIDATE_CHAT_STARTUP_TIMEOUT_S = 120.0
 EVO_EVENT_MAX_INLINE_CHARS = 60000
@@ -200,7 +200,7 @@ def load_config(
         badcase_score_field=score_field,
         enable_embed_features=False,
     )
-    chat_source = Path(config['evo_chat_source'] or (project_root / 'algorithm' / 'chat'))
+    chat_source = Path(config['evo_chat_source'] or '/app/algorithm/chat')
     dataset_gen = DatasetGenConfig(
         kb_base_url=EVO_KB_BASE_URL,
         chunk_base_url=EVO_CHUNK_BASE_URL,

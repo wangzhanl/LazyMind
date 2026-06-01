@@ -20,7 +20,7 @@ ENV PYTHONUNBUFFERED=1 \
     LAZYMIND_EVO_CODE_BINARY=/usr/local/bin/opencode \
     LAZYMIND_EVO_CODE_DATA_DIR=/var/lib/lazymind/evo/opencode \
     LAZYMIND_EVO_BASE_DIR=/var/lib/lazymind/evo \
-    LAZYMIND_EVO_CHAT_SOURCE=/var/lib/lazymind/chat-source \
+    LAZYMIND_EVO_CHAT_SOURCE=/app/algorithm/chat \
     LAZYMIND_MODEL_CONFIG_PATH=dynamic \
     PYTHONPATH=/opt/lazyllm:/app
 
@@ -83,10 +83,6 @@ RUN pip install -r /tmp/evo-requirements.txt \
 WORKDIR /app
 COPY evo/ /app/evo/
 COPY algorithm /app/algorithm
-RUN ln -s /app/algorithm/chat /app/chat && \
-    ln -s /app/algorithm/common /app/common && \
-    ln -s /app/algorithm/vocab /app/vocab && \
-    ln -s /app/algorithm/processor /app/processor
 RUN chmod +x /app/evo/service/entrypoint.sh
 
 EXPOSE 8047

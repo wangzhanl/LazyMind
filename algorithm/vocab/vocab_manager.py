@@ -20,19 +20,14 @@ from __future__ import annotations
 import threading
 from typing import Callable, List, Optional, Union
 
-from lazyllm import LOG
+from lazyllm import LOG, AutoModel, ModuleBase
 from lazyllm.tools.rag.query_enh_ac import QueryEnhACProcessor
+from chat.utils.load_config import get_config_path
 
 from .db import fetch_vocab_for_user_id
 
 
-def get_automodel(role: str):
-    from chat.pipelines.builders import get_automodel as _get_automodel
-
-    return _get_automodel(role)
-
-
-class VocabManager:
+class VocabManager(ModuleBase):
     """Single-user vocabulary manager: bound to one user_id, loads vocabulary from DB, supports hot-reload.
 
     Args:
@@ -42,12 +37,13 @@ class VocabManager:
     """
 
     def __init__(self, user_id: str = '', *, data_source: Optional[Callable] = None) -> None:
+        super().__init__()
         self._user_id = user_id
         self._lock = threading.RLock()
         actual_source = data_source if data_source is not None else self._load_from_db
         self._proc = QueryEnhACProcessor(
             data_source=actual_source,
-            discriminator=get_automodel('llm'),
+            discriminator=AutoModel(model='llm', config=get_config_path()),
         )
         LOG.info(f'[VocabManager] initialized for user_id={user_id!r}, vocab_size={self.vocab_size}')
 
@@ -93,7 +89,7 @@ class VocabManager:
             LOG.info(f'[VocabManager] reloaded for user_id={self._user_id!r}, vocab_size={count}')
             return count
 
-    def __call__(self, query: Union[str, List]) -> Union[str, List]:
+    def forward(self, query: Union[str, List]) -> Union[str, List]:
         """Enhance the query using the vocabulary and return;
         returns as-is when vocabulary is empty, no match survives filtering, or enhancement fails."""
         with self._lock:

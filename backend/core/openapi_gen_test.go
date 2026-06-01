@@ -60,6 +60,7 @@ func TestOpenAPISpecCoversEvolutionSkillMemoryPreferenceOperations(t *testing.T)
 		{"post", "/api/core/skill/remove", true, false, true},
 		{"get", "/api/core/personalization-items", false, false, true},
 		{"get", "/api/core/model_providers", false, true, true},
+		{"get", "/api/core/model_providers/features", false, false, true},
 		{"get", "/api/core/model_providers:with_groups", false, false, true},
 		{"post", "/api/core/model_providers/{model_provider_id}/groups/{group_id}:check", true, false, true},
 		{"get", "/api/core/model_providers/models", false, true, true},
@@ -87,6 +88,7 @@ func TestOpenAPISpecCoversEvolutionSkillMemoryPreferenceOperations(t *testing.T)
 		{"post", "/api/core/user-preference:confirm", false, false, true},
 		{"post", "/api/core/user-preference:discard", false, false, true},
 		{"get", "/api/core/agent/threads", false, true, true},
+		{"get", "/api/core/conversations/{name}:history", false, true, true},
 	}
 
 	for _, tc := range cases {
@@ -159,6 +161,36 @@ func TestOpenAPISpecCoversEvolutionSkillMemoryPreferenceOperations(t *testing.T)
 	for _, name := range []string{"user_id", "skill_id", "memory_id", "user_preference_id", "preference_id"} {
 		if _, ok := paramNames[name]; ok {
 			t.Fatalf("unexpected removed query parameter %q on get /api/core/evolution/suggestions", name)
+		}
+	}
+
+	historyItem, ok := paths["/api/core/conversations/{name}:history"].(map[string]any)
+	if !ok {
+		t.Fatalf("path missing: /api/core/conversations/{name}:history")
+	}
+	historyGet, ok := historyItem["get"].(map[string]any)
+	if !ok {
+		t.Fatalf("get operation missing for conversation history")
+	}
+	historyParams, ok := historyGet["parameters"].([]any)
+	if !ok {
+		t.Fatalf("parameters missing for conversation history")
+	}
+	historyParamNames := make(map[string]string, len(historyParams))
+	for _, item := range historyParams {
+		p, ok := item.(map[string]any)
+		if !ok {
+			continue
+		}
+		historyParamNames[p["name"].(string)] = p["in"].(string)
+	}
+	for _, want := range []struct{ name, inVal string }{
+		{"name", "path"},
+		{"page_size", "query"},
+		{"page_token", "query"},
+	} {
+		if got, ok := historyParamNames[want.name]; !ok || got != want.inVal {
+			t.Fatalf("expected history parameter %q in %q, got %q (%v)", want.name, want.inVal, got, historyParamNames)
 		}
 	}
 }
