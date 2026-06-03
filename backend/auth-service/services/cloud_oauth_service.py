@@ -225,14 +225,15 @@ class CloudOAuthService:
             )
         return connection_id
 
-    @staticmethod
-    def _connection_payload(row) -> dict[str, Any]:
+    def _connection_payload(self, row) -> dict[str, Any]:
+        credential = self._decrypt_payload(row.credential_ciphertext, field_name='credential')
         return {
             'connection_id': row.connection_id,
             'tenant_id': row.tenant_id or '',
             'owner_user_id': row.owner_user_id or '',
             'provider': row.provider,
             'auth_mode': row.auth_mode,
+            'app_id': (credential.get('client_id') or '').strip(),
             'provider_account_id': row.provider_account_id or '',
             'display_name': row.display_name or '',
             'provider_tenant_key': row.provider_tenant_key or '',
@@ -259,7 +260,13 @@ class CloudOAuthService:
         account_id = (profile.provider_account_id or '').strip()
         if account_id:
             row.provider_account_id = account_id
-        display_name = (profile.display_name or fallback_display_name or row.display_name or row.provider_account_id or '').strip()
+        display_name = (
+            profile.display_name
+            or fallback_display_name
+            or row.display_name
+            or row.provider_account_id
+            or ''
+        ).strip()
         if display_name:
             row.display_name = display_name
         row.provider_tenant_key = (profile.provider_tenant_key or row.provider_tenant_key or '').strip()
