@@ -45,12 +45,12 @@ func validateBindingInput(input BindingInput, targetRequired bool) error {
 	if input.SyncMode != SyncModeManual && input.SyncMode != SyncModeScheduled && input.SyncMode != SyncModeWatch {
 		return FieldError("sync_mode", "unsupported")
 	}
-	if input.SyncMode == SyncModeScheduled && strings.TrimSpace(input.ScheduleExpr) == "" {
-		return FieldError("schedule_expr", "required for scheduled sync")
+	if input.SyncMode == SyncModeScheduled && len(input.SchedulePolicy) == 0 {
+		return FieldError("schedule_policy", "required for scheduled sync")
 	}
 	if input.SyncMode == SyncModeScheduled {
-		if err := scheduleengine.ValidateSchedule(input.ScheduleExpr, input.ScheduleTZ); err != nil {
-			return FieldError("schedule_expr", err.Error())
+		if err := scheduleengine.ValidateSchedulePolicy(input.SchedulePolicy); err != nil {
+			return FieldError("schedule_policy", err.Error())
 		}
 	}
 	if targetRequired {

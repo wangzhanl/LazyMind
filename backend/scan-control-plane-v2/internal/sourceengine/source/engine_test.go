@@ -144,7 +144,7 @@ func TestCreateSourcePreservesStructuredProviderOptions(t *testing.T) {
 	}
 }
 
-func TestCreateSourceRejectsInvalidScheduleExprAsInvalidRequest(t *testing.T) {
+func TestCreateSourceRejectsInvalidSchedulePolicyAsInvalidRequest(t *testing.T) {
 	t.Parallel()
 
 	now := fixedSourceTestTime()
@@ -161,8 +161,9 @@ func TestCreateSourceRejectsInvalidScheduleExprAsInvalidRequest(t *testing.T) {
 			TargetType:    spyTargetType,
 			TargetRef:     "target-1",
 			SyncMode:      SyncModeScheduled,
-			ScheduleExpr:  "daily@02:00:99",
-			ScheduleTZ:    "Asia/Shanghai",
+			SchedulePolicy: sourceTestSchedulePolicy("Asia/Shanghai",
+				sourceTestScheduleRule([]string{"everyday"}, "02:00:99"),
+			),
 		}},
 	})
 	assertSourceErrorCode(t, err, ErrCodeInvalidRequest)
@@ -463,6 +464,63 @@ func TestUpdateBindingNonTargetChangeDoesNotTriggerSync(t *testing.T) {
 	}
 }
 
+func TestUpdateBindingScheduleChangeRecomputesNextSyncAndCancelsPendingScheduledRun(t *testing.T) {
+	t.Parallel()
+
+	now := fixedSourceTestTime()
+	oldNext := now.Add(time.Hour)
+	newNext := now.Add(2 * time.Hour)
+	oldPolicy := sourceTestSchedulePolicy("UTC", sourceTestScheduleRule([]string{"everyday"}, "02:00:00"))
+	newPolicy := sourceTestSchedulePolicy("UTC", sourceTestScheduleRule([]string{"everyday"}, "04:00:00"))
+	repo := newSourceEngineRepoStub()
+	repo.sources["source-1"] = store.Source{SourceID: "source-1", CreatedBy: "user-1", DatasetID: "dataset-1", Status: SourceStatusActive, CreatedAt: now, UpdatedAt: now}
+	repo.bindings["source-1"] = []store.Binding{{
+		BindingID:              "binding-1",
+		SourceID:               "source-1",
+		ConnectorType:          string(spyConnectorType),
+		TargetType:             string(spyTargetType),
+		TargetRef:              "target",
+		TargetFingerprint:      "fp-target",
+		TreeKey:                "root-target",
+		BindingGeneration:      3,
+		CoreParentDocumentID:   "folder-1",
+		CoreParentDocumentName: "Before",
+		SyncMode:               SyncModeScheduled,
+		SchedulePolicy:         oldPolicy,
+		NextSyncAt:             &oldNext,
+		Status:                 BindingStatusActive,
+		CreatedAt:              now,
+		UpdatedAt:              now,
+	}}
+	core := &sourceCoreSpy{}
+	scheduler := &sourceScheduleSpy{nextSyncAt: &newNext}
+	engine := newTestSourceEngineWithSchedule(t, repo, core, &sourceSpyConnector{}, scheduler, now)
+
+	resp, err := engine.UpdateBinding(context.Background(), "user-1", "source-1", "binding-1", BindingInput{
+		SyncMode:       SyncModeScheduled,
+		SchedulePolicy: newPolicy,
+	})
+	if err != nil {
+		t.Fatalf("update binding: %v", err)
+	}
+	if resp.OldGeneration != 3 || resp.NewGeneration != 3 || len(resp.JobIDs) != 0 {
+		t.Fatalf("schedule update should not change generation or create jobs: %+v", resp)
+	}
+	if !repo.lastCleanup.CancelPendingScheduled || repo.lastCleanup.ClearIndexedState {
+		t.Fatalf("schedule update should only cancel pending scheduled runs: %+v", repo.lastCleanup)
+	}
+	updated := repo.bindings["source-1"][0]
+	if updated.NextSyncAt == nil || !updated.NextSyncAt.Equal(newNext) {
+		t.Fatalf("schedule update did not refresh binding next_sync_at: %+v want=%v", updated.NextSyncAt, newNext)
+	}
+	if !jsonEqual(updated.SchedulePolicy, newPolicy) {
+		t.Fatalf("schedule update did not persist policy: %+v", updated.SchedulePolicy)
+	}
+	if len(core.createdFolders) != 0 || len(core.deletedFolders) != 0 {
+		t.Fatalf("schedule update touched core folders: created=%v deleted=%v", core.createdFolders, core.deletedFolders)
+	}
+}
+
 func TestAddBindingRecordsSyncJobErrorOnBindingAndCheckpoint(t *testing.T) {
 	t.Parallel()
 
@@ -709,14 +767,19 @@ func (sourceTestScheduleEngine) EnqueueManualSync(context.Context, scheduleengin
 type sourceScheduleSpy struct {
 	triggered  []store.Binding
 	triggerErr error
+	nextSyncAt *time.Time
 }
 
-func (sourceScheduleSpy) BuildCheckpoint(_ context.Context, binding store.Binding, now time.Time) (store.SyncCheckpoint, error) {
+func (s *sourceScheduleSpy) BuildCheckpoint(_ context.Context, binding store.Binding, now time.Time) (store.SyncCheckpoint, error) {
+	nextSyncAt := binding.NextSyncAt
+	if s.nextSyncAt != nil {
+		nextSyncAt = s.nextSyncAt
+	}
 	return store.SyncCheckpoint{
 		SourceID:          binding.SourceID,
 		BindingID:         binding.BindingID,
 		BindingGeneration: binding.BindingGeneration,
-		NextSyncAt:        binding.NextSyncAt,
+		NextSyncAt:        nextSyncAt,
 		LastError:         store.JSON{},
 		CreatedAt:         now,
 		UpdatedAt:         now,
@@ -745,6 +808,26 @@ func sourceTestIDGenerator() func(string) string {
 
 func fixedSourceTestTime() time.Time {
 	return time.Date(2026, 5, 27, 8, 0, 0, 0, time.UTC)
+}
+
+func sourceTestSchedulePolicy(timezone string, rules ...store.JSON) store.JSON {
+	items := make([]any, 0, len(rules))
+	for _, rule := range rules {
+		items = append(items, rule)
+	}
+	return store.JSON{
+		"timezone": timezone,
+		"calendar": "weekly",
+		"rules":    items,
+	}
+}
+
+func sourceTestScheduleRule(days []string, fireTime string) store.JSON {
+	items := make([]any, 0, len(days))
+	for _, day := range days {
+		items = append(items, day)
+	}
+	return store.JSON{"days": items, "time": fireTime}
 }
 
 func assertSourceErrorCode(t *testing.T, err error, code ErrorCode) {

@@ -1,9 +1,11 @@
 package schedule
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"strconv"
 	"strings"
@@ -24,7 +26,24 @@ const (
 	TriggerTypeReconcile = "reconcile"
 
 	watchReconcileInterval = 10 * time.Minute
+	scheduleLookaheadDays  = 8
 )
+
+type schedulePolicy struct {
+	Timezone string         `json:"timezone"`
+	Calendar string         `json:"calendar"`
+	Rules    []scheduleRule `json:"rules"`
+	location *time.Location
+}
+
+type scheduleRule struct {
+	Days []string `json:"days"`
+	Time string   `json:"time"`
+
+	hour   int
+	minute int
+	second int
+}
 
 type Store interface {
 	GetBinding(ctx context.Context, sourceID, bindingID string) (store.Binding, error)
@@ -134,7 +153,7 @@ func (e *CheckpointScheduleEngine) TriggerInitialSync(ctx context.Context, bindi
 	if binding.SyncMode == SyncModeScheduled || binding.SyncMode == SyncModeWatch {
 		return nil, nil
 	}
-	intent, err := e.enqueueBindingRun(ctx, binding, TriggerTypeManual, connector.ScopeTypeFull, nil, "", e.clock().UTC())
+	intent, err := e.enqueueBindingRun(ctx, binding, TriggerTypeManual, connector.ScopeTypeFull, nil, "", e.clock().UTC(), nil)
 	if err != nil || intent.Run.RunID == "" {
 		return nil, err
 	}
@@ -163,7 +182,7 @@ func (e *CheckpointScheduleEngine) EnqueueManualSync(ctx context.Context, req Ma
 	if scopeType == "" {
 		scopeType = connector.ScopeTypeFull
 	}
-	return e.enqueueBindingRun(ctx, binding, TriggerTypeManual, scopeType, req.ScopeRef, req.RequestID, e.clock().UTC())
+	return e.enqueueBindingRun(ctx, binding, TriggerTypeManual, scopeType, req.ScopeRef, req.RequestID, e.clock().UTC(), nil)
 }
 
 func (e *CheckpointScheduleEngine) EnqueueDueSyncRuns(ctx context.Context, limit int) ([]SyncRunIntent, error) {
@@ -182,7 +201,7 @@ func (e *CheckpointScheduleEngine) EnqueueDueSyncRuns(ctx context.Context, limit
 		if binding.SyncMode == SyncModeWatch {
 			trigger = TriggerTypeReconcile
 		}
-		intent, err := e.enqueueBindingRun(ctx, binding, trigger, connector.ScopeTypeFull, nil, "", now)
+		intent, err := e.enqueueBindingRun(ctx, binding, trigger, connector.ScopeTypeFull, nil, "", now, scheduledFireAt(trigger, checkpoint.NextSyncAt))
 		if err != nil {
 			return intents, err
 		}
@@ -232,13 +251,14 @@ func (e *CheckpointScheduleEngine) FinishRun(ctx context.Context, req FinishRunR
 	return finished, ok, err
 }
 
-func (e *CheckpointScheduleEngine) enqueueBindingRun(ctx context.Context, binding store.Binding, trigger string, scopeType connector.ScopeType, scopeRef connector.ScopeRef, requestID string, runAt time.Time) (SyncRunIntent, error) {
+func (e *CheckpointScheduleEngine) enqueueBindingRun(ctx context.Context, binding store.Binding, trigger string, scopeType connector.ScopeType, scopeRef connector.ScopeRef, requestID string, runAt time.Time, scheduledAt *time.Time) (SyncRunIntent, error) {
 	run := store.SyncRun{
 		RunID:             e.syncRunID(binding, requestID),
 		SourceID:          binding.SourceID,
 		BindingID:         binding.BindingID,
 		BindingGeneration: binding.BindingGeneration,
 		TriggerType:       trigger,
+		ScheduledFireAt:   scheduledAt,
 		ScopeType:         string(scopeType),
 		ScopeRef:          scopeJSON(scopeRef),
 		Coverage:          store.JSON{},
@@ -299,103 +319,189 @@ func (e *CheckpointScheduleEngine) buildFinish(binding store.Binding, checkpoint
 }
 
 func nextSyncAt(binding store.Binding, now time.Time) (*time.Time, error) {
-	if binding.NextSyncAt != nil && binding.NextSyncAt.After(now) {
-		return binding.NextSyncAt, nil
-	}
 	if binding.SyncMode == SyncModeWatch {
+		if binding.NextSyncAt != nil && binding.NextSyncAt.After(now) {
+			return binding.NextSyncAt, nil
+		}
 		next := now.Add(watchReconcileInterval)
 		return &next, nil
 	}
 	if binding.SyncMode != SyncModeScheduled {
 		return nil, nil
 	}
-	scheduleNow, err := scheduleNow(binding.ScheduleTZ, now)
-	if err != nil {
-		return nil, err
-	}
-	next, err := parseScheduleExpr(binding.ScheduleExpr, scheduleNow)
+	next, err := NextSyncAt(binding.SchedulePolicy, now)
 	if err != nil {
 		return nil, err
 	}
 	return &next, nil
 }
 
-func scheduleNow(tz string, now time.Time) (time.Time, error) {
-	tz = strings.TrimSpace(tz)
-	if tz == "" {
-		return now, nil
-	}
-	loc, err := time.LoadLocation(tz)
-	if err != nil {
-		return time.Time{}, fmt.Errorf("unsupported schedule timezone %q", tz)
-	}
-	return now.In(loc), nil
+func ValidateSchedulePolicy(policy store.JSON) error {
+	_, err := parseSchedulePolicy(policy)
+	return err
 }
 
-func parseScheduleExpr(expr string, now time.Time) (time.Time, error) {
-	raw := strings.TrimSpace(expr)
-	lower := strings.ToLower(raw)
-	if strings.HasPrefix(lower, "daily@") {
-		hour, minute, second, err := parseDailyTime(raw[len("daily@"):])
+func NextSyncAt(policyJSON store.JSON, now time.Time) (time.Time, error) {
+	policy, err := parseSchedulePolicy(policyJSON)
+	if err != nil {
+		return time.Time{}, err
+	}
+	localNow := now.In(policy.location)
+	seen := map[int64]time.Time{}
+	var earliest time.Time
+	for offset := 0; offset < scheduleLookaheadDays; offset++ {
+		day := localNow.AddDate(0, 0, offset)
+		for _, rule := range policy.Rules {
+			if !ruleMatchesDay(rule, day) {
+				continue
+			}
+			candidate := time.Date(day.Year(), day.Month(), day.Day(), rule.hour, rule.minute, rule.second, 0, policy.location)
+			if !candidate.After(localNow) {
+				continue
+			}
+			candidateUTC := candidate.UTC()
+			key := candidateUTC.UnixNano()
+			if _, ok := seen[key]; ok {
+				continue
+			}
+			seen[key] = candidateUTC
+			if earliest.IsZero() || candidateUTC.Before(earliest) {
+				earliest = candidateUTC
+			}
+		}
+	}
+	if earliest.IsZero() {
+		return time.Time{}, fmt.Errorf("schedule policy produced no next sync time within %d days", scheduleLookaheadDays)
+	}
+	return earliest, nil
+}
+
+func parseSchedulePolicy(policyJSON store.JSON) (schedulePolicy, error) {
+	if len(policyJSON) == 0 {
+		return schedulePolicy{}, fmt.Errorf("schedule_policy is required")
+	}
+	body, err := json.Marshal(policyJSON)
+	if err != nil {
+		return schedulePolicy{}, fmt.Errorf("schedule_policy must be valid JSON")
+	}
+	var policy schedulePolicy
+	decoder := json.NewDecoder(bytes.NewReader(body))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&policy); err != nil {
+		return schedulePolicy{}, fmt.Errorf("schedule_policy is invalid")
+	}
+	policy.Timezone = strings.TrimSpace(policy.Timezone)
+	if policy.Timezone == "" {
+		return schedulePolicy{}, fmt.Errorf("timezone is required")
+	}
+	loc, err := time.LoadLocation(policy.Timezone)
+	if err != nil {
+		return schedulePolicy{}, fmt.Errorf("unsupported schedule timezone %q", policy.Timezone)
+	}
+	policy.location = loc
+	policy.Calendar = strings.ToLower(strings.TrimSpace(policy.Calendar))
+	if policy.Calendar != "weekly" {
+		return schedulePolicy{}, fmt.Errorf("calendar must be weekly")
+	}
+	if len(policy.Rules) == 0 {
+		return schedulePolicy{}, fmt.Errorf("rules must not be empty")
+	}
+	for i := range policy.Rules {
+		rule, err := normalizeScheduleRule(policy.Rules[i])
 		if err != nil {
-			return time.Time{}, err
+			return schedulePolicy{}, fmt.Errorf("rules[%d].%s", i, err.Error())
 		}
-		next := time.Date(now.Year(), now.Month(), now.Day(), hour, minute, second, 0, now.Location())
-		if !next.After(now) {
-			next = next.Add(24 * time.Hour)
-		}
-		return next, nil
+		policy.Rules[i] = rule
 	}
-
-	normalized := strings.TrimPrefix(lower, "@every ")
-	normalized = strings.TrimPrefix(normalized, "every ")
-	switch normalized {
-	case "@hourly", "hourly":
-		return now.Add(time.Hour), nil
-	case "@daily", "daily":
-		return now.Add(24 * time.Hour), nil
-	}
-	if duration, err := time.ParseDuration(normalized); err == nil && duration > 0 {
-		return now.Add(duration), nil
-	}
-	return time.Time{}, fmt.Errorf("unsupported schedule expression %q", raw)
+	return policy, nil
 }
 
-func ValidateScheduleExpr(expr string) error {
-	_, err := parseScheduleExpr(expr, time.Now().UTC())
-	return err
-}
-
-func ValidateSchedule(expr, tz string) error {
-	now, err := scheduleNow(tz, time.Now().UTC())
+func normalizeScheduleRule(rule scheduleRule) (scheduleRule, error) {
+	hour, minute, second, err := parsePolicyTime(rule.Time)
 	if err != nil {
-		return err
+		return scheduleRule{}, fmt.Errorf("time %s", err.Error())
 	}
-	_, err = parseScheduleExpr(expr, now)
-	return err
+	if len(rule.Days) == 0 {
+		return scheduleRule{}, fmt.Errorf("days must not be empty")
+	}
+	days := make([]string, 0, len(rule.Days))
+	for _, day := range rule.Days {
+		normalized := strings.ToLower(strings.TrimSpace(day))
+		if !validScheduleDay(normalized) {
+			return scheduleRule{}, fmt.Errorf("days contains unsupported value %q", day)
+		}
+		days = append(days, normalized)
+	}
+	rule.Days = days
+	rule.hour = hour
+	rule.minute = minute
+	rule.second = second
+	return rule, nil
 }
 
-func parseDailyTime(token string) (int, int, int, error) {
+func parsePolicyTime(token string) (int, int, int, error) {
 	parts := strings.Split(token, ":")
-	if len(parts) != 2 && len(parts) != 3 {
-		return 0, 0, 0, fmt.Errorf("unsupported schedule expression %q", "daily@"+token)
+	if len(parts) != 3 {
+		return 0, 0, 0, fmt.Errorf("must use HH:mm:ss")
 	}
 	hour, err := parseFixedRange(parts[0], 0, 23)
 	if err != nil {
-		return 0, 0, 0, fmt.Errorf("unsupported schedule expression %q", "daily@"+token)
+		return 0, 0, 0, fmt.Errorf("must use HH:mm:ss")
 	}
 	minute, err := parseFixedRange(parts[1], 0, 59)
 	if err != nil {
-		return 0, 0, 0, fmt.Errorf("unsupported schedule expression %q", "daily@"+token)
+		return 0, 0, 0, fmt.Errorf("must use HH:mm:ss")
 	}
-	second := 0
-	if len(parts) == 3 {
-		second, err = parseFixedRange(parts[2], 0, 59)
-		if err != nil {
-			return 0, 0, 0, fmt.Errorf("unsupported schedule expression %q", "daily@"+token)
-		}
+	second, err := parseFixedRange(parts[2], 0, 59)
+	if err != nil {
+		return 0, 0, 0, fmt.Errorf("must use HH:mm:ss")
 	}
 	return hour, minute, second, nil
+}
+
+func validScheduleDay(day string) bool {
+	switch day {
+	case "everyday", "workday", "non_workday", "mon", "tue", "wed", "thu", "fri", "sat", "sun":
+		return true
+	default:
+		return false
+	}
+}
+
+func ruleMatchesDay(rule scheduleRule, day time.Time) bool {
+	for _, selector := range rule.Days {
+		if daySelectorMatches(selector, day.Weekday()) {
+			return true
+		}
+	}
+	return false
+}
+
+func daySelectorMatches(selector string, weekday time.Weekday) bool {
+	switch selector {
+	case "everyday":
+		return true
+	case "workday":
+		return weekday >= time.Monday && weekday <= time.Friday
+	case "non_workday":
+		return weekday == time.Saturday || weekday == time.Sunday
+	case "mon":
+		return weekday == time.Monday
+	case "tue":
+		return weekday == time.Tuesday
+	case "wed":
+		return weekday == time.Wednesday
+	case "thu":
+		return weekday == time.Thursday
+	case "fri":
+		return weekday == time.Friday
+	case "sat":
+		return weekday == time.Saturday
+	case "sun":
+		return weekday == time.Sunday
+	default:
+		return false
+	}
 }
 
 func parseFixedRange(token string, min, max int) (int, error) {
@@ -407,6 +513,14 @@ func parseFixedRange(token string, min, max int) (int, error) {
 		return 0, fmt.Errorf("invalid time token")
 	}
 	return value, nil
+}
+
+func scheduledFireAt(trigger string, nextSyncAt *time.Time) *time.Time {
+	if trigger != TriggerTypeScheduled || nextSyncAt == nil {
+		return nil
+	}
+	fireAt := nextSyncAt.UTC()
+	return &fireAt
 }
 
 func scopeJSON(scopeRef connector.ScopeRef) store.JSON {

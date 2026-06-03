@@ -114,6 +114,7 @@ DECLARE
     'uk_parse_task_active',
     'idx_source_sync_due',
     'idx_source_sync_runs_binding_started',
+    'uk_source_sync_runs_scheduled_fire',
     'uk_create_operation',
     'idx_agents_tenant_status',
     'idx_agent_commands_pending',

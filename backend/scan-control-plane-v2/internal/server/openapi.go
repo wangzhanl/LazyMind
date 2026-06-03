@@ -262,6 +262,8 @@ func openAPISchemas() map[string]any {
 		"DeleteSourceResponse":          object([]string{"deleted", "source_id"}, props("deleted", boolSchema(), "source_id", stringSchema(), "removed_binding_ids", stringArray(), "removed_dataset_id", stringSchema())),
 		"SourceBindingRequest":          sourceBindingRequestSchema(),
 		"SourceBindingResponse":         sourceBindingResponseSchema(),
+		"SchedulePolicy":                schedulePolicySchema(),
+		"ScheduleRule":                  scheduleRuleSchema(),
 		"BindingMutationResponse":       object([]string{"binding"}, props("binding", schemaRef("SourceBindingResponse"), "old_generation", integerSchema(), "new_generation", integerSchema(), "job_ids", stringArray())),
 		"DeleteBindingResponse":         object([]string{"deleted", "binding_id"}, props("deleted", boolSchema(), "binding_id", stringSchema(), "removed_core_parent_document_id", stringSchema(), "cancelled_task_count", integerSchema())),
 		"TriggerSourceSyncRequest":      object(nil, props("request_id", stringSchema(), "binding_id", stringSchema(), "scope_type", stringSchema(), "scope_ref", objectSchema())),
@@ -413,8 +415,7 @@ func sourceBindingRequestSchema() map[string]any {
 		"auth_connection_id", stringSchema(),
 		"provider_options", objectSchema(),
 		"sync_mode", schemaRef("SyncMode"),
-		"schedule_expr", stringSchema(),
-		"schedule_tz", stringSchema(),
+		"schedule_policy", schemaRef("SchedulePolicy"),
 		"include_extensions", stringArray(),
 		"exclude_extensions", stringArray(),
 	))
@@ -432,7 +433,24 @@ func sourceBindingResponseSchema() map[string]any {
 		"binding_generation", integerSchema(),
 		"core_parent_document_id", stringSchema(),
 		"sync_mode", schemaRef("SyncMode"),
+		"schedule_policy", schemaRef("SchedulePolicy"),
+		"next_sync_at", stringSchema(),
 		"status", schemaRef("BindingStatus"),
+	))
+}
+
+func schedulePolicySchema() map[string]any {
+	return object([]string{"timezone", "calendar", "rules"}, props(
+		"timezone", stringSchema(),
+		"calendar", enumSchema("weekly"),
+		"rules", arrayOf("ScheduleRule"),
+	))
+}
+
+func scheduleRuleSchema() map[string]any {
+	return object([]string{"days", "time"}, props(
+		"days", map[string]any{"type": "array", "items": enumSchema("everyday", "workday", "non_workday", "mon", "tue", "wed", "thu", "fri", "sat", "sun")},
+		"time", stringSchema(),
 	))
 }
 

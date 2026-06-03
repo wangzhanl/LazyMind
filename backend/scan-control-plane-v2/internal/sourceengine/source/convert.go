@@ -62,8 +62,7 @@ func bindingToResponse(binding store.Binding) SourceBindingResponse {
 		CoreParentDocumentID:   binding.CoreParentDocumentID,
 		CoreParentDocumentName: binding.CoreParentDocumentName,
 		SyncMode:               binding.SyncMode,
-		ScheduleExpr:           binding.ScheduleExpr,
-		ScheduleTZ:             binding.ScheduleTZ,
+		SchedulePolicy:         store.CloneJSON(binding.SchedulePolicy),
 		NextSyncAt:             binding.NextSyncAt,
 		IncludeExtensions:      jsonStringSlice(binding.IncludeExtensions, "items"),
 		ExcludeExtensions:      jsonStringSlice(binding.ExcludeExtensions, "items"),
@@ -132,11 +131,11 @@ func providerOptionsJSON(in map[string]any) store.JSON {
 	return store.CloneJSON(store.JSON(in))
 }
 
-func defaultScheduleTZ(tz string) string {
-	if tz != "" {
-		return tz
+func schedulePolicyForSyncMode(syncMode string, policy store.JSON) store.JSON {
+	if syncMode != SyncModeScheduled {
+		return nil
 	}
-	return "Asia/Shanghai"
+	return store.CloneJSON(policy)
 }
 
 func applyDeletedAt(now time.Time) *time.Time {

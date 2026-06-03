@@ -105,6 +105,7 @@ func TestMigrationTablesUseBindingScopedIdentity(t *testing.T) {
 			"source_id text not null references public.sources(source_id)",
 			"binding_id text not null references public.source_bindings(binding_id)",
 			"binding_generation bigint not null",
+			"scheduled_fire_at timestamp with time zone",
 			"coverage_json jsonb",
 		},
 		"parse_task_dead_letters": {
@@ -133,6 +134,7 @@ func TestKeyIndexesAndIdempotencyConstraints(t *testing.T) {
 		"create unique index uk_documents_object on public.documents (source_id, binding_id, object_key)",
 		"create unique index uk_parse_task_idempotency on public.parse_tasks (idempotency_key)",
 		"create unique index uk_parse_task_active on public.parse_tasks (source_id, binding_id, object_key, target_version_id, task_action) where status in ('pending', 'running', 'submitted')",
+		"create unique index uk_source_sync_runs_scheduled_fire on public.source_sync_runs (binding_id, binding_generation, scheduled_fire_at) where trigger_type = 'scheduled' and scheduled_fire_at is not null and status in ('pending', 'running')",
 		"create unique index uk_create_operation on public.data_source_create_operations (caller_id, request_id)",
 	} {
 		assertContains(t, ddl, required)
@@ -152,6 +154,8 @@ func TestForbiddenLegacyDDLNamesAreAbsent(t *testing.T) {
 		"origin" + "type",
 		"local" + "_fs",
 		"cloud" + "_sync",
+		"schedule_expr",
+		"schedule_tz",
 	} {
 		assertNotContains(t, ddl, forbidden)
 	}
@@ -167,6 +171,7 @@ func TestBindingGenerationAndCoverageArePersisted(t *testing.T) {
 		"source_sync_checkpoints": {"binding_generation bigint not null"},
 		"source_sync_runs":        {"binding_generation bigint not null", "coverage_json jsonb"},
 		"parse_task_dead_letters": {"binding_generation bigint not null"},
+		"source_bindings":         {"schedule_policy_json jsonb"},
 	} {
 		tableDDL := normalizeSQL(extractCreateTable(t, ddl, table))
 		for _, column := range columns {

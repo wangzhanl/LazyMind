@@ -80,6 +80,14 @@ func TestOpenAPICreateSourceHasNoTopLevelTargetFields(t *testing.T) {
 			t.Fatalf("SourceBindingRequest must expose binding field %s", field)
 		}
 	}
+	if _, ok := bindingProps["schedule_policy"]; !ok {
+		t.Fatalf("SourceBindingRequest must expose schedule_policy")
+	}
+	for _, field := range []string{"schedule_expr", "schedule_tz"} {
+		if _, ok := bindingProps[field]; ok {
+			t.Fatalf("SourceBindingRequest must not expose legacy field %s", field)
+		}
+	}
 }
 
 func openAPIOperation(t *testing.T, path, method string) map[string]any {

@@ -70,11 +70,14 @@ func TestCreateSourceHandlerAcceptsStructuredProviderOptions(t *testing.T) {
 		"name":"阿斯顿发",
 		"bindings":[{
 			"connector_type":"feishu",
-			"target_type":"wiki_node",
-			"sync_mode":"scheduled",
-			"schedule_expr":"daily@02:00:00",
-			"schedule_tz":"Asia/Shanghai",
-			"auth_connection_id":"conn_6c27d5a8f42b4d24ae1e69c9313a1e32",
+				"target_type":"wiki_node",
+				"sync_mode":"scheduled",
+				"schedule_policy":{
+					"timezone":"Asia/Shanghai",
+					"calendar":"weekly",
+					"rules":[{"days":["everyday"],"time":"02:00:00"}]
+				},
+				"auth_connection_id":"conn_6c27d5a8f42b4d24ae1e69c9313a1e32",
 			"provider_options":{
 				"include_patterns":["**/*.md","**/*.doc","**/*.docx","**/*.pdf","**/*.txt"],
 				"exclude_patterns":["**/~$*"],
@@ -102,6 +105,10 @@ func TestCreateSourceHandlerAcceptsStructuredProviderOptions(t *testing.T) {
 	assertJSONNumber(t, options["reconcile_delay_minutes"], "10")
 	if options["reconcile_after_sync"] != true {
 		t.Fatalf("expected boolean provider option to be preserved, got %#v", options["reconcile_after_sync"])
+	}
+	policy := engine.lastCreate.Bindings[0].SchedulePolicy
+	if policy["timezone"] != "Asia/Shanghai" || policy["calendar"] != "weekly" {
+		t.Fatalf("expected schedule policy to be preserved, got %#v", policy)
 	}
 }
 

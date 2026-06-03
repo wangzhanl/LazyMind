@@ -48,7 +48,7 @@ func TestCheckpointScheduleEngineEnqueuesDueRunsAndDedupes(t *testing.T) {
 	ctx := context.Background()
 	now := scheduleTestTime()
 	due := now.Add(-time.Minute)
-	repo := newScheduleStore(store.Binding{SyncMode: SyncModeScheduled, ScheduleExpr: "15m"}, &due, now)
+	repo := newScheduleStore(store.Binding{SyncMode: SyncModeScheduled, SchedulePolicy: testSchedulePolicy("UTC", testScheduleRule([]string{"everyday"}, "10:00:00"))}, &due, now)
 	engine := NewCheckpointScheduleEngine(repo, repo, WithClock(func() time.Time { return now }), WithIDGenerator(scheduleIDs()))
 
 	intents, err := engine.EnqueueDueSyncRuns(ctx, 10)
@@ -60,6 +60,9 @@ func TestCheckpointScheduleEngineEnqueuesDueRunsAndDedupes(t *testing.T) {
 	}
 	if intents[0].Run.TriggerType != TriggerTypeScheduled || intents[0].Run.ScopeType != string(connector.ScopeTypeFull) {
 		t.Fatalf("unexpected due run fields: %+v", intents[0].Run)
+	}
+	if intents[0].Run.ScheduledFireAt == nil || !intents[0].Run.ScheduledFireAt.Equal(due) {
+		t.Fatalf("scheduled run did not preserve fire time: %+v want=%v", intents[0].Run.ScheduledFireAt, due)
 	}
 
 	again, err := engine.EnqueueDueSyncRuns(ctx, 10)
@@ -112,7 +115,7 @@ func TestCheckpointScheduleEngineFinishSuccessAdvancesCheckpoint(t *testing.T) {
 	ctx := context.Background()
 	now := scheduleTestTime()
 	due := now.Add(-time.Minute)
-	repo := newScheduleStore(store.Binding{SyncMode: SyncModeScheduled, ScheduleExpr: "30m"}, &due, now)
+	repo := newScheduleStore(store.Binding{SyncMode: SyncModeScheduled, SchedulePolicy: testSchedulePolicy("UTC", testScheduleRule([]string{"everyday"}, "10:00:00"))}, &due, now)
 	engine := NewCheckpointScheduleEngine(repo, repo, WithClock(func() time.Time { return now }), WithIDGenerator(scheduleIDs()))
 	intents, err := engine.EnqueueDueSyncRuns(ctx, 1)
 	if err != nil || len(intents) != 1 {
@@ -141,7 +144,7 @@ func TestCheckpointScheduleEngineFinishSuccessAdvancesCheckpoint(t *testing.T) {
 	if err != nil {
 		t.Fatalf("get checkpoint: %v", err)
 	}
-	wantNext := finishAt.Add(30 * time.Minute)
+	wantNext := time.Date(2026, 5, 28, 10, 0, 0, 0, time.UTC)
 	if checkpoint.Cursor != "cursor-2" || checkpoint.NextSyncAt == nil || !checkpoint.NextSyncAt.Equal(wantNext) {
 		t.Fatalf("checkpoint was not advanced: %+v want_next=%v", checkpoint, wantNext)
 	}
@@ -155,7 +158,7 @@ func TestCheckpointScheduleEngineFinishSuccessGeneratesPendingParseTasks(t *test
 
 	ctx := context.Background()
 	now := scheduleTestTime()
-	repo := newScheduleStore(store.Binding{SyncMode: SyncModeScheduled, ScheduleExpr: "30m"}, &now, now)
+	repo := newScheduleStore(store.Binding{SyncMode: SyncModeScheduled, SchedulePolicy: testSchedulePolicy("UTC", testScheduleRule([]string{"everyday"}, "10:00:00"))}, &now, now)
 	planner := &pendingTaskPlannerStub{}
 	engine := NewCheckpointScheduleEngine(
 		repo,
@@ -272,65 +275,126 @@ func TestCheckpointScheduleEngineFinishFailureDoesNotGeneratePendingParseTasks(t
 	}
 }
 
-func TestCheckpointScheduleEngineBuildCheckpointUsesSchedule(t *testing.T) {
+func TestCheckpointScheduleEngineBuildCheckpointUsesEverydaySchedule(t *testing.T) {
 	t.Parallel()
 
 	now := scheduleTestTime()
-	repo := newScheduleStore(store.Binding{SyncMode: SyncModeScheduled, ScheduleExpr: "@every 20m"}, nil, now)
+	repo := newScheduleStore(store.Binding{SyncMode: SyncModeScheduled, SchedulePolicy: testSchedulePolicy("UTC", testScheduleRule([]string{"everyday"}, "10:30:00"))}, nil, now)
 	engine := NewCheckpointScheduleEngine(repo, repo)
 	checkpoint, err := engine.BuildCheckpoint(context.Background(), store.Binding{
 		SourceID:          "source-1",
 		BindingID:         "binding-1",
 		BindingGeneration: 3,
 		SyncMode:          SyncModeScheduled,
-		ScheduleExpr:      "@every 20m",
+		SchedulePolicy:    testSchedulePolicy("UTC", testScheduleRule([]string{"everyday"}, "10:30:00")),
 	}, now)
 	if err != nil {
 		t.Fatalf("build checkpoint: %v", err)
 	}
-	if checkpoint.NextSyncAt == nil || !checkpoint.NextSyncAt.Equal(now.Add(20*time.Minute)) {
+	want := time.Date(2026, 5, 28, 10, 30, 0, 0, time.UTC)
+	if checkpoint.NextSyncAt == nil || !checkpoint.NextSyncAt.Equal(want) {
 		t.Fatalf("scheduled checkpoint did not compute next sync: %+v", checkpoint)
 	}
 }
 
-func TestCheckpointScheduleEngineBuildCheckpointUsesDailyScheduleWithSeconds(t *testing.T) {
+func TestCheckpointScheduleEngineBuildCheckpointUsesPolicyTimezone(t *testing.T) {
 	t.Parallel()
 
 	now := time.Date(2026, 5, 27, 17, 30, 0, 0, time.UTC)
-	repo := newScheduleStore(store.Binding{SyncMode: SyncModeScheduled, ScheduleExpr: "daily@02:00:00", ScheduleTZ: "Asia/Shanghai"}, nil, now)
+	policy := testSchedulePolicy("Asia/Shanghai", testScheduleRule([]string{"everyday"}, "02:00:00"))
+	repo := newScheduleStore(store.Binding{SyncMode: SyncModeScheduled, SchedulePolicy: policy}, nil, now)
 	engine := NewCheckpointScheduleEngine(repo, repo)
 	checkpoint, err := engine.BuildCheckpoint(context.Background(), store.Binding{
 		SourceID:          "source-1",
 		BindingID:         "binding-1",
 		BindingGeneration: 3,
 		SyncMode:          SyncModeScheduled,
-		ScheduleExpr:      "daily@02:00:00",
-		ScheduleTZ:        "Asia/Shanghai",
+		SchedulePolicy:    policy,
 	}, now)
 	if err != nil {
 		t.Fatalf("build checkpoint: %v", err)
 	}
 	want := time.Date(2026, 5, 28, 2, 0, 0, 0, time.FixedZone("CST", 8*60*60))
 	if checkpoint.NextSyncAt == nil || !checkpoint.NextSyncAt.Equal(want) {
-		t.Fatalf("daily schedule did not compute next sync: got=%v want=%v", checkpoint.NextSyncAt, want)
+		t.Fatalf("schedule policy did not compute next sync: got=%v want=%v", checkpoint.NextSyncAt, want)
 	}
 }
 
-func TestCheckpointScheduleEngineRejectsInvalidDailySchedule(t *testing.T) {
+func TestCheckpointScheduleEngineRejectsInvalidSchedulePolicy(t *testing.T) {
 	t.Parallel()
 
 	now := scheduleTestTime()
-	repo := newScheduleStore(store.Binding{SyncMode: SyncModeScheduled, ScheduleExpr: "daily@02:00:99"}, nil, now)
+	policy := testSchedulePolicy("UTC", testScheduleRule([]string{"everyday"}, "02:00:99"))
+	repo := newScheduleStore(store.Binding{SyncMode: SyncModeScheduled, SchedulePolicy: policy}, nil, now)
 	engine := NewCheckpointScheduleEngine(repo, repo)
 	_, err := engine.BuildCheckpoint(context.Background(), store.Binding{
 		SourceID:          "source-1",
 		BindingID:         "binding-1",
 		BindingGeneration: 3,
 		SyncMode:          SyncModeScheduled,
-		ScheduleExpr:      "daily@02:00:99",
+		SchedulePolicy:    policy,
 	}, now)
 	if err == nil {
-		t.Fatal("expected invalid daily schedule to be rejected")
+		t.Fatal("expected invalid schedule policy to be rejected")
+	}
+}
+
+func TestNextSyncAtSupportsWeeklySelectorsAndDedupesOverlappingRules(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 6, 1, 1, 0, 0, 0, time.UTC) // Monday
+	policy := testSchedulePolicy("UTC",
+		testScheduleRule([]string{"everyday"}, "02:00:00"),
+		testScheduleRule([]string{"workday"}, "02:00:00"),
+		testScheduleRule([]string{"mon", "fri"}, "02:00:00"),
+		testScheduleRule([]string{"non_workday"}, "03:00:00"),
+	)
+	next, err := NextSyncAt(policy, now)
+	if err != nil {
+		t.Fatalf("next sync at: %v", err)
+	}
+	want := time.Date(2026, 6, 1, 2, 0, 0, 0, time.UTC)
+	if !next.Equal(want) {
+		t.Fatalf("overlapping rules were not deduped to earliest candidate: got=%v want=%v", next, want)
+	}
+
+	nextAfterTwo, err := NextSyncAt(policy, time.Date(2026, 6, 1, 2, 0, 0, 0, time.UTC))
+	if err != nil {
+		t.Fatalf("next sync at after exact fire time: %v", err)
+	}
+	wantAfterTwo := time.Date(2026, 6, 2, 2, 0, 0, 0, time.UTC)
+	if !nextAfterTwo.Equal(wantAfterTwo) {
+		t.Fatalf("expected exact fire time to advance to next candidate: got=%v want=%v", nextAfterTwo, wantAfterTwo)
+	}
+}
+
+func TestNextSyncAtSupportsNonWorkday(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 6, 5, 4, 0, 0, 0, time.UTC) // Friday
+	policy := testSchedulePolicy("UTC", testScheduleRule([]string{"non_workday"}, "03:00:00"))
+	next, err := NextSyncAt(policy, now)
+	if err != nil {
+		t.Fatalf("next sync at: %v", err)
+	}
+	want := time.Date(2026, 6, 6, 3, 0, 0, 0, time.UTC)
+	if !next.Equal(want) {
+		t.Fatalf("non-workday schedule did not pick Saturday: got=%v want=%v", next, want)
+	}
+}
+
+func TestNextSyncAtRejectsInvalidCalendarAndDay(t *testing.T) {
+	t.Parallel()
+
+	if _, err := NextSyncAt(store.JSON{
+		"timezone": "UTC",
+		"calendar": "cn",
+		"rules":    []any{store.JSON{"days": []any{"everyday"}, "time": "02:00:00"}},
+	}, scheduleTestTime()); err == nil {
+		t.Fatal("expected invalid calendar to be rejected")
+	}
+	if _, err := NextSyncAt(testSchedulePolicy("UTC", testScheduleRule([]string{"holiday"}, "02:00:00")), scheduleTestTime()); err == nil {
+		t.Fatal("expected invalid day selector to be rejected")
 	}
 }
 
@@ -506,6 +570,26 @@ func scheduleIDs() func(string) string {
 
 func scheduleTestTime() time.Time {
 	return time.Date(2026, 5, 28, 9, 0, 0, 0, time.UTC)
+}
+
+func testSchedulePolicy(timezone string, rules ...store.JSON) store.JSON {
+	items := make([]any, 0, len(rules))
+	for _, rule := range rules {
+		items = append(items, rule)
+	}
+	return store.JSON{
+		"timezone": timezone,
+		"calendar": "weekly",
+		"rules":    items,
+	}
+}
+
+func testScheduleRule(days []string, fireTime string) store.JSON {
+	items := make([]any, 0, len(days))
+	for _, day := range days {
+		items = append(items, day)
+	}
+	return store.JSON{"days": items, "time": fireTime}
 }
 
 type pendingTaskPlannerCall struct {

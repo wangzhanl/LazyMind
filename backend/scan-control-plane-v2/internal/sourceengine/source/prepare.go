@@ -46,6 +46,7 @@ func (e *DefaultEngine) prepareCreateBinding(ctx context.Context, sourceID, data
 		_ = e.deleteCoreFolder(ctx, datasetID, folderID, callerID)
 		return preparedBinding{}, err
 	}
+	binding.NextSyncAt = checkpoint.NextSyncAt
 	return preparedBinding{binding: binding, checkpoint: checkpoint}, nil
 }
 
@@ -137,8 +138,7 @@ func (e *DefaultEngine) newBinding(sourceID, folderID, displayName string, input
 		CoreParentDocumentID:   folderID,
 		CoreParentDocumentName: displayName,
 		SyncMode:               input.SyncMode,
-		ScheduleExpr:           input.ScheduleExpr,
-		ScheduleTZ:             defaultScheduleTZ(input.ScheduleTZ),
+		SchedulePolicy:         schedulePolicyForSyncMode(input.SyncMode, input.SchedulePolicy),
 		IncludeExtensions:      jsonFromStrings(input.IncludeExtensions),
 		ExcludeExtensions:      jsonFromStrings(input.ExcludeExtensions),
 		Status:                 status,

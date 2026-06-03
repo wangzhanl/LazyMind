@@ -32,6 +32,7 @@ type SyncRun struct {
 	BindingID         string
 	BindingGeneration int64
 	TriggerType       string
+	ScheduledFireAt   *time.Time
 	ScopeType         string
 	ScopeRef          JSON
 	Coverage          JSON

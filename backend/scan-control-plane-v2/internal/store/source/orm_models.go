@@ -36,8 +36,7 @@ type ormBinding struct {
 	CoreParentDocumentID   string `gorm:"column:core_parent_document_id"`
 	CoreParentDocumentName string `gorm:"column:core_parent_document_name"`
 	SyncMode               string `gorm:"column:sync_mode"`
-	ScheduleExpr           string `gorm:"column:schedule_expr"`
-	ScheduleTZ             string `gorm:"column:schedule_tz"`
+	SchedulePolicy         JSON   `gorm:"column:schedule_policy_json;type:jsonb"`
 	NextSyncAt             *time.Time
 	IncludeExtensions      JSON       `gorm:"column:include_extensions_json;type:jsonb"`
 	ExcludeExtensions      JSON       `gorm:"column:exclude_extensions_json;type:jsonb"`
@@ -168,22 +167,23 @@ type ormSyncCheckpoint struct {
 func (ormSyncCheckpoint) TableName() string { return "source_sync_checkpoints" }
 
 type ormSyncRun struct {
-	RunID             string `gorm:"column:run_id;primaryKey"`
-	SourceID          string `gorm:"column:source_id"`
-	BindingID         string `gorm:"column:binding_id"`
-	BindingGeneration int64  `gorm:"column:binding_generation"`
-	TriggerType       string `gorm:"column:trigger_type"`
-	ScopeType         string `gorm:"column:scope_type"`
-	ScopeRef          JSON   `gorm:"column:scope_ref_json;type:jsonb"`
-	Coverage          JSON   `gorm:"column:coverage_json;type:jsonb"`
-	Status            string `gorm:"column:status"`
-	SeenCount         int64  `gorm:"column:seen_count"`
-	NewCount          int64  `gorm:"column:new_count"`
-	ModifiedCount     int64  `gorm:"column:modified_count"`
-	DeletedCount      int64  `gorm:"column:deleted_count"`
-	UnchangedCount    int64  `gorm:"column:unchanged_count"`
-	ErrorCode         string `gorm:"column:error_code"`
-	ErrorMessage      string `gorm:"column:error_message"`
+	RunID             string     `gorm:"column:run_id;primaryKey"`
+	SourceID          string     `gorm:"column:source_id"`
+	BindingID         string     `gorm:"column:binding_id"`
+	BindingGeneration int64      `gorm:"column:binding_generation"`
+	TriggerType       string     `gorm:"column:trigger_type"`
+	ScheduledFireAt   *time.Time `gorm:"column:scheduled_fire_at"`
+	ScopeType         string     `gorm:"column:scope_type"`
+	ScopeRef          JSON       `gorm:"column:scope_ref_json;type:jsonb"`
+	Coverage          JSON       `gorm:"column:coverage_json;type:jsonb"`
+	Status            string     `gorm:"column:status"`
+	SeenCount         int64      `gorm:"column:seen_count"`
+	NewCount          int64      `gorm:"column:new_count"`
+	ModifiedCount     int64      `gorm:"column:modified_count"`
+	DeletedCount      int64      `gorm:"column:deleted_count"`
+	UnchangedCount    int64      `gorm:"column:unchanged_count"`
+	ErrorCode         string     `gorm:"column:error_code"`
+	ErrorMessage      string     `gorm:"column:error_message"`
 	StartedAt         time.Time
 	FinishedAt        *time.Time
 }

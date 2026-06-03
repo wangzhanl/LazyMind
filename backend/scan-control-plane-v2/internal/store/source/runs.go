@@ -146,6 +146,9 @@ func (r *SQLRepository) FinishSyncRun(ctx context.Context, runID, workerID strin
 		if err := ormUpsertCheckpoint(tx, checkpoint); err != nil {
 			return err
 		}
+		if err := updateBindingNextSyncAtORM(tx, current.BindingID, current.BindingGeneration, checkpoint.NextSyncAt, finish.FinishedAt); err != nil {
+			return err
+		}
 		run = current
 		finished = true
 		return nil
@@ -160,6 +163,7 @@ func syncRunORMValues(run SyncRun) map[string]any {
 		"binding_id":         run.BindingID,
 		"binding_generation": run.BindingGeneration,
 		"trigger_type":       run.TriggerType,
+		"scheduled_fire_at":  run.ScheduledFireAt,
 		"scope_type":         run.ScopeType,
 		"scope_ref_json":     run.ScopeRef,
 		"coverage_json":      run.Coverage,
@@ -183,6 +187,7 @@ func syncRunFromORM(model ormSyncRun) SyncRun {
 		BindingID:         model.BindingID,
 		BindingGeneration: model.BindingGeneration,
 		TriggerType:       model.TriggerType,
+		ScheduledFireAt:   model.ScheduledFireAt,
 		ScopeType:         model.ScopeType,
 		ScopeRef:          model.ScopeRef,
 		Coverage:          model.Coverage,

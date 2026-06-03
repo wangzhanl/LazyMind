@@ -35,8 +35,7 @@ CREATE TABLE public.source_bindings (
     core_parent_document_id text NOT NULL,
     core_parent_document_name text NOT NULL,
     sync_mode text NOT NULL,
-    schedule_expr text,
-    schedule_tz text,
+    schedule_policy_json jsonb,
     next_sync_at timestamp with time zone,
     include_extensions_json jsonb,
     exclude_extensions_json jsonb,
@@ -192,6 +191,7 @@ CREATE TABLE public.source_sync_runs (
     binding_id text NOT NULL REFERENCES public.source_bindings(binding_id),
     binding_generation bigint NOT NULL,
     trigger_type text NOT NULL,
+    scheduled_fire_at timestamp with time zone,
     scope_type text NOT NULL,
     scope_ref_json jsonb,
     coverage_json jsonb,
@@ -209,6 +209,11 @@ CREATE TABLE public.source_sync_runs (
 
 CREATE INDEX idx_source_sync_runs_binding_started
     ON public.source_sync_runs (binding_id, started_at DESC);
+CREATE UNIQUE INDEX uk_source_sync_runs_scheduled_fire
+    ON public.source_sync_runs (binding_id, binding_generation, scheduled_fire_at)
+    WHERE trigger_type = 'scheduled'
+      AND scheduled_fire_at IS NOT NULL
+      AND status IN ('PENDING', 'RUNNING');
 
 CREATE TABLE public.data_source_create_operations (
     operation_id text PRIMARY KEY,

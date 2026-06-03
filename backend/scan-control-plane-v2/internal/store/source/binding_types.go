@@ -18,8 +18,7 @@ type Binding struct {
 	CoreParentDocumentID   string
 	CoreParentDocumentName string
 	SyncMode               string
-	ScheduleExpr           string
-	ScheduleTZ             string
+	SchedulePolicy         JSON
 	NextSyncAt             *time.Time
 	IncludeExtensions      JSON
 	ExcludeExtensions      JSON
@@ -40,6 +39,7 @@ type CleanupIntent struct {
 type BindingUpdateCleanup struct {
 	OldCoreParentDocumentID string
 	ClearIndexedState       bool
+	CancelPendingScheduled  bool
 	OldBindingGeneration    int64
 	Reason                  string
 }

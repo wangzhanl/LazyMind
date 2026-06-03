@@ -73,6 +73,11 @@ func (r *SQLRepository) UpdateBinding(ctx context.Context, binding Binding, chec
 		if err := ormUpsertCheckpoint(tx, checkpoint); err != nil {
 			return err
 		}
+		if cleanup.CancelPendingScheduled {
+			if _, err := cancelPendingScheduledSyncRunsORMTx(tx, binding.SourceID, binding.BindingID, binding.BindingGeneration, cleanup.Reason, binding.UpdatedAt); err != nil {
+				return err
+			}
+		}
 		if cleanup.ClearIndexedState {
 			if _, err := cleanupBindingGenerationORMTx(tx, binding.SourceID, binding.BindingID, cleanup.OldBindingGeneration, cleanup.Reason, binding.UpdatedAt); err != nil {
 				return err
@@ -179,6 +184,24 @@ func cancelSyncRunsORMTx(tx *gorm.DB, sourceID, bindingID string, generation int
 	return res.RowsAffected, mapSQLConstraint(res.Error)
 }
 
+func cancelPendingScheduledSyncRunsORMTx(tx *gorm.DB, sourceID, bindingID string, generation int64, reason string, now time.Time) (int64, error) {
+	if reason == "" {
+		reason = "binding schedule changed"
+	}
+	query := tx.Model(&ormSyncRun{}).
+		Where("source_id = ? AND binding_id = ? AND status = ? AND trigger_type = ?", sourceID, bindingID, SyncRunStatusPending, "scheduled")
+	if generation != 0 {
+		query = query.Where("binding_generation = ?", generation)
+	}
+	res := query.Updates(map[string]any{
+		"status":        "CANCELED",
+		"error_code":    "CANCELED",
+		"error_message": reason,
+		"finished_at":   now,
+	})
+	return res.RowsAffected, mapSQLConstraint(res.Error)
+}
+
 func cancelParseTasksORMTx(tx *gorm.DB, sourceID, bindingID string, generation int64, reason string, now time.Time) (int64, error) {
 	query := tx.Model(&ormParseTask{}).
 		Where("source_id = ? AND binding_id = ? AND status IN ?", sourceID, bindingID, []string{"PENDING", "RUNNING", "SUBMITTED"})
@@ -248,8 +271,7 @@ func bindingUpdateValues(binding Binding) map[string]any {
 		"core_parent_document_id":   binding.CoreParentDocumentID,
 		"core_parent_document_name": binding.CoreParentDocumentName,
 		"sync_mode":                 binding.SyncMode,
-		"schedule_expr":             nullString(binding.ScheduleExpr),
-		"schedule_tz":               nullString(binding.ScheduleTZ),
+		"schedule_policy_json":      binding.SchedulePolicy,
 		"next_sync_at":              binding.NextSyncAt,
 		"include_extensions_json":   binding.IncludeExtensions,
 		"exclude_extensions_json":   binding.ExcludeExtensions,

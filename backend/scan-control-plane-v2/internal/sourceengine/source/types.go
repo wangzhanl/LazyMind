@@ -74,8 +74,7 @@ type BindingInput struct {
 	AuthConnectionID  string                  `json:"auth_connection_id,omitempty"`
 	ProviderOptions   map[string]any          `json:"provider_options,omitempty"`
 	SyncMode          string                  `json:"sync_mode,omitempty"`
-	ScheduleExpr      string                  `json:"schedule_expr,omitempty"`
-	ScheduleTZ        string                  `json:"schedule_tz,omitempty"`
+	SchedulePolicy    store.JSON              `json:"schedule_policy,omitempty"`
 	IncludeExtensions []string                `json:"include_extensions,omitempty"`
 	ExcludeExtensions []string                `json:"exclude_extensions,omitempty"`
 	Status            string                  `json:"status,omitempty"`
@@ -147,8 +146,7 @@ type SourceBindingResponse struct {
 	CoreParentDocumentID   string         `json:"core_parent_document_id"`
 	CoreParentDocumentName string         `json:"core_parent_document_name"`
 	SyncMode               string         `json:"sync_mode"`
-	ScheduleExpr           string         `json:"schedule_expr,omitempty"`
-	ScheduleTZ             string         `json:"schedule_tz,omitempty"`
+	SchedulePolicy         store.JSON     `json:"schedule_policy,omitempty"`
 	NextSyncAt             *time.Time     `json:"next_sync_at,omitempty"`
 	IncludeExtensions      []string       `json:"include_extensions,omitempty"`
 	ExcludeExtensions      []string       `json:"exclude_extensions,omitempty"`

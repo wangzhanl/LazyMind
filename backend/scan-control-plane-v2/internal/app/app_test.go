@@ -1,6 +1,7 @@
 package app
 
 import (
+	"context"
 	"database/sql"
 	"errors"
 	"reflect"
@@ -13,6 +14,7 @@ import (
 	"github.com/lazymind/scan_control_plane/internal/sourceengine/connector"
 	"github.com/lazymind/scan_control_plane/internal/sourceengine/connector/feishu"
 	"github.com/lazymind/scan_control_plane/internal/sourceengine/connector/localfs"
+	"github.com/lazymind/scan_control_plane/internal/sourceengine/schedule"
 	taskengine "github.com/lazymind/scan_control_plane/internal/sourceengine/task"
 	"github.com/lazymind/scan_control_plane/internal/sourceengine/worker"
 )
@@ -78,8 +80,8 @@ func TestBuildSelectsSQLRepositoryAndHTTPAdapters(t *testing.T) {
 	if _, ok := built.JobQueue.(*taskengine.DBJobQueue); !ok {
 		t.Fatalf("job queue = %T, want db", built.JobQueue)
 	}
-	if built.ParseWorkerRunner == nil {
-		t.Fatalf("parse worker runner is nil")
+	if built.ParseWorkerRunner == nil || built.Scheduler == nil {
+		t.Fatalf("parse worker runner and scheduler should be wired: parse=%v scheduler=%v", built.ParseWorkerRunner, built.Scheduler)
 	}
 	if built.CrawlWorker == nil || built.CoreResultRunner == nil || built.TempCleanupRunner == nil {
 		t.Fatalf("runtime runners should be wired: crawl=%v reconciler=%v temp=%v", built.CrawlWorker, built.CoreResultRunner, built.TempCleanupRunner)
@@ -160,4 +162,37 @@ func TestEnabledConnectorTypesIncludesLocalFSAndFeishu(t *testing.T) {
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("connectors = %+v, want %+v", got, want)
 	}
+}
+
+func TestRuntimeStartEnqueuesDueSyncRuns(t *testing.T) {
+	t.Parallel()
+
+	scheduler := &runtimeSchedulerSpy{calls: make(chan int, 1)}
+	runtime := &Runtime{
+		workerID:           "test-worker",
+		scheduler:          scheduler,
+		workerPollInterval: time.Hour,
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	runtime.Start(ctx)
+
+	select {
+	case limit := <-scheduler.calls:
+		if limit != runtimeDueSyncRunLimit {
+			t.Fatalf("scheduler limit = %d, want %d", limit, runtimeDueSyncRunLimit)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("runtime did not enqueue due sync runs")
+	}
+}
+
+type runtimeSchedulerSpy struct {
+	calls chan int
+}
+
+func (s *runtimeSchedulerSpy) EnqueueDueSyncRuns(_ context.Context, limit int) ([]schedule.SyncRunIntent, error) {
+	s.calls <- limit
+	return nil, nil
 }

@@ -34,8 +34,9 @@ func (r *SQLRepository) ListDueSyncCheckpoints(ctx context.Context, now time.Tim
 		Where("source_sync_checkpoints.next_sync_at IS NOT NULL").
 		Where("source_sync_checkpoints.next_sync_at <= ?", now).
 		Where(`source_sync_checkpoints.lock_owner IS NULL OR source_sync_checkpoints.lock_owner = ''
-			OR source_sync_checkpoints.lock_until IS NULL OR source_sync_checkpoints.lock_until <= ?`, now).
+				OR source_sync_checkpoints.lock_until IS NULL OR source_sync_checkpoints.lock_until <= ?`, now).
 		Where("b.status = ?", "ACTIVE").
+		Where("b.sync_mode IN ?", []string{"scheduled", "watch"}).
 		Where("b.binding_generation = source_sync_checkpoints.binding_generation").
 		Order("source_sync_checkpoints.next_sync_at, source_sync_checkpoints.binding_id").
 		Limit(limit).
@@ -51,11 +52,12 @@ func (r *SQLRepository) ListDueSyncCheckpoints(ctx context.Context, now time.Tim
 }
 
 func (r *SQLRepository) SaveSyncCheckpoint(ctx context.Context, checkpoint SyncCheckpoint) error {
-	db, err := r.sourceORM(ctx)
-	if err != nil {
-		return err
-	}
-	return ormUpsertCheckpoint(db, checkpoint)
+	return r.withORMTx(ctx, func(tx *gorm.DB) error {
+		if err := ormUpsertCheckpoint(tx, checkpoint); err != nil {
+			return err
+		}
+		return updateBindingNextSyncAtORM(tx, checkpoint.BindingID, checkpoint.BindingGeneration, checkpoint.NextSyncAt, checkpoint.UpdatedAt)
+	})
 }
 
 func (r *SQLRepository) RecordSyncJobError(ctx context.Context, sourceID, bindingID string, generation int64, lastError JSON, now time.Time) error {
@@ -164,4 +166,22 @@ func syncCheckpointFromORM(model ormSyncCheckpoint) SyncCheckpoint {
 		CreatedAt:         model.CreatedAt,
 		UpdatedAt:         model.UpdatedAt,
 	}
+}
+
+func updateBindingNextSyncAtORM(db *gorm.DB, bindingID string, generation int64, nextSyncAt *time.Time, now time.Time) error {
+	query := db.Model(&ormBinding{}).Where("binding_id = ?", bindingID)
+	if generation != 0 {
+		query = query.Where("binding_generation = ?", generation)
+	}
+	result := query.Updates(map[string]any{
+		"next_sync_at": nextSyncAt,
+		"updated_at":   now,
+	})
+	if result.Error != nil {
+		return mapSQLConstraint(result.Error)
+	}
+	if result.RowsAffected == 0 {
+		return NewStoreError(ErrCodeGenerationConflict, "binding generation is stale")
+	}
+	return nil
 }

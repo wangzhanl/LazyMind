@@ -46,6 +46,7 @@ type Components struct {
 	FeishuClient                      feishu.FeishuClient
 	TempObjectStore                   worker.TempObjectStore
 	JobQueue                          taskengine.JobQueue
+	Scheduler                         *schedule.CheckpointScheduleEngine
 	ParseWorkerRunner                 *worker.Runner
 	CrawlWorker                       *crawl.RunOnceWorker
 	CoreResultRunner                  *worker.ReconcilerRunner
@@ -130,6 +131,7 @@ func buildSQLComponents(cfg config.Config, opener DBOpener) (Components, error) 
 	repo := store.NewSQLRepository(db)
 	adapters.Repository = repo
 	adapters.JobQueue = taskengine.NewDBJobQueue(repo)
+	adapters.Scheduler = buildScheduleEngine(adapters, cfg)
 	parseRunner, err := buildParseWorkerRunner(adapters, cfg)
 	if err != nil {
 		return Components{}, err
@@ -203,11 +205,11 @@ func newHandlerWithComponents(built Components) http.Handler {
 	if jobQueue == nil {
 		panic("app job queue is required")
 	}
-	taskPlanner := taskengine.NewDBTaskPlanner(
-		repo,
-		taskengine.WithMaxObjectsPerGenerateRequest(built.GenerateTasksMaxObjectsPerRequest),
-	)
-	scheduler := schedule.NewCheckpointScheduleEngine(repo, jobQueue, schedule.WithTaskPlanner(pendingTaskPlanner{planner: taskPlanner}))
+	taskPlanner := taskengine.NewDBTaskPlanner(repo, taskengine.WithMaxObjectsPerGenerateRequest(built.GenerateTasksMaxObjectsPerRequest))
+	scheduler := built.Scheduler
+	if scheduler == nil {
+		scheduler = schedule.NewCheckpointScheduleEngine(repo, jobQueue, schedule.WithTaskPlanner(pendingTaskPlanner{planner: taskPlanner}))
+	}
 	coreResource := built.CoreResource
 	if coreResource == nil {
 		panic("app core resource client is required")
@@ -355,10 +357,17 @@ func buildCrawlWorker(built Components, cfg config.Config) (*crawl.RunOnceWorker
 	}
 	reducer := stateengine.NewDBStateReducer(built.Repository)
 	crawler := crawl.NewDefaultCrawlEngine(built.Repository, registry, built.Repository, reducer)
-	scheduler := schedule.NewCheckpointScheduleEngine(built.Repository, built.JobQueue, schedule.WithTaskPlanner(pendingTaskPlanner{
+	scheduler := built.Scheduler
+	if scheduler == nil {
+		scheduler = buildScheduleEngine(built, cfg)
+	}
+	return crawl.NewRunOnceWorker(built.Repository, crawler, scheduler, crawl.WithRunLeaseTTL(cfg.WorkerLeaseTTL)), nil
+}
+
+func buildScheduleEngine(built Components, cfg config.Config) *schedule.CheckpointScheduleEngine {
+	return schedule.NewCheckpointScheduleEngine(built.Repository, built.JobQueue, schedule.WithTaskPlanner(pendingTaskPlanner{
 		planner: taskengine.NewDBTaskPlanner(built.Repository, taskengine.WithMaxObjectsPerGenerateRequest(cfg.GenerateTasksMaxObjectsPerRequest)),
 	}))
-	return crawl.NewRunOnceWorker(built.Repository, crawler, scheduler, crawl.WithRunLeaseTTL(cfg.WorkerLeaseTTL)), nil
 }
 
 func buildCoreResultRunner(built Components, cfg config.Config) *worker.ReconcilerRunner {
@@ -408,6 +417,7 @@ func (a *App) Run(ctx context.Context) error {
 
 type Runtime struct {
 	workerID             string
+	scheduler            dueSyncRunEnqueuer
 	parseRunner          *worker.Runner
 	crawlWorker          *crawl.RunOnceWorker
 	reconcilerRunner     *worker.ReconcilerRunner
@@ -417,9 +427,16 @@ type Runtime struct {
 	compensationInterval time.Duration
 }
 
+type dueSyncRunEnqueuer interface {
+	EnqueueDueSyncRuns(ctx context.Context, limit int) ([]schedule.SyncRunIntent, error)
+}
+
+const runtimeDueSyncRunLimit = 50
+
 func NewRuntime(built Components, cfg config.Config) *Runtime {
 	return &Runtime{
 		workerID:             defaultWorkerID(),
+		scheduler:            built.Scheduler,
 		parseRunner:          built.ParseWorkerRunner,
 		crawlWorker:          built.CrawlWorker,
 		reconcilerRunner:     built.CoreResultRunner,
@@ -436,6 +453,9 @@ func (r *Runtime) Start(ctx context.Context) {
 	}
 	var wg sync.WaitGroup
 	r.startLoop(ctx, &wg, r.workerPollInterval, func(ctx context.Context) {
+		if r.scheduler != nil {
+			_, _ = r.scheduler.EnqueueDueSyncRuns(ctx, runtimeDueSyncRunLimit)
+		}
 		if r.crawlWorker != nil {
 			_, _, _ = r.crawlWorker.RunOnce(ctx, r.workerID+"-crawl")
 		}

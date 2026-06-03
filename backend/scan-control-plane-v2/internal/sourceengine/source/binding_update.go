@@ -2,6 +2,7 @@ package source
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"time"
 
@@ -55,6 +56,12 @@ func (e *DefaultEngine) prepareUpdateBinding(ctx context.Context, callerID strin
 	if input.SyncMode == "" {
 		input.SyncMode = current.SyncMode
 	}
+	if input.SyncMode == SyncModeScheduled && input.SchedulePolicy == nil && current.SyncMode == SyncModeScheduled {
+		input.SchedulePolicy = store.CloneJSON(current.SchedulePolicy)
+	}
+	if input.SyncMode != SyncModeScheduled {
+		input.SchedulePolicy = nil
+	}
 	changedTarget := targetChanged(current, input)
 	if changedTarget {
 		input = completeTargetInput(current, input)
@@ -64,6 +71,10 @@ func (e *DefaultEngine) prepareUpdateBinding(ctx context.Context, callerID strin
 	}
 	now := e.clock().UTC()
 	updated := patchNonTargetFields(current, input, now)
+	changedSchedule := scheduleChanged(current, updated)
+	if changedSchedule {
+		updated.NextSyncAt = nil
+	}
 	cleanup := store.BindingUpdateCleanup{}
 	if changedTarget {
 		target, err := e.validateTarget(ctx, callerID, input)
@@ -90,6 +101,11 @@ func (e *DefaultEngine) prepareUpdateBinding(ctx context.Context, callerID strin
 			Reason:                  "binding target changed",
 		}
 		updated = patchTargetFields(updated, input, target, folderID)
+	} else if changedSchedule {
+		cleanup = store.BindingUpdateCleanup{
+			CancelPendingScheduled: true,
+			Reason:                 "binding schedule changed",
+		}
 	}
 	checkpoint, err := e.schedule.BuildCheckpoint(ctx, updated, now)
 	if err != nil {
@@ -98,6 +114,7 @@ func (e *DefaultEngine) prepareUpdateBinding(ctx context.Context, callerID strin
 		}
 		return store.Binding{}, store.SyncCheckpoint{}, store.BindingUpdateCleanup{}, err
 	}
+	updated.NextSyncAt = checkpoint.NextSyncAt
 	return updated, checkpoint, cleanup, nil
 }
 
@@ -134,12 +151,7 @@ func patchNonTargetFields(binding store.Binding, input BindingInput, now time.Ti
 	if input.SyncMode != "" {
 		binding.SyncMode = input.SyncMode
 	}
-	if input.ScheduleExpr != "" {
-		binding.ScheduleExpr = input.ScheduleExpr
-	}
-	if input.ScheduleTZ != "" {
-		binding.ScheduleTZ = input.ScheduleTZ
-	}
+	binding.SchedulePolicy = schedulePolicyForSyncMode(binding.SyncMode, input.SchedulePolicy)
 	if input.IncludeExtensions != nil {
 		binding.IncludeExtensions = jsonFromStrings(input.IncludeExtensions)
 	}
@@ -151,6 +163,25 @@ func patchNonTargetFields(binding store.Binding, input BindingInput, now time.Ti
 	}
 	binding.UpdatedAt = now
 	return binding
+}
+
+func scheduleChanged(current, updated store.Binding) bool {
+	if current.SyncMode != updated.SyncMode {
+		return true
+	}
+	if current.SyncMode != SyncModeScheduled {
+		return false
+	}
+	return !jsonEqual(current.SchedulePolicy, updated.SchedulePolicy)
+}
+
+func jsonEqual(left, right store.JSON) bool {
+	leftBody, leftErr := json.Marshal(left)
+	rightBody, rightErr := json.Marshal(right)
+	if leftErr != nil || rightErr != nil {
+		return false
+	}
+	return string(leftBody) == string(rightBody)
 }
 
 func patchTargetFields(binding store.Binding, input BindingInput, target connector.NormalizedTarget, folderID string) store.Binding {

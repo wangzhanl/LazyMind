@@ -183,6 +183,13 @@ func (r *SQLRepository) UpdateSourceWithBindings(ctx context.Context, mutation S
 			if err := ormUpsertCheckpoint(tx, item.Checkpoint); err != nil {
 				return err
 			}
+			if item.Cleanup.CancelPendingScheduled {
+				count, err := cancelPendingScheduledSyncRunsORMTx(tx, item.Binding.SourceID, item.Binding.BindingID, item.Binding.BindingGeneration, item.Cleanup.Reason, mutation.Now)
+				if err != nil {
+					return err
+				}
+				result.Cleanup.CancelledSyncRunCount += count
+			}
 			if item.Cleanup.ClearIndexedState {
 				cleanup, err := cleanupBindingGenerationORMTx(tx, item.Binding.SourceID, item.Binding.BindingID, item.Cleanup.OldBindingGeneration, item.Cleanup.Reason, mutation.Now)
 				if err != nil {
