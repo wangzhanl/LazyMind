@@ -63,6 +63,7 @@ type LazyChatData struct {
 	Sources       []any  `json:"sources"`
 	Status        string `json:"status"`
 	ReasoningText string `json:"think"`
+	ToolCallTurns int64  `json:"tool_call_turns"`
 }
 
 // LazyChatResponse text /api/chat textResponse。
@@ -219,6 +220,7 @@ type UpstreamStreamChunk struct {
 	Status        string `json:"status"`
 	Sources       []any  `json:"sources"`
 	ReasoningText string `json:"reasoning_text"` // text think
+	ToolCallTurns int64  `json:"tool_call_turns"`
 }
 
 type upstreamStreamLine struct {
@@ -413,6 +415,7 @@ func StreamChatUpstream(ctx context.Context, baseURL string, body map[string]any
 				Status:        d.Resp.Data.Status,
 				Sources:       d.Resp.Data.Sources,
 				ReasoningText: d.Resp.Data.ReasoningText,
+				ToolCallTurns: d.Resp.Data.ToolCallTurns,
 			}
 			select {
 			case out <- chunk:

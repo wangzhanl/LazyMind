@@ -1095,7 +1095,7 @@ func SetChatHistory(w http.ResponseWriter, r *http.Request) {
 			RetrievalResult: selected.RetrievalResult,
 			Content:         selected.Content,
 			Result:          selected.Result,
-			ToolCallTurns:   countToolCallTurns(selected.Result),
+			ToolCallTurns:   nonNegativeToolCallTurns(int64(selected.ToolCallTurns)),
 			FeedBack:        selected.FeedBack,
 			Reason:          selected.Reason,
 			Ext:             selected.Ext,

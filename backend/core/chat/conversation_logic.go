@@ -61,6 +61,17 @@ func marshalRetrievalResult(sources []any) json.RawMessage {
 	return payload
 }
 
+func nonNegativeToolCallTurns(v int64) int {
+	if v < 0 {
+		return 0
+	}
+	maxInt := int(^uint(0) >> 1)
+	if v > int64(maxInt) {
+		return maxInt
+	}
+	return int(v)
+}
+
 // newID text history text ID。
 func newID(prefix string) string {
 	return prefix + strconvBase36(time.Now().UnixNano())
@@ -533,12 +544,14 @@ func handleNonStreamChat(
 	_ = json.Unmarshal(respBytes, &pyResp)
 	answer := ""
 	rawAnswer := ""
+	var toolCallTurns int
 	var sources []any
 	if pyResp.Code == 200 && len(pyResp.Data) > 0 {
 		var data struct {
-			Text    string `json:"text"`
-			Think   string `json:"think"`
-			Sources []any  `json:"sources"`
+			Text          string `json:"text"`
+			Think         string `json:"think"`
+			Sources       []any  `json:"sources"`
+			ToolCallTurns int64  `json:"tool_call_turns"`
 		}
 		if json.Unmarshal(pyResp.Data, &data) == nil {
 			if data.Think != "" {
@@ -548,6 +561,7 @@ func handleNonStreamChat(
 			}
 			answer = strings.TrimSpace(stripToolTags(data.Text))
 			sources = data.Sources
+			toolCallTurns = nonNegativeToolCallTurns(data.ToolCallTurns)
 		}
 		if rawAnswer == "" {
 			rawAnswer = strings.TrimSpace(string(pyResp.Data))
@@ -574,7 +588,7 @@ func handleNonStreamChat(
 		RetrievalResult: retrievalResult,
 		Content:         query,
 		Result:          rawAnswer,
-		ToolCallTurns:   countToolCallTurns(rawAnswer),
+		ToolCallTurns:   toolCallTurns,
 		FeedBack:        0,
 		Reason:          "",
 		ExpectedAnswer:  "",
@@ -588,7 +602,7 @@ func handleNonStreamChat(
 			"raw_content":      query,
 			"content":          query,
 			"result":           rawAnswer,
-			"tool_call_turns":  countToolCallTurns(rawAnswer),
+			"tool_call_turns":  toolCallTurns,
 			"retrieval_result": retrievalResult,
 			"feed_back":        0,
 			"reason":           "",
@@ -611,8 +625,6 @@ func handleNonStreamChat(
 	db.Model(&orm.Conversation{}).Where("id = ?", convID).Update("updated_at", now)
 	if !target.IsRegeneration {
 		db.Model(&orm.Conversation{}).Where("id = ?", convID).UpdateColumn("chat_times", gorm.Expr("chat_times + ?", 1))
-	}
-	if !target.IsRegeneration {
 		recordConversationIdleAfterPersist(context.Background(), db, rdb, convID, userIDFromChatRequestBody(reqBody), historyID, now, query, answer)
 	}
 	common.ReplyOK(w, map[string]any{
@@ -717,6 +729,7 @@ func streamSingleAnswer(
 	var fullText string
 	var pendingThink string
 	var fullResult string
+	var toolCallTurns int
 	var sources []any
 	thinkStart := time.Now()
 	// text：textConversation/text，finish_reason text UNSPECIFIED
@@ -733,6 +746,9 @@ func streamSingleAnswer(
 		ThinkingDurationS: 0,
 	})
 	for d := range ch {
+		if next := nonNegativeToolCallTurns(d.ToolCallTurns); next > toolCallTurns {
+			toolCallTurns = next
+		}
 		if d.ReasoningText != "" {
 			pendingThink += d.ReasoningText
 			continue
@@ -781,7 +797,7 @@ func streamSingleAnswer(
 			"raw_content":      query,
 			"content":          query,
 			"result":           fullResult,
-			"tool_call_turns":  countToolCallTurns(fullResult),
+			"tool_call_turns":  toolCallTurns,
 			"retrieval_result": retrievalResult,
 			"feed_back":        0,
 			"reason":           "",
@@ -802,7 +818,7 @@ func streamSingleAnswer(
 			RetrievalResult: retrievalResult,
 			Content:         query,
 			Result:          fullResult,
-			ToolCallTurns:   countToolCallTurns(fullResult),
+			ToolCallTurns:   toolCallTurns,
 			Ext:             historyExt,
 			TimeMixin:       orm.TimeMixin{CreateTime: now, UpdateTime: now},
 		}).Error; err != nil {
@@ -883,6 +899,7 @@ func streamDualAnswer(
 	var primaryText, secondaryText string
 	var primaryResult, secondaryResult string
 	var primaryPendingThink, secondaryPendingThink string
+	var primaryToolCallTurns, secondaryToolCallTurns int
 	primaryDone := primaryCh == nil
 	secondaryDone := secondaryCh == nil
 	var writeMu sync.Mutex
@@ -953,11 +970,17 @@ func streamDualAnswer(
 				primaryDone = true
 				continue
 			}
+			if next := nonNegativeToolCallTurns(d.ToolCallTurns); next > primaryToolCallTurns {
+				primaryToolCallTurns = next
+			}
 			appendPrimary(d.Text, d.ReasoningText, d.Sources)
 		case d, ok := <-secondaryCh:
 			if !ok {
 				secondaryDone = true
 				continue
+			}
+			if next := nonNegativeToolCallTurns(d.ToolCallTurns); next > secondaryToolCallTurns {
+				secondaryToolCallTurns = next
 			}
 			appendSecondary(d.Text, d.ReasoningText, d.Sources)
 		case <-reqCtx.Done():
@@ -969,6 +992,9 @@ func streamDualAnswer(
 						primaryDone = true
 						primaryCh = nil
 					} else {
+						if next := nonNegativeToolCallTurns(d.ToolCallTurns); next > primaryToolCallTurns {
+							primaryToolCallTurns = next
+						}
 						if d.ReasoningText != "" {
 							primaryPendingThink += d.ReasoningText
 							continue
@@ -995,6 +1021,9 @@ func streamDualAnswer(
 						secondaryDone = true
 						secondaryCh = nil
 					} else {
+						if next := nonNegativeToolCallTurns(d.ToolCallTurns); next > secondaryToolCallTurns {
+							secondaryToolCallTurns = next
+						}
 						if d.ReasoningText != "" {
 							secondaryPendingThink += d.ReasoningText
 							continue
@@ -1031,13 +1060,15 @@ dualPersist:
 	}
 	_ = db.Create(&orm.MultiAnswersChatHistory{
 		ID: historyID, Seq: seq, ConversationID: convID, RawContent: query, Content: query, Result: primaryResult,
-		Ext:       historyExt,
-		TimeMixin: orm.TimeMixin{CreateTime: now, UpdateTime: now},
+		ToolCallTurns: primaryToolCallTurns,
+		Ext:           historyExt,
+		TimeMixin:     orm.TimeMixin{CreateTime: now, UpdateTime: now},
 	}).Error
 	_ = db.Create(&orm.MultiAnswersChatHistory{
 		ID: secondaryHistoryID, Seq: seq, ConversationID: convID, RawContent: query, Content: query, Result: secondaryResult,
-		Ext:       historyExt,
-		TimeMixin: orm.TimeMixin{CreateTime: now, UpdateTime: now},
+		ToolCallTurns: secondaryToolCallTurns,
+		Ext:           historyExt,
+		TimeMixin:     orm.TimeMixin{CreateTime: now, UpdateTime: now},
 	}).Error
 	if rdb != nil {
 		_ = setChatStatus(context.Background(), rdb, convID, historyID, "completed", stripToolTags(primaryText))

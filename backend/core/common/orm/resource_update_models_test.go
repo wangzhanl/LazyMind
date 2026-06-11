@@ -20,6 +20,8 @@ func TestResourceUpdateSchemaModelsAutoMigrate(t *testing.T) {
 		&ResourceUpdateTask{},
 		&SkillReviewSchedulerState{},
 		&ConversationIdleEvent{},
+		&SkillReviewResult{},
+		&MemoryReviewResult{},
 	); err != nil {
 		t.Fatalf("auto migrate resource update models: %v", err)
 	}
@@ -28,6 +30,8 @@ func TestResourceUpdateSchemaModelsAutoMigrate(t *testing.T) {
 		"resource_update_tasks",
 		"skill_review_scheduler_state",
 		"conversation_idle_events",
+		"skill_review_results",
+		"memory_review",
 	} {
 		if !db.Migrator().HasTable(table) {
 			t.Fatalf("expected table %s to exist", table)
@@ -44,6 +48,8 @@ func TestResourceUpdateModelsRegisteredForDDL(t *testing.T) {
 		&ResourceUpdateTask{},
 		&SkillReviewSchedulerState{},
 		&ConversationIdleEvent{},
+		&SkillReviewResult{},
+		&MemoryReviewResult{},
 	} {
 		if !modelListContains(models, want) {
 			t.Fatalf("expected %T in AllModelsForDDL", want)
@@ -58,6 +64,8 @@ func TestResourceUpdateModelsRegisteredForDDL(t *testing.T) {
 		"resource_update_tasks",
 		"skill_review_scheduler_state",
 		"conversation_idle_events",
+		"skill_review_results",
+		"memory_review",
 	} {
 		if !names[want] {
 			t.Fatalf("expected %s in TableNamesForDDL", want)

@@ -559,10 +559,20 @@ func TestScannerCreatesAutoApplyTasksAndExpiresOlderSkillPatches(t *testing.T) {
 	if status := skillReviewResultStatus(t, db, "patch-old"); status != reviewStatusExpired {
 		t.Fatalf("expected old patch expired, got %s", status)
 	}
-	for _, id := range []string{"patch-new", "new-skill", "manual-patch"} {
+	for _, id := range []string{"patch-new", "manual-patch"} {
 		if status := skillReviewResultStatus(t, db, id); status != reviewStatusPending {
 			t.Fatalf("expected %s pending, got %s", id, status)
 		}
+	}
+	if status := skillReviewResultStatus(t, db, "new-skill"); status != reviewStatusAccepted {
+		t.Fatalf("expected new-skill accepted, got %s", status)
+	}
+	var createdSkill orm.SkillResource
+	if err := db.Take(&createdSkill, "owner_user_id = ? AND skill_name = ?", "user-1", "brand-new").Error; err != nil {
+		t.Fatalf("read auto-created skill: %v", err)
+	}
+	if createdSkill.AutoEvo {
+		t.Fatal("expected auto-created new skill auto_evo=false")
 	}
 	result, err = scanner.RunOnce(ctx)
 	if err != nil {

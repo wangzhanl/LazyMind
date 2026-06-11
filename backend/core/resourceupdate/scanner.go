@@ -195,6 +195,23 @@ func scanSkillReviewResultRows(ctx context.Context, tx *gorm.DB, rows []SkillRev
 				Msg(logEventResultScanSkipped)
 			continue
 		}
+		if row.Type == skillReviewTypeNew {
+			if err := applyNewSkillReviewResult(ctx, tx, row, now); err != nil {
+				if errors.Is(err, gorm.ErrDuplicatedKey) || errors.Is(err, errReviewInvalid) {
+					expireIDs = append(expireIDs, row.ID)
+					resourceUpdateWarn(logEventResultScanSkipped, err).
+						Str("resource_type", orm.ResourceUpdateResourceTypeSkill).
+						Str("review_result_id", row.ID).
+						Str("user_id", row.UserID).
+						Str("skill_name", row.SkillName).
+						Str("reason", "new_skill_auto_create_invalid").
+						Msg(logEventResultScanSkipped)
+					continue
+				}
+				return 0, 0, err
+			}
+			continue
+		}
 		if row.Type != skillReviewTypePatch {
 			continue
 		}
@@ -260,6 +277,13 @@ func scanSkillReviewResultRows(ctx context.Context, tx *gorm.DB, rows []SkillRev
 		return 0, 0, result.Error
 	}
 	return int(result.RowsAffected), created, nil
+}
+
+func applyNewSkillReviewResult(ctx context.Context, tx *gorm.DB, row SkillReviewResult, now time.Time) error {
+	if _, err := createSkillFromNewResult(ctx, tx, row, "", now); err != nil {
+		return err
+	}
+	return updateSkillReviewStatus(ctx, tx, row.ID, reviewStatusAccepted)
 }
 
 func scanMemoryReviewResults(ctx context.Context, tx *gorm.DB, target string, now time.Time) (int, error) {
