@@ -294,8 +294,5 @@ func actorFromRequest(r *http.Request) (access.Actor, error) {
 	if actor.UserID == "" {
 		return access.Actor{}, access.NewError(access.ErrCodeUnauthorized, "missing caller")
 	}
-	if actor.TenantID == "" {
-		return access.Actor{}, access.NewError(access.ErrCodeUnauthorized, "missing tenant")
-	}
 	return actor, nil
 }

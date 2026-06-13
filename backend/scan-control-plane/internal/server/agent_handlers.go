@@ -245,9 +245,6 @@ func (h *Handler) upsertAgent(r *http.Request, agent store.Agent) error {
 	if strings.TrimSpace(agent.AgentID) == "" {
 		return sourceengine.FieldError("agent_id", "required")
 	}
-	if strings.TrimSpace(agent.TenantID) == "" {
-		return sourceengine.FieldError("tenant_id", "required")
-	}
 	if agent.LastHeartbeatAt.IsZero() {
 		agent.LastHeartbeatAt = h.clock().UTC()
 	}

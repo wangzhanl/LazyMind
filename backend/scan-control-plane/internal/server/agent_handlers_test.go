@@ -147,6 +147,43 @@ func TestAgentRegisterAndHeartbeatUpsertAgent(t *testing.T) {
 	}
 }
 
+func TestAgentRegisterAndHeartbeatAllowEmptyTenant(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 6, 13, 10, 35, 0, 0, time.UTC)
+	agents := &agentStoreStub{}
+	handler := NewHandler(
+		WithAgentStore(agents),
+		WithAgentToken("agent-token"),
+		WithClock(func() time.Time { return now }),
+	)
+
+	register := agentRequest(t, "/api/v1/agents/register", map[string]any{
+		"agent_id": "agent-1",
+	})
+	registerResp := httptest.NewRecorder()
+	handler.ServeHTTP(registerResp, register)
+	if registerResp.Code != http.StatusOK {
+		t.Fatalf("register expected OK, got %d body=%s", registerResp.Code, registerResp.Body.String())
+	}
+	if got := agents.upserts[0]; got.TenantID != "" || got.Status != "ONLINE" {
+		t.Fatalf("register did not preserve empty-tenant online agent: %+v", got)
+	}
+
+	heartbeat := agentRequest(t, "/api/v1/agents/heartbeat", map[string]any{
+		"agent_id": "agent-1",
+		"status":   "ONLINE",
+	})
+	heartbeatResp := httptest.NewRecorder()
+	handler.ServeHTTP(heartbeatResp, heartbeat)
+	if heartbeatResp.Code != http.StatusOK {
+		t.Fatalf("heartbeat expected OK, got %d body=%s", heartbeatResp.Code, heartbeatResp.Body.String())
+	}
+	if got := agents.upserts[1]; got.TenantID != "" || got.Status != "ONLINE" {
+		t.Fatalf("heartbeat did not preserve empty-tenant online agent: %+v", got)
+	}
+}
+
 func TestAgentPullAndAckCommands(t *testing.T) {
 	t.Parallel()
 

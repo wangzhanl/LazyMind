@@ -93,6 +93,42 @@ func TestCreateSourcePersistsTargetsInBindingsOnly(t *testing.T) {
 	}
 }
 
+func TestCreateSourceAllowsEmptyTenant(t *testing.T) {
+	t.Parallel()
+
+	now := fixedSourceTestTime()
+	repo := newSourceEngineRepoStub()
+	core := &sourceCoreSpy{}
+	spy := &sourceSpyConnector{
+		target: connector.NormalizedTarget{
+			TargetType:        spyTargetType,
+			TargetRef:         "normalized-target",
+			TargetFingerprint: "fingerprint-from-validate",
+			DisplayName:       "Validated Target",
+			RootObjectKey:     "validated-root",
+		},
+	}
+	engine := newTestSourceEngine(t, repo, core, spy, now)
+
+	_, err := engine.CreateSource(context.Background(), CreateSourceRequest{
+		CallerID:  "user-1",
+		RequestID: "request-1",
+		Name:      "Docs",
+		Bindings: []BindingInput{{
+			ConnectorType: spyConnectorType,
+			TargetType:    spyTargetType,
+			TargetRef:     "raw-target",
+			SyncMode:      SyncModeManual,
+		}},
+	})
+	if err != nil {
+		t.Fatalf("create source: %v", err)
+	}
+	if got := repo.createRecords[0].Source.TenantID; got != "" {
+		t.Fatalf("expected empty tenant to be preserved, got %q", got)
+	}
+}
+
 func TestCreateSourceUsesSourceNameForSingleFileBindingRoot(t *testing.T) {
 	t.Parallel()
 
