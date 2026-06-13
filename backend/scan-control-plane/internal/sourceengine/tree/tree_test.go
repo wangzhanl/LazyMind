@@ -145,6 +145,33 @@ func TestTargetTreeFallbackSearchScopesToBindingAndTreeKey(t *testing.T) {
 	}
 }
 
+func TestTreeSearchRejectsUnsupportedListMode(t *testing.T) {
+	t.Parallel()
+
+	spy := &treeConnectorSpy{}
+	registry, err := connector.NewDefaultConnectorRegistry(spy)
+	if err != nil {
+		t.Fatalf("create registry: %v", err)
+	}
+	targetEngine := NewDefaultTargetTreeEngine(registry)
+	_, err = targetEngine.Search(context.Background(), TargetTreeSearchRequest{
+		ConnectorType: treeTestConnectorType,
+		Keyword:       "hand",
+		ListMode:      ListModeAllCurrentLevel,
+		MaxItems:      10,
+	})
+	assertTreeErrorCode(t, err, ErrCodeUnsupportedListMode)
+
+	sourceEngine := NewDBSourceTreeQueryEngine(newTreeReadRepo(), TreeQueryLimits{})
+	_, err = sourceEngine.Search(context.Background(), SourceTreeSearchRequest{
+		SourceID: "source-1",
+		Keyword:  "hand",
+		ListMode: ListModeAllCurrentLevel,
+		MaxItems: 10,
+	})
+	assertTreeErrorCode(t, err, ErrCodeUnsupportedListMode)
+}
+
 func TestTargetTreeNodeUsesBindingTargetSemantics(t *testing.T) {
 	t.Parallel()
 

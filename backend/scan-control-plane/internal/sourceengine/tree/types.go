@@ -78,8 +78,11 @@ type TargetTreeSearchRequest struct {
 	AgentID          string                  `json:"agent_id,omitempty"`
 	AuthConnectionID string                  `json:"auth_connection_id,omitempty"`
 	ProviderOptions  map[string]any          `json:"provider_options,omitempty"`
+	IncludeFiles     bool                    `json:"include_files,omitempty"`
+	ListMode         string                  `json:"list_mode,omitempty"`
 	PageSize         int                     `json:"page_size,omitempty"`
 	Cursor           string                  `json:"cursor,omitempty"`
+	MaxItems         int                     `json:"max_items,omitempty"`
 }
 
 type SourceTreeChildrenRequest struct {
@@ -109,8 +112,10 @@ type SourceTreeSearchRequest struct {
 	IncludeDocuments  bool     `json:"include_documents"`
 	IncludeContainers bool     `json:"include_containers"`
 	StateFilter       []string `json:"state_filter,omitempty"`
+	ListMode          string   `json:"list_mode,omitempty"`
 	PageSize          int      `json:"page_size,omitempty"`
 	Cursor            string   `json:"cursor,omitempty"`
+	MaxItems          int      `json:"max_items,omitempty"`
 }
 
 type SourceDocumentListRequest struct {

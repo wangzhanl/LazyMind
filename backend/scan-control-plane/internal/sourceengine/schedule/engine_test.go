@@ -131,6 +131,33 @@ func TestCheckpointScheduleEngineEnqueuesWatchEventRun(t *testing.T) {
 	}
 }
 
+func TestCheckpointScheduleEngineEnqueuesManualBindingFileEventRun(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	now := scheduleTestTime()
+	occurredAt := now.Add(-2 * time.Minute)
+	repo := newScheduleStore(store.Binding{SyncMode: SyncModeManual}, nil, now)
+	engine := NewCheckpointScheduleEngine(repo, repo, WithClock(func() time.Time { return now }), WithIDGenerator(scheduleIDs()))
+
+	intent, err := engine.EnqueueWatchEventSync(ctx, WatchEventSyncRequest{
+		Binding:    repo.binding,
+		ObjectKey:  "local_fs:agent-1:path:/workspace/docs/a.md",
+		Path:       "/workspace/docs/a.md",
+		EventType:  "modified",
+		OccurredAt: occurredAt,
+	})
+	if err != nil {
+		t.Fatalf("enqueue manual file event detection: %v", err)
+	}
+	if !intent.Created || intent.Run.TriggerType != TriggerTypeWatch || intent.Run.ScopeType != string(connector.ScopeTypeWatchEvent) {
+		t.Fatalf("manual file event should create a watch_event detection run: %+v", intent)
+	}
+	if intent.Run.ScheduledFireAt == nil || !intent.Run.ScheduledFireAt.Equal(occurredAt) {
+		t.Fatalf("manual file event run lost occurred_at: %+v", intent.Run)
+	}
+}
+
 func TestCheckpointScheduleEngineDoesNotDedupeDistinctWatchEventRuns(t *testing.T) {
 	t.Parallel()
 
@@ -318,6 +345,88 @@ func TestCheckpointScheduleEngineFinishSuccessGeneratesPendingParseTasks(t *test
 	call := planner.calls[0]
 	if call.sourceID != "source-1" || call.bindingID != "binding-1" || call.runID != claimed.RunID {
 		t.Fatalf("pending task generation call lost sync context: %+v", call)
+	}
+}
+
+func TestCheckpointScheduleEngineFinishManualFileEventSkipsPendingParseTasks(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	now := scheduleTestTime()
+	repo := newScheduleStore(store.Binding{SyncMode: SyncModeManual}, nil, now)
+	planner := &pendingTaskPlannerStub{}
+	engine := NewCheckpointScheduleEngine(
+		repo,
+		repo,
+		WithClock(func() time.Time { return now }),
+		WithIDGenerator(scheduleIDs()),
+		WithTaskPlanner(planner),
+	)
+	intent, err := engine.EnqueueWatchEventSync(ctx, WatchEventSyncRequest{
+		Binding:    repo.binding,
+		ObjectKey:  "local_fs:agent-1:path:/workspace/docs/a.md",
+		Path:       "/workspace/docs/a.md",
+		EventType:  "modified",
+		OccurredAt: now,
+	})
+	if err != nil {
+		t.Fatalf("enqueue manual file event detection: %v", err)
+	}
+	claimed := repo.claimRun(t, intent.Run.RunID, "worker-a")
+
+	_, ok, err := engine.FinishRun(ctx, FinishRunRequest{
+		RunID:         claimed.RunID,
+		WorkerID:      "worker-a",
+		SeenCount:     1,
+		ModifiedCount: 1,
+		Coverage:      store.JSON{"complete": true},
+	})
+	if err != nil || !ok {
+		t.Fatalf("finish manual file event run ok=%v err=%v", ok, err)
+	}
+	if len(planner.calls) != 0 {
+		t.Fatalf("manual file event detection should not generate parse tasks: %+v", planner.calls)
+	}
+}
+
+func TestCheckpointScheduleEngineFinishWatchFileEventGeneratesPendingParseTasks(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	now := scheduleTestTime()
+	repo := newScheduleStore(store.Binding{SyncMode: SyncModeWatch}, nil, now)
+	planner := &pendingTaskPlannerStub{}
+	engine := NewCheckpointScheduleEngine(
+		repo,
+		repo,
+		WithClock(func() time.Time { return now }),
+		WithIDGenerator(scheduleIDs()),
+		WithTaskPlanner(planner),
+	)
+	intent, err := engine.EnqueueWatchEventSync(ctx, WatchEventSyncRequest{
+		Binding:    repo.binding,
+		ObjectKey:  "local_fs:agent-1:path:/workspace/docs/a.md",
+		Path:       "/workspace/docs/a.md",
+		EventType:  "modified",
+		OccurredAt: now,
+	})
+	if err != nil {
+		t.Fatalf("enqueue watch file event sync: %v", err)
+	}
+	claimed := repo.claimRun(t, intent.Run.RunID, "worker-a")
+
+	_, ok, err := engine.FinishRun(ctx, FinishRunRequest{
+		RunID:         claimed.RunID,
+		WorkerID:      "worker-a",
+		SeenCount:     1,
+		ModifiedCount: 1,
+		Coverage:      store.JSON{"complete": true},
+	})
+	if err != nil || !ok {
+		t.Fatalf("finish watch file event run ok=%v err=%v", ok, err)
+	}
+	if len(planner.calls) != 1 || planner.calls[0].runID != claimed.RunID {
+		t.Fatalf("watch file event sync should generate parse tasks: %+v", planner.calls)
 	}
 }
 

@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"testing"
 	"time"
 
@@ -184,6 +185,61 @@ func TestAgentRegisterAndHeartbeatAllowEmptyTenant(t *testing.T) {
 	}
 }
 
+func TestAgentRegisterQueuesLocalWatcherStartCommands(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 6, 13, 10, 37, 0, 0, time.UTC)
+	agents := &agentStoreStub{
+		localBindings: []store.Binding{{
+			SourceID:          "source-1",
+			BindingID:         "binding-1",
+			BindingGeneration: 2,
+			AgentID:           "agent-1",
+			ConnectorType:     "local_fs",
+			TargetType:        "local_path",
+			TargetRef:         "/workspace/docs",
+			SyncMode:          "manual",
+			Status:            "ACTIVE",
+		}},
+	}
+	handler := NewHandler(
+		WithAgentStore(agents),
+		WithAgentToken("agent-token"),
+		WithClock(func() time.Time { return now }),
+	)
+
+	register := agentRequest(t, "/api/v1/agents/register", map[string]any{
+		"agent_id":  "agent-1",
+		"tenant_id": "tenant-1",
+		"hostname":  "host-a",
+		"version":   "v1",
+	})
+	resp := httptest.NewRecorder()
+	handler.ServeHTTP(resp, register)
+	if resp.Code != http.StatusOK {
+		t.Fatalf("register expected OK, got %d body=%s", resp.Code, resp.Body.String())
+	}
+	if agents.lastLocalWatcherAgentID != "agent-1" {
+		t.Fatalf("register did not reconcile local watcher bindings: %+v", agents)
+	}
+	if len(agents.createdCommands) != 1 {
+		t.Fatalf("expected one start_source command, got %+v", agents.createdCommands)
+	}
+	command := agents.createdCommands[0]
+	if _, err := strconv.ParseInt(command.CommandID, 10, 64); err != nil {
+		t.Fatalf("agent command id must be numeric for ack, got %q", command.CommandID)
+	}
+	if command.AgentID != "agent-1" || command.CommandType != "start_source" || command.Status != "PENDING" {
+		t.Fatalf("unexpected command identity: %+v", command)
+	}
+	if command.Payload["type"] != "start_source" || command.Payload[agentCommandRootKey()] != "/workspace/docs" || command.Payload["skip_initial_scan"] != true {
+		t.Fatalf("start_source payload does not match file-watcher contract: %+v", command.Payload)
+	}
+	if command.Payload["tenant_id"] != "tenant-1" || command.Payload["source_id"] != "source-1" {
+		t.Fatalf("start_source payload lost source identity: %+v", command.Payload)
+	}
+}
+
 func TestAgentPullAndAckCommands(t *testing.T) {
 	t.Parallel()
 
@@ -253,15 +309,18 @@ func agentRequest(t *testing.T, path string, body any) *http.Request {
 }
 
 type agentStoreStub struct {
-	upserts            []store.Agent
-	bindings           []store.Binding
-	commands           []store.AgentCommand
-	lastSourceID       string
-	lastBindingAgentID string
-	lastPullAgentID    string
-	lastPullLimit      int
-	lastPullNow        time.Time
-	lastAck            store.AgentCommandAck
+	upserts                 []store.Agent
+	bindings                []store.Binding
+	localBindings           []store.Binding
+	commands                []store.AgentCommand
+	createdCommands         []store.AgentCommand
+	lastSourceID            string
+	lastBindingAgentID      string
+	lastLocalWatcherAgentID string
+	lastPullAgentID         string
+	lastPullLimit           int
+	lastPullNow             time.Time
+	lastAck                 store.AgentCommandAck
 }
 
 func (s *agentStoreStub) UpsertAgent(_ context.Context, agent store.Agent) error {
@@ -273,6 +332,16 @@ func (s *agentStoreStub) ListWatchBindingsForAgentEvent(_ context.Context, sourc
 	s.lastSourceID = sourceID
 	s.lastBindingAgentID = agentID
 	return s.bindings, nil
+}
+
+func (s *agentStoreStub) ListLocalWatcherBindingsForAgent(_ context.Context, agentID string) ([]store.Binding, error) {
+	s.lastLocalWatcherAgentID = agentID
+	return s.localBindings, nil
+}
+
+func (s *agentStoreStub) CreateAgentCommand(_ context.Context, command store.AgentCommand) error {
+	s.createdCommands = append(s.createdCommands, command)
+	return nil
 }
 
 func (s *agentStoreStub) ListPendingAgentCommands(_ context.Context, agentID string, now time.Time, limit int) ([]store.AgentCommand, error) {

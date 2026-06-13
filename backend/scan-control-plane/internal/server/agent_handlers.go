@@ -3,6 +3,7 @@ package server
 import (
 	"encoding/json"
 	"fmt"
+	"hash/fnv"
 	"net/http"
 	"strconv"
 	"strings"
@@ -113,7 +114,12 @@ func (h *Handler) agentRegister(w http.ResponseWriter, r *http.Request) {
 		writeError(w, invalidJSON(err))
 		return
 	}
-	if err := h.upsertAgent(r, agentFromRegister(req, h.clock().UTC())); err != nil {
+	agent := agentFromRegister(req, h.clock().UTC())
+	if err := h.upsertAgent(r, agent); err != nil {
+		writeError(w, err)
+		return
+	}
+	if err := h.queueLocalWatcherStartsForAgent(r, agent.AgentID, agent.TenantID); err != nil {
 		writeError(w, err)
 		return
 	}
@@ -133,11 +139,59 @@ func (h *Handler) agentHeartbeat(w http.ResponseWriter, r *http.Request) {
 		writeError(w, invalidJSON(err))
 		return
 	}
-	if err := h.upsertAgent(r, agentFromHeartbeat(req, h.clock().UTC())); err != nil {
+	agent := agentFromHeartbeat(req, h.clock().UTC())
+	if err := h.upsertAgent(r, agent); err != nil {
 		writeError(w, err)
 		return
 	}
+	if req.SourceCount == 0 && req.ActiveWatchCount == 0 {
+		if err := h.queueLocalWatcherStartsForAgent(r, agent.AgentID, agent.TenantID); err != nil {
+			writeError(w, err)
+			return
+		}
+	}
 	writeJSON(w, http.StatusOK, agentAcceptedResponse{Accepted: true})
+}
+
+func (h *Handler) queueLocalWatcherStartsForAgent(r *http.Request, agentID, tenantID string) error {
+	bindings, err := h.agents.ListLocalWatcherBindingsForAgent(r.Context(), agentID)
+	if err != nil {
+		return err
+	}
+	now := h.clock().UTC()
+	for index, binding := range bindings {
+		command := store.AgentCommand{
+			CommandID:   agentCommandID(agentID, binding, now, index),
+			AgentID:     agentID,
+			CommandType: "start_source",
+			Status:      "PENDING",
+			LastError:   store.JSON{},
+			Result:      store.JSON{},
+			CreatedAt:   now.Add(time.Duration(index) * time.Nanosecond),
+			Payload: store.JSON{
+				"type":                "start_source",
+				"tenant_id":           tenantID,
+				"source_id":           binding.SourceID,
+				agentCommandRootKey(): binding.TargetRef,
+				"skip_initial_scan":   true,
+			},
+		}
+		if err := h.agents.CreateAgentCommand(r.Context(), command); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func agentCommandID(agentID string, binding store.Binding, now time.Time, index int) string {
+	seed := fmt.Sprintf("%s\x00%s\x00%s\x00%d\x00%d\x00%d", agentID, binding.SourceID, binding.BindingID, binding.BindingGeneration, now.UnixNano(), index)
+	hash := fnv.New64a()
+	_, _ = hash.Write([]byte(seed))
+	value := hash.Sum64() & ((uint64(1) << 63) - 1)
+	if value == 0 {
+		value = 1
+	}
+	return strconv.FormatUint(value, 10)
 }
 
 func (h *Handler) agentReportEvents(w http.ResponseWriter, r *http.Request) {
@@ -263,7 +317,7 @@ func (h *Handler) enqueueAgentEvent(r *http.Request, agentID string, event agent
 		return nil, []JobError{{Code: string(sourceengine.ErrCodeInternal), Message: err.Error(), Details: map[string]any{"source_id": event.SourceID}}}
 	}
 	if len(bindings) == 0 {
-		return nil, []JobError{{Code: string(sourceengine.ErrCodeBindingNotFound), Message: "no active watch binding for agent event", Details: map[string]any{"source_id": event.SourceID, "agent_id": agentID}}}
+		return nil, []JobError{{Code: string(sourceengine.ErrCodeBindingNotFound), Message: "no active local binding for agent event", Details: map[string]any{"source_id": event.SourceID, "agent_id": agentID}}}
 	}
 	var jobIDs []string
 	var errors []JobError

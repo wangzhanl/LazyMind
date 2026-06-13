@@ -39,6 +39,8 @@ type Option func(*Handler)
 type AgentStore interface {
 	UpsertAgent(ctx context.Context, agent store.Agent) error
 	ListWatchBindingsForAgentEvent(ctx context.Context, sourceID, agentID string) ([]store.Binding, error)
+	ListLocalWatcherBindingsForAgent(ctx context.Context, agentID string) ([]store.Binding, error)
+	CreateAgentCommand(ctx context.Context, command store.AgentCommand) error
 	ListPendingAgentCommands(ctx context.Context, agentID string, now time.Time, limit int) ([]store.AgentCommand, error)
 	AckAgentCommand(ctx context.Context, ack store.AgentCommandAck) error
 }
@@ -287,6 +289,7 @@ func actorFromRequest(r *http.Request) (access.Actor, error) {
 	actor := access.Actor{
 		UserID:   strings.TrimSpace(r.Header.Get("X-User-ID")),
 		TenantID: strings.TrimSpace(r.Header.Get("X-Tenant-ID")),
+		Role:     strings.TrimSpace(r.Header.Get("X-User-Role")),
 	}
 	if actor.TenantID == "" {
 		actor.TenantID = strings.TrimSpace(r.URL.Query().Get("tenant_id"))

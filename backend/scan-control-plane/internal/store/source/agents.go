@@ -54,7 +54,9 @@ func (r *SQLRepository) ListWatchBindingsForAgentEvent(ctx context.Context, sour
 		return nil, NewStoreError(ErrCodeInternal, "orm repository is not initialized")
 	}
 	var rows []ormBinding
-	err := db.Where("source_id = ? AND agent_id = ? AND sync_mode = ? AND status = ?", sourceID, agentID, "watch", "ACTIVE").
+	err := db.Where("source_id = ? AND agent_id = ? AND connector_type = ? AND target_type = ? AND sync_mode IN ? AND status = ?",
+		sourceID, agentID, "local_fs", "local_path", []string{"manual", "scheduled", "watch"}, "ACTIVE",
+	).
 		Order("binding_id").
 		Find(&rows).Error
 	if err != nil {
@@ -65,6 +67,47 @@ func (r *SQLRepository) ListWatchBindingsForAgentEvent(ctx context.Context, sour
 		bindings = append(bindings, bindingFromORM(row))
 	}
 	return bindings, nil
+}
+
+func (r *SQLRepository) ListLocalWatcherBindingsForAgent(ctx context.Context, agentID string) ([]Binding, error) {
+	db := r.ormDB(ctx)
+	if db == nil {
+		return nil, NewStoreError(ErrCodeInternal, "orm repository is not initialized")
+	}
+	var rows []ormBinding
+	err := db.Where("agent_id = ? AND connector_type = ? AND target_type = ? AND sync_mode IN ? AND status = ? AND target_ref <> ?",
+		agentID, "local_fs", "local_path", []string{"manual", "scheduled", "watch"}, "ACTIVE", "",
+	).
+		Order("source_id, binding_id").
+		Find(&rows).Error
+	if err != nil {
+		return nil, mapSQLConstraint(err)
+	}
+	bindings := make([]Binding, 0, len(rows))
+	for _, row := range rows {
+		bindings = append(bindings, bindingFromORM(row))
+	}
+	return bindings, nil
+}
+
+func (r *SQLRepository) CreateAgentCommand(ctx context.Context, command AgentCommand) error {
+	db := r.ormDB(ctx)
+	if db == nil {
+		return NewStoreError(ErrCodeInternal, "orm repository is not initialized")
+	}
+	if command.Status == "" {
+		command.Status = "PENDING"
+	}
+	if command.Payload == nil {
+		command.Payload = JSON{}
+	}
+	if command.LastError == nil {
+		command.LastError = JSON{}
+	}
+	if command.Result == nil {
+		command.Result = JSON{}
+	}
+	return mapSQLConstraint(db.Create(agentCommandToORM(command)).Error)
 }
 
 func (r *SQLRepository) ListPendingAgentCommands(ctx context.Context, agentID string, now time.Time, limit int) ([]AgentCommand, error) {
@@ -177,5 +220,22 @@ func agentCommandFromORM(row ormAgentCommand) AgentCommand {
 		Result:       CloneJSON(row.Result),
 		CreatedAt:    row.CreatedAt,
 		DispatchedAt: row.DispatchedAt,
+	}
+}
+
+func agentCommandToORM(command AgentCommand) ormAgentCommand {
+	return ormAgentCommand{
+		CommandID:    command.CommandID,
+		AgentID:      command.AgentID,
+		CommandType:  command.CommandType,
+		Payload:      CloneJSON(command.Payload),
+		Status:       command.Status,
+		AttemptCount: command.AttemptCount,
+		NextRetryAt:  command.NextRetryAt,
+		AckedAt:      command.AckedAt,
+		LastError:    CloneJSON(command.LastError),
+		Result:       CloneJSON(command.Result),
+		CreatedAt:    command.CreatedAt,
+		DispatchedAt: command.DispatchedAt,
 	}
 }

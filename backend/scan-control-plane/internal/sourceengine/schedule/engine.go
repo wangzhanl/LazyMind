@@ -184,8 +184,8 @@ type WatchEventSyncRequest struct {
 }
 
 func (e *CheckpointScheduleEngine) EnqueueWatchEventSync(ctx context.Context, req WatchEventSyncRequest) (SyncRunIntent, error) {
-	if req.Binding.SyncMode != SyncModeWatch {
-		return SyncRunIntent{}, fmt.Errorf("binding %s is not watch mode", req.Binding.BindingID)
+	if req.Binding.SyncMode != SyncModeManual && req.Binding.SyncMode != SyncModeScheduled && req.Binding.SyncMode != SyncModeWatch {
+		return SyncRunIntent{}, fmt.Errorf("binding %s sync mode does not support file events", req.Binding.BindingID)
 	}
 	occurredAt := req.OccurredAt.UTC()
 	now := e.clock().UTC()
@@ -283,11 +283,18 @@ func (e *CheckpointScheduleEngine) FinishRun(ctx context.Context, req FinishRunR
 		return store.SyncRun{}, false, err
 	}
 	finished, ok, err := e.store.FinishSyncRun(ctx, req.RunID, req.WorkerID, finish)
-	if err != nil || !ok || finished.Status != store.SyncRunStatusSucceeded || e.tasks == nil {
+	if err != nil || !ok || finished.Status != store.SyncRunStatusSucceeded || e.tasks == nil || !shouldGeneratePendingTasks(finished, binding) {
 		return finished, ok, err
 	}
 	err = e.tasks.GeneratePendingTasks(ctx, finished.SourceID, finished.BindingID, finished.RunID)
 	return finished, ok, err
+}
+
+func shouldGeneratePendingTasks(run store.SyncRun, binding store.Binding) bool {
+	if run.TriggerType == TriggerTypeWatch && run.ScopeType == string(connector.ScopeTypeWatchEvent) {
+		return binding.SyncMode == SyncModeWatch
+	}
+	return true
 }
 
 func (e *CheckpointScheduleEngine) enqueueBindingRun(ctx context.Context, binding store.Binding, trigger string, scopeType connector.ScopeType, scopeRef connector.ScopeRef, requestID string, runAt time.Time, scheduledAt *time.Time) (SyncRunIntent, error) {

@@ -55,7 +55,9 @@ func (e *DefaultEngine) CreateSource(ctx context.Context, req CreateSourceReques
 	}
 
 	bindings := collectBindings(prepared)
+	watcherErrors := e.queueLocalWatcherStarts(ctx, source, bindings)
 	jobIDs, jobErrors := e.triggerInitialSyncs(ctx, bindings)
+	jobErrors = append(watcherErrors, jobErrors...)
 	operation.Status = OperationStatusSucceeded
 	if len(jobErrors) > 0 {
 		operation.Status = OperationStatusSucceededWithWarning
