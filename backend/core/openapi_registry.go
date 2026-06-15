@@ -455,6 +455,10 @@ type agentThreadListQueryParams struct {
 	PageToken string `query:"page_token"`
 }
 
+type agentThreadPathParams struct {
+	ThreadID string `path:"thread_id"`
+}
+
 type agentThreadOpenAPIResponse struct {
 	ThreadID      string         `json:"thread_id"`
 	CurrentTaskID string         `json:"current_task_id,omitempty"`
@@ -468,6 +472,23 @@ type agentThreadListOpenAPIResponse struct {
 	Threads       []agentThreadOpenAPIResponse `json:"threads"`
 	TotalSize     int64                        `json:"total_size"`
 	NextPageToken string                       `json:"next_page_token"`
+}
+
+type agentEvalReportTraceCoverageOpenAPIResponse struct {
+	CoveredCount int     `json:"covered_count"`
+	TotalCount   int     `json:"total_count"`
+	Rate         float64 `json:"rate"`
+}
+
+type agentEvalReportResultOpenAPIResponse struct {
+	ArtifactID    string                                       `json:"artifact_id"`
+	ArtifactRef   string                                       `json:"artifact_ref"`
+	Schema        string                                       `json:"schema"`
+	CaseCount     int                                          `json:"case_count"`
+	Data          map[string]any                               `json:"data"`
+	ReportID      string                                       `json:"report_id,omitempty"`
+	BadCaseCount  int                                          `json:"bad_case_count,omitempty"`
+	TraceCoverage *agentEvalReportTraceCoverageOpenAPIResponse `json:"trace_coverage,omitempty"`
 }
 
 type skillPathParams struct {
@@ -2423,6 +2444,15 @@ func registeredCoreOperations() []openAPIOperation {
 			Tags:        []string{"agent"},
 			QueryParams: agentThreadListQueryParams{},
 			Responses:   map[int]openAPIResponse{200: resp("Agent thread list", agentThreadListOpenAPIResponse{})},
+		},
+		{
+			Method:      "GET",
+			Path:        "/agent/threads/{thread_id}/results/eval-reports",
+			Summary:     "GET /agent/threads/{thread_id}/results/eval-reports",
+			Description: "Returns eval report artifact rows from Evo, with core-added report_id, bad_case_count, and trace_coverage when available. Existing report fields remain under data.",
+			Tags:        []string{"agent"},
+			PathParams:  agentThreadPathParams{},
+			Responses:   map[int]openAPIResponse{200: resp("Eval report result rows", []agentEvalReportResultOpenAPIResponse{})},
 		},
 		{
 			Method:      "POST",

@@ -64,6 +64,102 @@ func TestOpenAPISpecCoversAllRegisteredRoutes(t *testing.T) {
 	}
 }
 
+func TestOpenAPISpecIncludesEvalReportResultSchema(t *testing.T) {
+	r := mux.NewRouter()
+	registerCoreRoutes(r)
+
+	specJSON, err := buildOpenAPISpecFromRouter(r)
+	if err != nil {
+		t.Fatalf("build openapi spec: %v", err)
+	}
+
+	var spec map[string]any
+	if err := json.Unmarshal(specJSON, &spec); err != nil {
+		t.Fatalf("decode openapi spec: %v", err)
+	}
+	op := openAPIOperationForTest(t, spec, "get", "/api/core/agent/threads/{thread_id}/results/eval-reports")
+	responseRef := openAPIResponseRefForTest(t, op)
+	if responseRef != "#/components/schemas/agentEvalReportResultOpenAPIResponse" {
+		t.Fatalf("unexpected eval report item schema ref: %q", responseRef)
+	}
+	schemas := spec["components"].(map[string]any)["schemas"].(map[string]any)
+	props := schemaPropertiesForTest(t, schemas, "agentEvalReportResultOpenAPIResponse")
+	for _, name := range []string{"artifact_id", "artifact_ref", "schema", "case_count", "data", "report_id", "bad_case_count", "trace_coverage"} {
+		if _, ok := props[name]; !ok {
+			t.Fatalf("eval report schema missing property %q", name)
+		}
+	}
+	coverageProps := schemaPropertiesForTest(t, schemas, "agentEvalReportTraceCoverageOpenAPIResponse")
+	for _, name := range []string{"covered_count", "total_count", "rate"} {
+		if _, ok := coverageProps[name]; !ok {
+			t.Fatalf("trace coverage schema missing property %q", name)
+		}
+	}
+}
+
+func openAPIOperationForTest(t *testing.T, spec map[string]any, method, path string) map[string]any {
+	t.Helper()
+	paths, ok := spec["paths"].(map[string]any)
+	if !ok {
+		t.Fatalf("paths missing in openapi spec")
+	}
+	pathItem, ok := paths[path].(map[string]any)
+	if !ok {
+		t.Fatalf("path missing from openapi spec: %s", path)
+	}
+	op, ok := pathItem[method].(map[string]any)
+	if !ok {
+		t.Fatalf("operation missing from openapi spec: %s %s", method, path)
+	}
+	return op
+}
+
+func openAPIResponseRefForTest(t *testing.T, op map[string]any) string {
+	t.Helper()
+	responses, ok := op["responses"].(map[string]any)
+	if !ok {
+		t.Fatalf("responses missing")
+	}
+	response200, ok := responses["200"].(map[string]any)
+	if !ok {
+		t.Fatalf("200 response missing")
+	}
+	content, ok := response200["content"].(map[string]any)
+	if !ok {
+		t.Fatalf("response content missing")
+	}
+	jsonContent, ok := content["application/json"].(map[string]any)
+	if !ok {
+		t.Fatalf("application/json response missing")
+	}
+	schema, ok := jsonContent["schema"].(map[string]any)
+	if !ok {
+		t.Fatalf("response schema missing")
+	}
+	items, ok := schema["items"].(map[string]any)
+	if !ok {
+		t.Fatalf("response schema items missing")
+	}
+	ref, ok := items["$ref"].(string)
+	if !ok {
+		t.Fatalf("response schema item ref missing")
+	}
+	return ref
+}
+
+func schemaPropertiesForTest(t *testing.T, schemas map[string]any, schemaName string) map[string]any {
+	t.Helper()
+	schema, ok := schemas[schemaName].(map[string]any)
+	if !ok {
+		t.Fatalf("schema %s missing", schemaName)
+	}
+	properties, ok := schema["properties"].(map[string]any)
+	if !ok {
+		t.Fatalf("schema %s properties missing", schemaName)
+	}
+	return properties
+}
+
 func TestOpenAPISpecCoversEvolutionSkillMemoryPreferenceOperations(t *testing.T) {
 	r := mux.NewRouter()
 	registerAllRoutes(r)

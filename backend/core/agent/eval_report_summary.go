@@ -10,6 +10,7 @@ import (
 
 const (
 	evalReportIDField            = "report_id"
+	evalReportBadCaseCountField  = "bad_case_count"
 	evalReportTraceCoverageField = "trace_coverage"
 	evalReportDefaultBaseDir     = "/var/lib/lazymind/evo"
 	evalReportRunID              = "run_1"
@@ -60,6 +61,9 @@ func attachEvalReportSummaryResult(payload any, threadID string) (bool, error) {
 		}
 		if _, exists := row[evalReportTraceCoverageField]; !exists {
 			row[evalReportTraceCoverageField] = buildEvalReportTraceCoverage(row["data"])
+		}
+		if _, exists := row[evalReportBadCaseCountField]; !exists {
+			row[evalReportBadCaseCountField] = evalReportBadCaseCount(row["data"])
 		}
 	}
 	return found, firstErr
@@ -136,11 +140,7 @@ func selectEvalReportManifestVersion(manifest evalReportManifest) evalReportMani
 }
 
 func buildEvalReportTraceCoverage(data any) evalReportTraceCoverage {
-	record, ok := data.(map[string]any)
-	if !ok {
-		return evalReportTraceCoverage{}
-	}
-	badCases, ok := record["bad_cases"].([]any)
+	badCases, ok := evalReportBadCases(data)
 	if !ok {
 		return evalReportTraceCoverage{}
 	}
@@ -157,4 +157,21 @@ func buildEvalReportTraceCoverage(data any) evalReportTraceCoverage {
 		coverage.Rate = float64(covered) / float64(total)
 	}
 	return coverage
+}
+
+func evalReportBadCaseCount(data any) int {
+	badCases, ok := evalReportBadCases(data)
+	if !ok {
+		return 0
+	}
+	return len(badCases)
+}
+
+func evalReportBadCases(data any) ([]any, bool) {
+	record, ok := data.(map[string]any)
+	if !ok {
+		return nil, false
+	}
+	badCases, ok := record["bad_cases"].([]any)
+	return badCases, ok
 }

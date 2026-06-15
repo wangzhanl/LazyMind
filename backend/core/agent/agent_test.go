@@ -647,7 +647,7 @@ func TestAttachCaseDetailsReportResultAddsSummaryAndCSVFile(t *testing.T) {
 	assertOnlyTopLevelFileURL(t, data)
 }
 
-func TestAttachEvalReportSummaryResultAddsOnlyMissingFields(t *testing.T) {
+func TestAttachEvalReportSummaryResultAddsSummaryFields(t *testing.T) {
 	baseDir := t.TempDir()
 	t.Setenv("LAZYMIND_EVO_BASE_DIR", baseDir)
 	manifestDir := filepath.Join(baseDir, "dev-runs", "thr-1", "store", "runs", "run_1", "artifacts", "manifests")
@@ -703,14 +703,14 @@ func TestAttachEvalReportSummaryResultAddsOnlyMissingFields(t *testing.T) {
 	if coverage.CoveredCount != 1 || coverage.TotalCount != 3 || math.Abs(coverage.Rate-1.0/3.0) > 0.000001 {
 		t.Fatalf("unexpected trace coverage: %#v", coverage)
 	}
+	if row[evalReportBadCaseCountField] != 3 {
+		t.Fatalf("expected bad_case_count from bad_cases length, got %#v", row[evalReportBadCaseCountField])
+	}
 	if _, ok := row["eval_dataset_ref"]; ok {
 		t.Fatalf("did not expect eval_dataset_ref to be duplicated at result row")
 	}
 	if _, ok := row["accuracy"]; ok {
 		t.Fatalf("did not expect accuracy to be duplicated at result row")
-	}
-	if _, ok := row["bad_case_count"]; ok {
-		t.Fatalf("did not expect bad_case_count to be duplicated at result row")
 	}
 	data := row["data"].(map[string]any)
 	if data["eval_dataset_ref"] != "eval_dataset@v1" {
