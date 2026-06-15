@@ -97,6 +97,7 @@ func TestOpenAPISpecCoversEvolutionSkillMemoryPreferenceOperations(t *testing.T)
 		{"post", "/api/core/evolution/suggestions:batchApprove", true, false, true},
 		{"post", "/api/core/evolution/suggestions:batchReject", true, false, true},
 		{"get", "/api/core/skills", false, true, true},
+		{"get", "/api/core/skills/tags", false, false, true},
 		{"post", "/api/core/skills", true, false, true},
 		{"get", "/api/core/skills/{skill_id}", false, true, true},
 		{"patch", "/api/core/skills/{skill_id}", true, true, true},

@@ -1042,6 +1042,10 @@ type skillListOpenAPIResponse struct {
 	Total    int32                          `json:"total"`
 }
 
+type skillTagsOpenAPIResponse struct {
+	Tags []string `json:"tags"`
+}
+
 type skillDetailChildOpenAPIResponse struct {
 	SkillID                string                              `json:"skill_id"`
 	Name                   string                              `json:"name"`
@@ -1913,6 +1917,13 @@ func registeredCoreOperations() []openAPIOperation {
 			Tags:        []string{"skills"},
 			QueryParams: skillListQueryParams{},
 			Responses:   map[int]openAPIResponse{200: resp("Skill list", skillListOpenAPIResponse{})},
+		},
+		{
+			Method:    "GET",
+			Path:      "/skills/tags",
+			Summary:   "List skill tags",
+			Tags:      []string{"skills"},
+			Responses: map[int]openAPIResponse{200: resp("Skill tag list", skillTagsOpenAPIResponse{})},
 		},
 		{
 			Method:      "POST",
