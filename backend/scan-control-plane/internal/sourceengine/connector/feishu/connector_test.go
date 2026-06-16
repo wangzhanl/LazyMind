@@ -6,6 +6,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/lazymind/scan_control_plane/internal/sourceengine/connector"
 	"github.com/lazymind/scan_control_plane/internal/sourceengine/worker"
@@ -665,7 +666,9 @@ func TestRecursiveSearchByNameAndDeltaUnsupported(t *testing.T) {
 	api := newFeishuAPIStub()
 	nested := Object{Kind: ObjectKindDriveFile, Token: "file-test", ParentToken: "folder-guides", Name: "test-plan.pdf", IsDocument: true, Revision: "rev-test", FileExtension: ".pdf", StableID: "file-test"}
 	api.driveChildren["folder-guides"] = []Object{nested}
+	api.driveListErrors = []error{connector.NewError(connector.ErrorCodeRateLimited, "request trigger frequency limit")}
 	conn := NewFeishuConnector(auth, api)
+	conn.searchRetryDelay = func(int) time.Duration { return 0 }
 	if !conn.Spec().SupportsSearch {
 		t.Fatalf("feishu spec should advertise search support per connector contract")
 	}
@@ -678,7 +681,7 @@ func TestRecursiveSearchByNameAndDeltaUnsupported(t *testing.T) {
 	if err != nil {
 		t.Fatalf("search drive files: %v", err)
 	}
-	if auth.calls != 1 || len(api.drivePageSizes) < 2 {
+	if auth.calls != 1 || len(api.drivePageSizes) < 3 {
 		t.Fatalf("search should recursively list drive folders, auth=%d drive_page_sizes=%v", auth.calls, api.drivePageSizes)
 	}
 	if got := feishuObjectKeys(page.Items); !sameStrings(got, []string{"feishu:drive:file-test"}) {
@@ -762,6 +765,7 @@ type feishuAPIStub struct {
 	driveChildren    map[string][]Object
 	wikiChildren     map[string][]Object
 	wikiSpaces       []Object
+	driveListErrors  []error
 	drivePageSizes   []int
 	wikiPageSizes    []int
 	driveFolderCalls int
@@ -815,6 +819,11 @@ func (a *feishuAPIStub) GetDriveFolder(_ context.Context, _ string, folderToken 
 
 func (a *feishuAPIStub) ListDriveChildren(_ context.Context, _ string, folderToken, cursor string, pageSize int) (ObjectPage, error) {
 	a.drivePageSizes = append(a.drivePageSizes, pageSize)
+	if len(a.driveListErrors) > 0 {
+		err := a.driveListErrors[0]
+		a.driveListErrors = a.driveListErrors[1:]
+		return ObjectPage{}, err
+	}
 	return objectPage(a.driveChildren[driveFolderToken(folderToken)], cursor, pageSize)
 }
 

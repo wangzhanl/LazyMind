@@ -447,6 +447,13 @@ func TestDefaultFeishuAPIClientMapsScopeMissing(t *testing.T) {
 	assertFeishuErrorCode(t, err, connector.ErrorCodePermissionDenied)
 }
 
+func TestFeishuOpenAPIMapsFrequencyLimitAsRateLimited(t *testing.T) {
+	t.Parallel()
+
+	err := mapFeishuOpenAPIError("99991400", "request trigger frequency limit", http.StatusOK)
+	assertFeishuErrorCode(t, err, connector.ErrorCodeRateLimited)
+}
+
 func newHTTPAuthTestClient(t *testing.T, baseURL string) *HTTPAuthConnectionClient {
 	t.Helper()
 	client, err := NewHTTPAuthConnectionClient(baseURL, "internal-token", nil)

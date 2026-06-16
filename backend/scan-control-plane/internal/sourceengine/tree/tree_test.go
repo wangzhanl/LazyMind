@@ -995,6 +995,40 @@ func TestSourceDocumentQueryReadsIndexedDocumentsOnly(t *testing.T) {
 	}
 }
 
+func TestSourceDocumentQueryMarksUnparsedUpdatesPending(t *testing.T) {
+	t.Parallel()
+
+	repo := newTreeReadRepo()
+	repo.sources["source-1"] = store.Source{SourceID: "source-1"}
+	repo.bindings["source-1"] = []store.Binding{{BindingID: "binding-1", SourceID: "source-1"}}
+	object := indexedObject("source-1", "binding-1", "tree-root", "doc-1", "", "Welcome", true, false).Object
+	repo.documents = []DocumentWithState{{
+		Object: object,
+		State: store.DocumentState{
+			SourceID:        "source-1",
+			BindingID:       "binding-1",
+			ObjectKey:       "doc-1",
+			SourceState:     "NEW",
+			SyncState:       "IDLE",
+			PendingAction:   "CREATE",
+			ParseQueueState: "NONE",
+			Selectable:      true,
+		},
+	}}
+	query := NewDBSourceDocumentQuery(repo, TreeQueryLimits{DefaultPageSize: 10, MaxPageSize: 10})
+
+	resp, err := query.ListDocuments(context.Background(), SourceDocumentListRequest{SourceID: "source-1", BindingID: "binding-1"})
+	if err != nil {
+		t.Fatalf("list documents: %v", err)
+	}
+	if len(resp.Items) != 1 {
+		t.Fatalf("expected one document, got %+v", resp.Items)
+	}
+	if resp.Items[0].ParseQueueState != "PENDING" || resp.Items[0].ParseState != "PENDING" {
+		t.Fatalf("unparsed update should be marked pending: %+v", resp.Items[0])
+	}
+}
+
 func TestSourceDocumentQueryPassesStateParseFiltersAndPagination(t *testing.T) {
 	t.Parallel()
 

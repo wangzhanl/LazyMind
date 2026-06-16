@@ -4,9 +4,12 @@ import (
 	"context"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/lazymind/scan_control_plane/internal/sourceengine/connector"
 )
+
+const feishuSearchRateLimitMaxAttempts = 4
 
 func (c *FeishuConnector) search(ctx context.Context, req connector.SearchRequest) (connector.RawObjectPage, error) {
 	if err := ctx.Err(); err != nil {
@@ -70,7 +73,7 @@ func (c *FeishuConnector) recursiveSearch(ctx context.Context, token, keyword st
 		seenContainers[containerKey] = struct{}{}
 		cursor := ""
 		for {
-			page, err := c.listProviderPage(ctx, token, root.targetType, root.targetRef, root.nodeRef, cursor, providerPageSize(root.targetType, root.nodeRef, c.Spec().MaxPageSize))
+			page, err := c.listProviderPageForSearch(ctx, token, root, cursor, providerPageSize(root.targetType, root.nodeRef, c.Spec().MaxPageSize))
 			if err != nil {
 				return ObjectPage{}, err
 			}
@@ -149,4 +152,55 @@ func searchContainerKey(root searchRoot) string {
 func searchNameMatches(item Object, keyword string) bool {
 	name := strings.ToLower(displayName(item.Name, item.Token))
 	return strings.Contains(name, strings.ToLower(keyword))
+}
+
+func (c *FeishuConnector) listProviderPageForSearch(ctx context.Context, token string, root searchRoot, cursor string, pageSize int) (ObjectPage, error) {
+	for attempt := 1; ; attempt++ {
+		page, err := c.listProviderPage(ctx, token, root.targetType, root.targetRef, root.nodeRef, cursor, pageSize)
+		if err == nil || !isFeishuRateLimitError(err) || attempt >= feishuSearchRateLimitMaxAttempts {
+			return page, err
+		}
+		if err := sleepContext(ctx, c.searchRateLimitBackoff(attempt)); err != nil {
+			return ObjectPage{}, err
+		}
+	}
+}
+
+func (c *FeishuConnector) searchRateLimitBackoff(attempt int) time.Duration {
+	if c.searchRetryDelay != nil {
+		return c.searchRetryDelay(attempt)
+	}
+	switch attempt {
+	case 1:
+		return 500 * time.Millisecond
+	case 2:
+		return time.Second
+	default:
+		return 2 * time.Second
+	}
+}
+
+func sleepContext(ctx context.Context, delay time.Duration) error {
+	if delay <= 0 {
+		return ctx.Err()
+	}
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
+}
+
+func isFeishuRateLimitError(err error) bool {
+	code, ok := connector.ErrorCodeOf(err)
+	if !ok {
+		return false
+	}
+	if code == connector.ErrorCodeRateLimited {
+		return true
+	}
+	return code == connector.ErrorCodeTransient && isFeishuRateLimitMessage(err.Error())
 }

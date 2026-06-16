@@ -785,6 +785,9 @@ func mapFeishuOpenAPIError(code, message string, statusCode int) error {
 	if strings.TrimSpace(message) == "" {
 		message = "feishu api request failed"
 	}
+	if statusCode == http.StatusTooManyRequests || isFeishuRateLimitMessage(message) {
+		return connector.NewError(connector.ErrorCodeRateLimited, message)
+	}
 	switch code {
 	case "connection_not_found", "token_expired", "refresh_failed", "auth_invalid":
 		return connector.NewError(ErrorCodeAuthInvalid, message)
@@ -806,6 +809,13 @@ func mapFeishuOpenAPIError(code, message string, statusCode int) error {
 		}
 		return connector.NewError(connector.ErrorCodeTransient, message)
 	}
+}
+
+func isFeishuRateLimitMessage(message string) bool {
+	message = strings.ToLower(strings.TrimSpace(message))
+	return strings.Contains(message, "frequency limit") ||
+		strings.Contains(message, "rate limit") ||
+		strings.Contains(message, "too many requests")
 }
 
 func isHTMLResponse(contentType string, body []byte) bool {
