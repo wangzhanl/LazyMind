@@ -589,6 +589,45 @@ func TestSourceTreeCachedChildrenExposeDocumentUpdateState(t *testing.T) {
 	}
 }
 
+func TestSourceTreeIndexedBindingRootDocumentExposesUpdateState(t *testing.T) {
+	t.Parallel()
+
+	base := newTreeReadRepo()
+	base.sources["source-1"] = store.Source{SourceID: "source-1"}
+	base.bindings["source-1"] = []store.Binding{{
+		BindingID: "binding-1",
+		SourceID:  "source-1",
+		TreeKey:   "wiki-root",
+		Status:    "ACTIVE",
+	}}
+	root := indexedObject("source-1", "binding-1", "wiki-root", "wiki-root", "", "Wiki Root", true, true)
+	root.State.SourceState = "UNCHANGED"
+	root.State.PendingAction = ""
+	base.objects = []ObjectWithState{root}
+	repo := &treeReadRepoWithObject{treeReadRepo: base}
+	engine := NewDBSourceTreeQueryEngine(repo, TreeQueryLimits{DefaultPageSize: 10, MaxPageSize: 10, MaxAllCurrentLevelItems: 10})
+
+	page, err := engine.ListChildren(context.Background(), SourceTreeChildrenRequest{
+		SourceID:  "source-1",
+		BindingID: "binding-1",
+		UseCache:  boolPtr(true),
+		PageSize:  10,
+	})
+	if err != nil {
+		t.Fatalf("list indexed binding root: %v", err)
+	}
+	if len(page.Items) != 1 {
+		t.Fatalf("expected binding root document, got %+v", page.Items)
+	}
+	node := page.Items[0]
+	if node.ObjectKey != "wiki-root" || !node.IsDocument || !node.IsContainer {
+		t.Fatalf("binding root should stay a dual-role wiki document: %+v", node)
+	}
+	if node.SourceState != "UNCHANGED" || node.UpdateType != "unchanged" || node.UpdateDesc != "当前文件已是最新" {
+		t.Fatalf("binding root document state was not exposed: %+v", node)
+	}
+}
+
 func TestSourceTreeBindingRequestExpandsIndexedRootObject(t *testing.T) {
 	t.Parallel()
 
@@ -960,6 +999,28 @@ func newTreeReadRepo() *treeReadRepo {
 		sources:  map[string]store.Source{},
 		bindings: map[string][]store.Binding{},
 	}
+}
+
+type treeReadRepoWithObject struct {
+	*treeReadRepo
+}
+
+func (r *treeReadRepoWithObject) GetObject(_ context.Context, sourceID, bindingID, objectKey string) (store.SourceObject, error) {
+	for _, item := range r.objects {
+		if item.Object.SourceID == sourceID && item.Object.BindingID == bindingID && item.Object.ObjectKey == objectKey {
+			return item.Object, nil
+		}
+	}
+	return store.SourceObject{}, store.NewStoreError(store.ErrCodeNotFound, "object not found")
+}
+
+func (r *treeReadRepoWithObject) GetDocumentState(_ context.Context, sourceID, bindingID, objectKey string) (store.DocumentState, error) {
+	for _, item := range r.objects {
+		if item.Object.SourceID == sourceID && item.Object.BindingID == bindingID && item.Object.ObjectKey == objectKey && item.State != nil {
+			return *item.State, nil
+		}
+	}
+	return store.DocumentState{}, store.NewStoreError(store.ErrCodeNotFound, "document state not found")
 }
 
 func (r *treeReadRepo) GetSource(_ context.Context, sourceID string) (store.Source, error) {

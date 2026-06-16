@@ -42,7 +42,7 @@ func (e *DBSourceTreeQueryEngine) ListChildren(ctx context.Context, req SourceTr
 			return TreeNodePage{}, err
 		}
 		if ok {
-			return objectPage([]ObjectWithState{{Object: root}}, "", false, true), nil
+			return objectPage([]ObjectWithState{root}, "", false, true), nil
 		}
 	}
 	items, nextCursor, hasMore, err := e.listObjects(ctx, req, treeKey, parentKey, pageSize)
@@ -140,19 +140,36 @@ type sourceObjectReader interface {
 	GetObject(ctx context.Context, sourceID, bindingID, objectKey string) (store.SourceObject, error)
 }
 
-func (e *DBSourceTreeQueryEngine) indexedBindingRoot(ctx context.Context, req SourceTreeChildrenRequest, binding store.Binding) (store.SourceObject, bool, error) {
+type sourceDocumentStateReader interface {
+	GetDocumentState(ctx context.Context, sourceID, bindingID, objectKey string) (store.DocumentState, error)
+}
+
+func (e *DBSourceTreeQueryEngine) indexedBindingRoot(ctx context.Context, req SourceTreeChildrenRequest, binding store.Binding) (ObjectWithState, bool, error) {
 	reader, ok := e.repo.(sourceObjectReader)
 	if !ok || strings.TrimSpace(binding.TreeKey) == "" {
-		return store.SourceObject{}, false, nil
+		return ObjectWithState{}, false, nil
 	}
 	root, err := reader.GetObject(ctx, req.SourceID, binding.BindingID, binding.TreeKey)
 	if err != nil {
 		if store.ErrorCodeOf(err) == store.ErrCodeNotFound {
-			return store.SourceObject{}, false, nil
+			return ObjectWithState{}, false, nil
 		}
-		return store.SourceObject{}, false, mapStoreError(err)
+		return ObjectWithState{}, false, mapStoreError(err)
 	}
-	return root, true, nil
+	item := ObjectWithState{Object: root}
+	if root.IsDocument {
+		if stateReader, ok := e.repo.(sourceDocumentStateReader); ok {
+			state, err := stateReader.GetDocumentState(ctx, req.SourceID, binding.BindingID, root.ObjectKey)
+			if err != nil {
+				if store.ErrorCodeOf(err) != store.ErrCodeNotFound {
+					return ObjectWithState{}, false, mapStoreError(err)
+				}
+			} else {
+				item.State = &state
+			}
+		}
+	}
+	return item, true, nil
 }
 
 func (e *DBSourceTreeQueryEngine) listObjects(ctx context.Context, req SourceTreeChildrenRequest, treeKey, parentKey string, pageSize int) ([]ObjectWithState, string, bool, error) {
