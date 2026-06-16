@@ -2,6 +2,7 @@ package feishu
 
 import (
 	"context"
+	"strconv"
 	"strings"
 
 	"github.com/lazymind/scan_control_plane/internal/sourceengine/connector"
@@ -24,39 +25,128 @@ func (c *FeishuConnector) search(ctx context.Context, req connector.SearchReques
 	if err := validatePageSize(req.PageSize, c.Spec().MaxPageSize); err != nil {
 		return connector.RawObjectPage{}, err
 	}
-	folderToken, err := searchDriveFolderToken(req)
-	if err != nil {
-		return connector.RawObjectPage{}, err
-	}
 	token, err := c.loadToken(ctx, req.AuthConnectionID, req.ProviderOptions.String("user_id"))
 	if err != nil {
 		return connector.RawObjectPage{}, err
 	}
-	page, err := c.api.SearchDriveFiles(ctx, token.AccessToken, keyword, folderToken, req.Cursor, req.PageSize)
+	page, err := c.recursiveSearch(ctx, token.AccessToken, keyword, req)
 	if err != nil {
 		return connector.RawObjectPage{}, err
 	}
 	return c.buildRawObjectPage(req.AuthConnectionID, page, !page.HasMore), nil
 }
 
-func searchDriveFolderToken(req connector.SearchRequest) (string, error) {
-	if req.TargetType == TargetTypeWikiNode || isWikiSearchRef(req.NodeRef) || isWikiSearchRef(req.TargetRef) {
-		return "", connector.NewError(connector.ErrorCodeUnsupported, "feishu search API is unsupported for this target scope")
-	}
-	ref := strings.TrimSpace(req.NodeRef)
-	if ref == "" {
-		ref = strings.TrimSpace(req.TargetRef)
-	}
-	if ref == "" || ref == VirtualDriveRootRef {
-		return "", nil
-	}
-	if req.TargetType != "" && req.TargetType != TargetTypeDriveFolder {
-		return "", connector.NewError(connector.ErrorCodeUnsupported, "feishu search API is unsupported for this target scope")
-	}
-	return driveFolderToken(ref), nil
-}
-
 func isWikiSearchRef(ref string) bool {
 	ref = strings.TrimSpace(ref)
 	return strings.HasPrefix(ref, "wiki:") || strings.HasPrefix(ref, "feishu:wiki:")
+}
+
+type searchRoot struct {
+	targetType connector.TargetType
+	targetRef  string
+	nodeRef    string
+}
+
+func (c *FeishuConnector) recursiveSearch(ctx context.Context, token, keyword string, req connector.SearchRequest) (ObjectPage, error) {
+	offset, err := parseCursor(req.Cursor)
+	if err != nil {
+		return ObjectPage{}, err
+	}
+	roots := searchRoots(req)
+	matches := make([]Object, 0, req.PageSize)
+	seenObjects := map[string]struct{}{}
+	seenContainers := map[string]struct{}{}
+	seenMatchCount := 0
+	for len(roots) > 0 {
+		if err := ctx.Err(); err != nil {
+			return ObjectPage{}, err
+		}
+		root := roots[0]
+		roots = roots[1:]
+		containerKey := searchContainerKey(root)
+		if _, ok := seenContainers[containerKey]; ok {
+			continue
+		}
+		seenContainers[containerKey] = struct{}{}
+		cursor := ""
+		for {
+			page, err := c.listProviderPage(ctx, token, root.targetType, root.targetRef, root.nodeRef, cursor, providerPageSize(root.targetType, root.nodeRef, c.Spec().MaxPageSize))
+			if err != nil {
+				return ObjectPage{}, err
+			}
+			for _, item := range page.Items {
+				objectKey := objectKeyFor(item)
+				if _, ok := seenObjects[objectKey]; ok {
+					continue
+				}
+				seenObjects[objectKey] = struct{}{}
+				if searchNameMatches(item, keyword) {
+					seenMatchCount++
+					if seenMatchCount > offset {
+						matches = append(matches, item)
+						if len(matches) > req.PageSize {
+							return ObjectPage{Items: matches[:req.PageSize], HasMore: true, NextCursor: strconv.Itoa(offset + req.PageSize)}, nil
+						}
+					}
+				}
+				if item.IsContainer || item.HasChildren {
+					roots = append(roots, childSearchRoot(root, item))
+				}
+			}
+			if !page.HasMore {
+				break
+			}
+			if strings.TrimSpace(page.NextCursor) == "" {
+				return ObjectPage{}, connector.NewError(connector.ErrorCodeTransient, "feishu pagination cursor is empty")
+			}
+			cursor = page.NextCursor
+		}
+	}
+	return ObjectPage{Items: matches}, nil
+}
+
+func searchRoots(req connector.SearchRequest) []searchRoot {
+	ref := firstNonEmpty(req.NodeRef, req.TargetRef)
+	switch req.TargetType {
+	case TargetTypeDriveFolder:
+		nodeRef := ref
+		if nodeRef == "" {
+			nodeRef = VirtualDriveRootRef
+		}
+		return []searchRoot{{targetType: TargetTypeDriveFolder, targetRef: req.TargetRef, nodeRef: nodeRef}}
+	case TargetTypeWikiNode:
+		nodeRef := ref
+		if nodeRef == "" {
+			nodeRef = VirtualWikiSpacesRef
+		}
+		return []searchRoot{{targetType: TargetTypeWikiNode, targetRef: req.TargetRef, nodeRef: nodeRef}}
+	default:
+		if isWikiSearchRef(ref) {
+			return []searchRoot{{targetType: TargetTypeWikiNode, targetRef: req.TargetRef, nodeRef: ref}}
+		}
+		if ref != "" {
+			return []searchRoot{{targetType: TargetTypeDriveFolder, targetRef: req.TargetRef, nodeRef: ref}}
+		}
+		return []searchRoot{
+			{targetType: TargetTypeDriveFolder, nodeRef: VirtualDriveRootRef},
+			{targetType: TargetTypeWikiNode, nodeRef: VirtualWikiSpacesRef},
+		}
+	}
+}
+
+func childSearchRoot(parent searchRoot, item Object) searchRoot {
+	return searchRoot{
+		targetType: parent.targetType,
+		targetRef:  parent.targetRef,
+		nodeRef:    targetRefFor(item),
+	}
+}
+
+func searchContainerKey(root searchRoot) string {
+	return string(root.targetType) + "\x00" + firstNonEmpty(root.nodeRef, root.targetRef)
+}
+
+func searchNameMatches(item Object, keyword string) bool {
+	name := strings.ToLower(displayName(item.Name, item.Token))
+	return strings.Contains(name, strings.ToLower(keyword))
 }

@@ -313,12 +313,53 @@ func TestPublicRootRejectsStaleExternalExportPath(t *testing.T) {
 	}
 }
 
-func TestSearchAndDeltaAreUnsupported(t *testing.T) {
+func TestSearchRecursivelyMatchesLocalNamesAndDeltaUnsupported(t *testing.T) {
 	t.Parallel()
 
-	conn := NewLocalFSConnector(newAgentStub())
-	_, err := conn.Search(context.Background(), connector.SearchRequest{Keyword: "a"})
-	assertLocalErrorCode(t, err, connector.ErrorCodeUnsupported)
+	agent := newAgentStub()
+	nested := PathInfo{
+		Path:           "/workspace/docs/guides/test-plan.md",
+		NormalizedPath: "/workspace/docs/guides/test-plan.md",
+		DisplayName:    "test-plan.md",
+		Exists:         true,
+		Readable:       true,
+		SizeBytes:      8,
+		MTimeUnixNano:  90,
+		FileExtension:  ".md",
+		StableID:       "file-test",
+		ParentStableID: "folder-guides",
+		ParentPath:     "/workspace/docs/guides",
+	}
+	agent.infos[nested.NormalizedPath] = nested
+	agent.children["/workspace/docs/guides"] = []PathInfo{nested}
+	conn := NewLocalFSConnector(agent, WithRecommendedRoots("/workspace/docs"))
+
+	page, err := conn.Search(context.Background(), connector.SearchRequest{
+		Keyword:  "test",
+		PageSize: 10,
+		AgentID:  "agent-1",
+	})
+	if err != nil {
+		t.Fatalf("search local files: %v", err)
+	}
+	if got := localObjectKeys(page.Items); !sameStrings(got, []string{"local_fs:agent-1:id:file-test"}) {
+		t.Fatalf("unexpected local search results: %v", got)
+	}
+	if page.Items[0].ParentRef != "/workspace/docs/guides" || page.Items[0].ProviderMeta["parent_path"] != "/workspace/docs/guides" {
+		t.Fatalf("search result should keep parent metadata: %+v", page.Items[0])
+	}
+
+	virtualConn := NewLocalFSConnector(agent, WithDefaultAgentID("agent-default"), WithRecommendedRoots("/"), WithPublicRoot("/host/root"))
+	virtualPage, err := virtualConn.Search(context.Background(), connector.SearchRequest{
+		Keyword:  "readme",
+		PageSize: 10,
+	})
+	if err != nil {
+		t.Fatalf("search virtual local files: %v", err)
+	}
+	if len(virtualPage.Items) != 1 || virtualPage.Items[0].ObjectRef != "/project-a/readme.md" || virtualPage.Items[0].ProviderMeta["path"] != "/host/root/project-a/readme.md" {
+		t.Fatalf("virtual search should expose virtual refs while preserving host metadata, got %+v", virtualPage.Items)
+	}
 
 	_, err = conn.FetchPage(context.Background(), connector.FetchPageRequest{
 		BindingGeneration: 1,

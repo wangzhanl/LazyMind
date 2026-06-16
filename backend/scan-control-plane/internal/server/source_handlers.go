@@ -433,7 +433,3 @@ func boolQueryDefault(r *http.Request, key string, fallback bool) bool {
 	}
 	return parsed
 }
-
-func boolQuery(r *http.Request, key string) bool {
-	return boolQueryDefault(r, key, false)
-}

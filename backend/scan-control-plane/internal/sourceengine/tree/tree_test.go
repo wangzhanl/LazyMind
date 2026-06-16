@@ -145,6 +145,43 @@ func TestTargetTreeFallbackSearchScopesToBindingAndTreeKey(t *testing.T) {
 	}
 }
 
+func TestTargetTreeSearchRespectsIncludeFiles(t *testing.T) {
+	t.Parallel()
+
+	spy := &treeConnectorSpy{supportsSearch: true}
+	registry, err := connector.NewDefaultConnectorRegistry(spy)
+	if err != nil {
+		t.Fatalf("create registry: %v", err)
+	}
+	engine := NewDefaultTargetTreeEngine(registry)
+
+	withoutFiles, err := engine.Search(context.Background(), TargetTreeSearchRequest{
+		ConnectorType: treeTestConnectorType,
+		Keyword:       "welcome",
+		PageSize:      10,
+		IncludeFiles:  false,
+	})
+	if err != nil {
+		t.Fatalf("search target tree without files: %v", err)
+	}
+	if len(withoutFiles.Items) != 0 {
+		t.Fatalf("search should filter files when include_files=false, got %+v", withoutFiles.Items)
+	}
+
+	withFiles, err := engine.Search(context.Background(), TargetTreeSearchRequest{
+		ConnectorType: treeTestConnectorType,
+		Keyword:       "welcome",
+		PageSize:      10,
+		IncludeFiles:  true,
+	})
+	if err != nil {
+		t.Fatalf("search target tree with files: %v", err)
+	}
+	if len(withFiles.Items) != 1 || withFiles.Items[0].ObjectKey != "doc-1" {
+		t.Fatalf("search should keep files when include_files=true, got %+v", withFiles.Items)
+	}
+}
+
 func TestTreeSearchRejectsUnsupportedListMode(t *testing.T) {
 	t.Parallel()
 

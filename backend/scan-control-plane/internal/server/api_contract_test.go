@@ -247,7 +247,7 @@ func TestDocumentHandlerPassesFiltersAndPagination(t *testing.T) {
 	}
 }
 
-func TestReadHandlersRefreshSourceStateOnlyWhenRequested(t *testing.T) {
+func TestReadHandlersRefreshSourceStateByDefaultWithoutSyncingData(t *testing.T) {
 	t.Parallel()
 
 	sourceTree := &serverSourceTreeStub{}
@@ -267,19 +267,52 @@ func TestReadHandlersRefreshSourceStateOnlyWhenRequested(t *testing.T) {
 	if treeResp.Code != http.StatusOK {
 		t.Fatalf("tree read failed: code=%d body=%s", treeResp.Code, treeResp.Body.String())
 	}
-	if refresher.calls != 0 {
-		t.Fatalf("default tree read should not refresh source state, calls=%d", refresher.calls)
+	if refresher.calls != 1 || refresher.lastReq.SourceID != "source-1" || refresher.lastReq.BindingID != "binding-1" {
+		t.Fatalf("default tree read did not refresh source state: calls=%d req=%+v", refresher.calls, refresher.lastReq)
 	}
 
-	refreshTreeReq := httptest.NewRequest(http.MethodPost, "/api/scan/sources/source-1/tree/children", strings.NewReader(`{"binding_id":"binding-1","refresh_state":true}`))
-	setAPIContractActor(refreshTreeReq)
-	refreshTreeResp := httptest.NewRecorder()
-	handler.ServeHTTP(refreshTreeResp, refreshTreeReq)
-	if refreshTreeResp.Code != http.StatusOK {
-		t.Fatalf("refreshing tree read failed: code=%d body=%s", refreshTreeResp.Code, refreshTreeResp.Body.String())
+	cachedTreeReq := httptest.NewRequest(http.MethodPost, "/api/scan/sources/source-1/tree/children", strings.NewReader(`{"binding_id":"binding-1","use_cache":true}`))
+	setAPIContractActor(cachedTreeReq)
+	cachedTreeResp := httptest.NewRecorder()
+	handler.ServeHTTP(cachedTreeResp, cachedTreeReq)
+	if cachedTreeResp.Code != http.StatusOK {
+		t.Fatalf("cached tree read failed: code=%d body=%s", cachedTreeResp.Code, cachedTreeResp.Body.String())
 	}
-	if refresher.calls != 1 || refresher.lastReq.SourceID != "source-1" || refresher.lastReq.BindingID != "binding-1" {
-		t.Fatalf("tree read did not refresh requested source state: calls=%d req=%+v", refresher.calls, refresher.lastReq)
+	if refresher.calls != 2 || refresher.lastReq.SourceID != "source-1" || refresher.lastReq.BindingID != "binding-1" {
+		t.Fatalf("cached tree read should still refresh source state: calls=%d req=%+v", refresher.calls, refresher.lastReq)
+	}
+
+	cachedOnlyTreeReq := httptest.NewRequest(http.MethodPost, "/api/scan/sources/source-1/tree/children", strings.NewReader(`{"binding_id":"binding-1","use_cache":true,"refresh_state":false}`))
+	setAPIContractActor(cachedOnlyTreeReq)
+	cachedOnlyTreeResp := httptest.NewRecorder()
+	handler.ServeHTTP(cachedOnlyTreeResp, cachedOnlyTreeReq)
+	if cachedOnlyTreeResp.Code != http.StatusOK {
+		t.Fatalf("cached-only tree read failed: code=%d body=%s", cachedOnlyTreeResp.Code, cachedOnlyTreeResp.Body.String())
+	}
+	if refresher.calls != 2 {
+		t.Fatalf("explicit refresh_state=false tree read should not refresh source state, calls=%d", refresher.calls)
+	}
+
+	searchReq := httptest.NewRequest(http.MethodPost, "/api/scan/sources/source-1/tree/search", strings.NewReader(`{"binding_id":"binding-1","keyword":"doc"}`))
+	setAPIContractActor(searchReq)
+	searchResp := httptest.NewRecorder()
+	handler.ServeHTTP(searchResp, searchReq)
+	if searchResp.Code != http.StatusOK {
+		t.Fatalf("tree search failed: code=%d body=%s", searchResp.Code, searchResp.Body.String())
+	}
+	if refresher.calls != 3 || refresher.lastReq.SourceID != "source-1" || refresher.lastReq.BindingID != "binding-1" {
+		t.Fatalf("tree search did not refresh source state: calls=%d req=%+v", refresher.calls, refresher.lastReq)
+	}
+
+	cachedSearchReq := httptest.NewRequest(http.MethodPost, "/api/scan/sources/source-1/tree/search", strings.NewReader(`{"binding_id":"binding-1","keyword":"doc","refresh_state":false}`))
+	setAPIContractActor(cachedSearchReq)
+	cachedSearchResp := httptest.NewRecorder()
+	handler.ServeHTTP(cachedSearchResp, cachedSearchReq)
+	if cachedSearchResp.Code != http.StatusOK {
+		t.Fatalf("cached tree search failed: code=%d body=%s", cachedSearchResp.Code, cachedSearchResp.Body.String())
+	}
+	if refresher.calls != 3 {
+		t.Fatalf("explicit refresh_state=false tree search should not refresh source state, calls=%d", refresher.calls)
 	}
 
 	docReq := httptest.NewRequest(http.MethodGet, "/api/scan/sources/source-1/documents?binding_id=binding-1", nil)
@@ -289,19 +322,19 @@ func TestReadHandlersRefreshSourceStateOnlyWhenRequested(t *testing.T) {
 	if docResp.Code != http.StatusOK {
 		t.Fatalf("document read failed: code=%d body=%s", docResp.Code, docResp.Body.String())
 	}
-	if refresher.calls != 1 {
-		t.Fatalf("default document read should not refresh source state, calls=%d", refresher.calls)
+	if refresher.calls != 4 || refresher.lastReq.SourceID != "source-1" || refresher.lastReq.BindingID != "binding-1" {
+		t.Fatalf("default document read did not refresh source state: calls=%d req=%+v", refresher.calls, refresher.lastReq)
 	}
 
-	refreshDocReq := httptest.NewRequest(http.MethodGet, "/api/scan/sources/source-1/documents?binding_id=binding-1&refresh_state=true", nil)
-	setAPIContractActor(refreshDocReq)
-	refreshDocResp := httptest.NewRecorder()
-	handler.ServeHTTP(refreshDocResp, refreshDocReq)
-	if refreshDocResp.Code != http.StatusOK {
-		t.Fatalf("refreshing document read failed: code=%d body=%s", refreshDocResp.Code, refreshDocResp.Body.String())
+	cachedDocReq := httptest.NewRequest(http.MethodGet, "/api/scan/sources/source-1/documents?binding_id=binding-1&refresh_state=false", nil)
+	setAPIContractActor(cachedDocReq)
+	cachedDocResp := httptest.NewRecorder()
+	handler.ServeHTTP(cachedDocResp, cachedDocReq)
+	if cachedDocResp.Code != http.StatusOK {
+		t.Fatalf("cached document read failed: code=%d body=%s", cachedDocResp.Code, cachedDocResp.Body.String())
 	}
-	if refresher.calls != 2 || refresher.lastReq.SourceID != "source-1" || refresher.lastReq.BindingID != "binding-1" {
-		t.Fatalf("document read did not refresh requested source state: calls=%d req=%+v", refresher.calls, refresher.lastReq)
+	if refresher.calls != 4 {
+		t.Fatalf("explicit cached document read should not refresh source state, calls=%d", refresher.calls)
 	}
 }
 

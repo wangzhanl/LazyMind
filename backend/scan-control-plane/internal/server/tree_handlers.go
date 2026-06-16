@@ -85,7 +85,7 @@ func (h *Handler) listSourceTreeChildren(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	req.ProviderOptions = withActorProviderOptions(req.ProviderOptions, actor)
-	if req.RefreshState {
+	if sourceTreeShouldRefreshState(req) {
 		if err := h.refreshSourceState(r.Context(), req.SourceID, req.BindingID); err != nil {
 			writeError(w, err)
 			return
@@ -119,6 +119,12 @@ func (h *Handler) searchSourceTree(w http.ResponseWriter, r *http.Request) {
 		writeError(w, err)
 		return
 	}
+	if treeShouldRefreshState(req.RefreshState) {
+		if err := h.refreshSourceState(r.Context(), req.SourceID, req.BindingID); err != nil {
+			writeError(w, err)
+			return
+		}
+	}
 	page, err := h.sourceTree.Search(r.Context(), req)
 	if err != nil {
 		writeError(w, err)
@@ -151,7 +157,7 @@ func (h *Handler) listSourceDocuments(w http.ResponseWriter, r *http.Request) {
 		Page:          parseIntQuery(r, "page"),
 		PageSize:      parseIntQuery(r, "page_size"),
 	}
-	if boolQuery(r, "refresh_state") {
+	if boolQueryDefault(r, "refresh_state", true) {
 		if err := h.refreshSourceState(r.Context(), req.SourceID, req.BindingID); err != nil {
 			writeError(w, err)
 			return
@@ -183,6 +189,17 @@ func (h *Handler) refreshSourceState(ctx context.Context, sourceID, bindingID st
 		SourceID:  sourceID,
 		BindingID: bindingID,
 	})
+}
+
+func sourceTreeShouldRefreshState(req tree.SourceTreeChildrenRequest) bool {
+	return treeShouldRefreshState(req.RefreshState)
+}
+
+func treeShouldRefreshState(refreshState *bool) bool {
+	if refreshState != nil {
+		return *refreshState
+	}
+	return true
 }
 
 func targetAccessFromSearch(req tree.TargetTreeSearchRequest) access.BindingTargetRequest {

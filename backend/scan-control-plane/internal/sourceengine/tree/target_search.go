@@ -39,6 +39,26 @@ func (e *DefaultTargetTreeEngine) Search(ctx context.Context, req TargetTreeSear
 	if err != nil {
 		return TreeNodePage{}, mapConnectorError(err)
 	}
-	childrenReq := TargetTreeChildrenRequest{ConnectorType: req.ConnectorType, IncludeFiles: true}
-	return e.mapTargetPage(ctx, conn, childrenReq, rawPage, SearchModeConnector)
+	return e.mapTargetSearchPage(ctx, conn, req, rawPage)
+}
+
+func (e *DefaultTargetTreeEngine) mapTargetSearchPage(ctx context.Context, conn connector.SourceConnector, req TargetTreeSearchRequest, rawPage connector.RawObjectPage) (TreeNodePage, error) {
+	nodes := make([]TreeNode, 0, len(rawPage.Items))
+	for _, raw := range rawPage.Items {
+		normalized, err := conn.MapObject(ctx, raw)
+		if err != nil {
+			return TreeNodePage{}, mapConnectorError(err)
+		}
+		if !req.IncludeFiles && !isTargetDirectoryNode(raw, normalized) {
+			continue
+		}
+		nodes = append(nodes, targetNode(req.ConnectorType, raw, normalized))
+	}
+	return TreeNodePage{
+		Items:        nodes,
+		NextCursor:   rawPage.NextCursor,
+		HasMore:      rawPage.HasMore,
+		ListComplete: rawPage.ListComplete,
+		SearchMode:   SearchModeConnector,
+	}, nil
 }

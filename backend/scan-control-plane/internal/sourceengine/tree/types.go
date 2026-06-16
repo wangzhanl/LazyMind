@@ -98,7 +98,7 @@ type SourceTreeChildrenRequest struct {
 	ParentRef         string         `json:"parent_ref,omitempty"`
 	Key               string         `json:"key,omitempty"`
 	UseCache          *bool          `json:"use_cache,omitempty"`
-	RefreshState      bool           `json:"refresh_state,omitempty"`
+	RefreshState      *bool          `json:"refresh_state,omitempty"`
 	ProviderOptions   map[string]any `json:"-"`
 	IncludeDocuments  bool           `json:"include_documents"`
 	IncludeContainers bool           `json:"include_containers"`
@@ -114,6 +114,7 @@ type SourceTreeSearchRequest struct {
 	Keyword           string   `json:"keyword"`
 	BindingID         string   `json:"binding_id,omitempty"`
 	TreeKey           string   `json:"tree_key,omitempty"`
+	RefreshState      *bool    `json:"refresh_state,omitempty"`
 	IncludeDocuments  bool     `json:"include_documents"`
 	IncludeContainers bool     `json:"include_containers"`
 	StateFilter       []string `json:"state_filter,omitempty"`

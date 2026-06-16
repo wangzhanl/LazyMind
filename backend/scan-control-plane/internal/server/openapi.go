@@ -777,6 +777,7 @@ func sourceTreeRequestProps() map[string]any {
 		"binding_id", stringSchema(),
 		"tree_key", stringSchema(),
 		"parent_key", stringSchema(),
+		"refresh_state", boolSchema(),
 		"include_documents", boolSchema(),
 		"include_containers", boolSchema(),
 		"state_filter", stringArray(),
