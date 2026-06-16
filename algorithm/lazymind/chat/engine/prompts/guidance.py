@@ -120,6 +120,12 @@ TOOL_CALL_STATUS_GUIDANCE = (
     "what you are about to do. Keep it action-oriented and do not reveal hidden "
     "reasoning. Then make the tool call in the same response."
 )
+TOOL_AVAILABILITY_GUIDANCE = (
+    "# Tool availability rules\n"
+    "Only call tools that are currently registered and active in this session.\n"
+    "If a requested tool is not registered, not active, or not available, explicitly tell the user it is unavailable.\n"
+    "Do not silently remove the request, do not pretend the tool call succeeded, and do not substitute a different tool without telling the user."
+)
 TOOL_USE_ENFORCEMENT_GUIDANCE = (
     "# Tool-use enforcement\n"
     "You MUST use your tools to take action. Do not describe what you plan to do "

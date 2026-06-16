@@ -7,6 +7,7 @@ from .guidance import (
     MEMORY_GUIDANCE,
     SEARCH_GUIDANCE,
     SKILLS_GUIDANCE,
+    TOOL_AVAILABILITY_GUIDANCE,
     TOOL_CALL_STATUS_GUIDANCE,
     VISION_EXTRACTOR_GUIDANCE,
     VOCAB_GUIDANCE,
@@ -84,6 +85,7 @@ def build_system_prompt(
         prompt_parts.append(' '.join(tool_guidance))
     if active_groups:
         prompt_parts.append(TOOL_CALL_STATUS_GUIDANCE)
+        prompt_parts.append(TOOL_AVAILABILITY_GUIDANCE)
     if 'kb' in active_groups or 'temp_kb' in active_groups:
         prompt_parts.append(SEARCH_GUIDANCE)
     if (

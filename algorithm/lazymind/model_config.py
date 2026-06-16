@@ -40,8 +40,13 @@ def is_model_role_available(role: str, *, config_path: Optional[str] = None) -> 
     if (entry.get('source') or '').lower() != 'dynamic':
         return True
     import lazyllm
-    buckets = (lazyllm.globals.config.get('dynamic_model_configs') or {}).get(role, {})
-    return any(v.get('source') or v.get('model') or v.get('url') for v in buckets.values())
+    dynamic_cfg = lazyllm.globals['config'].get('dynamic_model_configs') or {}
+    buckets = dynamic_cfg.get(role) or {}
+    return any(
+        (v.get('source') or v.get('model') or v.get('url'))
+        for v in buckets.values()
+        if isinstance(v, dict)
+    )
 
 
 def get_config_path() -> str:
