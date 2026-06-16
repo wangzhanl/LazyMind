@@ -2,6 +2,7 @@ package agent
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -15,6 +16,8 @@ const (
 	evalReportDefaultBaseDir     = "/var/lib/lazymind/evo"
 	evalReportRunID              = "run_1"
 )
+
+var errEvalReportNotFound = errors.New("eval report not found")
 
 type evalReportTraceCoverage struct {
 	CoveredCount int     `json:"covered_count"`
@@ -65,6 +68,7 @@ func attachEvalReportSummaryResult(payload any, threadID string) (bool, error) {
 		if _, exists := row[evalReportBadCaseCountField]; !exists {
 			row[evalReportBadCaseCountField] = evalReportBadCaseCount(row["data"])
 		}
+		removeEvalReportBadCases(row["data"])
 	}
 	return found, firstErr
 }
@@ -79,17 +83,9 @@ func isEvalReportResultRow(row map[string]any) bool {
 }
 
 func evalReportIDFromManifest(threadID, artifactID string) (string, error) {
-	manifestPath, err := evalReportManifestPath(threadID, artifactID)
+	manifest, err := loadEvalReportManifest(threadID, artifactID)
 	if err != nil {
 		return "", err
-	}
-	raw, err := os.ReadFile(manifestPath)
-	if err != nil {
-		return "", fmt.Errorf("read eval report manifest failed: %w", err)
-	}
-	var manifest evalReportManifest
-	if err := json.Unmarshal(raw, &manifest); err != nil {
-		return "", fmt.Errorf("decode eval report manifest failed: %w", err)
 	}
 	version := selectEvalReportManifestVersion(manifest)
 	payloadRef := strings.TrimSpace(version.PayloadRef)
@@ -101,15 +97,39 @@ func evalReportIDFromManifest(threadID, artifactID string) (string, error) {
 }
 
 func evalReportManifestPath(threadID, artifactID string) (string, error) {
-	threadID = strings.TrimSpace(threadID)
 	artifactID = strings.TrimSpace(artifactID)
-	if !safeEvalReportPathSegment(threadID) {
-		return "", fmt.Errorf("invalid thread_id")
-	}
 	if !safeEvalReportPathSegment(artifactID) {
 		return "", fmt.Errorf("invalid artifact_id")
 	}
-	return filepath.Join(evalReportBaseDir(), "dev-runs", threadID, "store", "runs", evalReportRunID, "artifacts", "manifests", artifactID+".json"), nil
+	runDir, err := evalReportRunDir(threadID)
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(runDir, "artifacts", "manifests", artifactID+".json"), nil
+}
+
+func evalReportRunDir(threadID string) (string, error) {
+	threadID = strings.TrimSpace(threadID)
+	if !safeEvalReportPathSegment(threadID) {
+		return "", fmt.Errorf("invalid thread_id")
+	}
+	return filepath.Join(evalReportBaseDir(), "dev-runs", threadID, "store", "runs", evalReportRunID), nil
+}
+
+func loadEvalReportManifest(threadID, artifactID string) (evalReportManifest, error) {
+	manifestPath, err := evalReportManifestPath(threadID, artifactID)
+	if err != nil {
+		return evalReportManifest{}, err
+	}
+	raw, err := os.ReadFile(manifestPath)
+	if err != nil {
+		return evalReportManifest{}, fmt.Errorf("read eval report manifest failed: %w", err)
+	}
+	var manifest evalReportManifest
+	if err := json.Unmarshal(raw, &manifest); err != nil {
+		return evalReportManifest{}, fmt.Errorf("decode eval report manifest failed: %w", err)
+	}
+	return manifest, nil
 }
 
 func evalReportBaseDir() string {
@@ -174,4 +194,12 @@ func evalReportBadCases(data any) ([]any, bool) {
 	}
 	badCases, ok := record["bad_cases"].([]any)
 	return badCases, ok
+}
+
+func removeEvalReportBadCases(data any) {
+	record, ok := data.(map[string]any)
+	if !ok {
+		return
+	}
+	delete(record, "bad_cases")
 }

@@ -95,6 +95,24 @@ func TestOpenAPISpecIncludesEvalReportResultSchema(t *testing.T) {
 			t.Fatalf("trace coverage schema missing property %q", name)
 		}
 	}
+
+	badCaseOp := openAPIOperationForTest(t, spec, "get", "/api/core/agent/threads/{thread_id}/results/eval-reports/{report_id}/bad-cases")
+	badCaseResponseRef := openAPIObjectResponseRefForTest(t, badCaseOp)
+	if badCaseResponseRef != "#/components/schemas/agentEvalReportBadCaseListOpenAPIResponse" {
+		t.Fatalf("unexpected eval report bad case schema ref: %q", badCaseResponseRef)
+	}
+	params := openAPIParameterNamesForTest(t, badCaseOp)
+	for _, name := range []string{"thread_id", "report_id", "page_token", "page_size", "keyword", "failure_type"} {
+		if _, ok := params[name]; !ok {
+			t.Fatalf("bad case operation missing parameter %q", name)
+		}
+	}
+	badCaseProps := schemaPropertiesForTest(t, schemas, "agentEvalReportBadCaseListOpenAPIResponse")
+	for _, name := range []string{"items", "total_size", "next_page_token"} {
+		if _, ok := badCaseProps[name]; !ok {
+			t.Fatalf("bad case list schema missing property %q", name)
+		}
+	}
 }
 
 func openAPIOperationForTest(t *testing.T, spec map[string]any, method, path string) map[string]any {
@@ -116,6 +134,30 @@ func openAPIOperationForTest(t *testing.T, spec map[string]any, method, path str
 
 func openAPIResponseRefForTest(t *testing.T, op map[string]any) string {
 	t.Helper()
+	schema := openAPIResponseSchemaForTest(t, op)
+	items, ok := schema["items"].(map[string]any)
+	if !ok {
+		t.Fatalf("response schema items missing")
+	}
+	ref, ok := items["$ref"].(string)
+	if !ok {
+		t.Fatalf("response schema item ref missing")
+	}
+	return ref
+}
+
+func openAPIObjectResponseRefForTest(t *testing.T, op map[string]any) string {
+	t.Helper()
+	schema := openAPIResponseSchemaForTest(t, op)
+	ref, ok := schema["$ref"].(string)
+	if !ok {
+		t.Fatalf("response schema ref missing")
+	}
+	return ref
+}
+
+func openAPIResponseSchemaForTest(t *testing.T, op map[string]any) map[string]any {
+	t.Helper()
 	responses, ok := op["responses"].(map[string]any)
 	if !ok {
 		t.Fatalf("responses missing")
@@ -136,15 +178,27 @@ func openAPIResponseRefForTest(t *testing.T, op map[string]any) string {
 	if !ok {
 		t.Fatalf("response schema missing")
 	}
-	items, ok := schema["items"].(map[string]any)
+	return schema
+}
+
+func openAPIParameterNamesForTest(t *testing.T, op map[string]any) map[string]struct{} {
+	t.Helper()
+	items, ok := op["parameters"].([]any)
 	if !ok {
-		t.Fatalf("response schema items missing")
+		t.Fatalf("parameters missing")
 	}
-	ref, ok := items["$ref"].(string)
-	if !ok {
-		t.Fatalf("response schema item ref missing")
+	result := map[string]struct{}{}
+	for _, item := range items {
+		param, ok := item.(map[string]any)
+		if !ok {
+			continue
+		}
+		name, _ := param["name"].(string)
+		if name != "" {
+			result[name] = struct{}{}
+		}
 	}
-	return ref
+	return result
 }
 
 func schemaPropertiesForTest(t *testing.T, schemas map[string]any, schemaName string) map[string]any {

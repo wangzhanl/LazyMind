@@ -491,6 +491,32 @@ type agentEvalReportResultOpenAPIResponse struct {
 	TraceCoverage *agentEvalReportTraceCoverageOpenAPIResponse `json:"trace_coverage,omitempty"`
 }
 
+type agentEvalReportBadCaseListPathParams struct {
+	ThreadID string `path:"thread_id"`
+	ReportID string `path:"report_id"`
+}
+
+type agentEvalReportBadCaseListQueryParams struct {
+	PageToken   string `query:"page_token"`
+	PageSize    int32  `query:"page_size"`
+	Keyword     string `query:"keyword"`
+	FailureType string `query:"failure_type"`
+}
+
+type agentEvalReportBadCaseListItemOpenAPIResponse struct {
+	CaseID      string `json:"case_id,omitempty"`
+	Defect      string `json:"Defect,omitempty"`
+	Reason      string `json:"Reason,omitempty"`
+	FailureType string `json:"failure_type,omitempty"`
+	TraceID     string `json:"trace_id,omitempty"`
+}
+
+type agentEvalReportBadCaseListOpenAPIResponse struct {
+	Items         []agentEvalReportBadCaseListItemOpenAPIResponse `json:"items"`
+	TotalSize     int                                             `json:"total_size"`
+	NextPageToken string                                          `json:"next_page_token"`
+}
+
 type skillPathParams struct {
 	SkillID string `path:"skill_id"`
 }
@@ -2449,10 +2475,20 @@ func registeredCoreOperations() []openAPIOperation {
 			Method:      "GET",
 			Path:        "/agent/threads/{thread_id}/results/eval-reports",
 			Summary:     "GET /agent/threads/{thread_id}/results/eval-reports",
-			Description: "Returns eval report artifact rows from Evo, with core-added report_id, bad_case_count, and trace_coverage when available. Existing report fields remain under data.",
+			Description: "Returns eval report artifact rows from Evo, with core-added report_id, bad_case_count, and trace_coverage when available. Existing report fields remain under data except bad_cases, which is served by the dedicated bad-case list endpoint.",
 			Tags:        []string{"agent"},
 			PathParams:  agentThreadPathParams{},
 			Responses:   map[int]openAPIResponse{200: resp("Eval report result rows", []agentEvalReportResultOpenAPIResponse{})},
+		},
+		{
+			Method:      "GET",
+			Path:        "/agent/threads/{thread_id}/results/eval-reports/{report_id}/bad-cases",
+			Summary:     "GET /agent/threads/{thread_id}/results/eval-reports/{report_id}/bad-cases",
+			Description: "Returns filtered, paginated bad cases for an eval report. keyword matches defect and reason text; failure_type matches exactly.",
+			Tags:        []string{"agent"},
+			PathParams:  agentEvalReportBadCaseListPathParams{},
+			QueryParams: agentEvalReportBadCaseListQueryParams{},
+			Responses:   map[int]openAPIResponse{200: resp("Eval report bad case list", agentEvalReportBadCaseListOpenAPIResponse{})},
 		},
 		{
 			Method:      "POST",

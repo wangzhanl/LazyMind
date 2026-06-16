@@ -256,6 +256,7 @@ func openAPISchemas() map[string]any {
 		"SourceResponse":                sourceResponseSchema(),
 		"SourceListResponse":            object([]string{"items", "total"}, props("items", arrayOf("SourceListItem"), "total", integerSchema())),
 		"SourceListItem":                sourceListItemSchema(),
+		"AuthConnectionStatus":          authConnectionStatusSchema(),
 		"GetSourceResponse":             object([]string{"source"}, props("source", schemaRef("SourceResponse"), "bindings", arrayOf("SourceBindingResponse"), "summary", objectSchema())),
 		"UpdateSourceRequest":           updateSourceRequestSchema(),
 		"UpdateSourceResponse":          object([]string{"source", "bindings"}, props("source", schemaRef("SourceResponse"), "bindings", arrayOf("SourceBindingResponse"), "created_binding_ids", stringArray(), "updated_binding_ids", stringArray(), "removed_binding_ids", stringArray(), "job_ids", stringArray())),
@@ -298,6 +299,7 @@ func openAPISchemas() map[string]any {
 		"ListMode":                      enumSchema("page", "all_current_level"),
 		"SourceStatus":                  enumSchema("ACTIVE", "PAUSED", "DELETING", "ERROR"),
 		"BindingStatus":                 enumSchema("ACTIVE", "PAUSED", "DELETING", "ERROR"),
+		"CloudAuthConnectionStatus":     enumSchema("ACTIVE", "EXPIRED", "REVOKED", "ERROR", "PENDING"),
 		"SyncMode":                      enumSchema("manual", "scheduled", "watch"),
 		"SourceState":                   enumSchema("NEW", "MODIFIED", "DELETED", "UNCHANGED"),
 		"SyncState":                     enumSchema("IDLE", "SCHEDULED", "PENDING", "RUNNING", "FAILED"),
@@ -402,10 +404,18 @@ func sourceListItemSchema() map[string]any {
 		"exclude_extensions", stringArray(),
 		"config_version", integerSchema(),
 		"binding_count", integerSchema(),
+		"auth_connection_status", schemaRef("AuthConnectionStatus"),
 		"summary", objectSchema(),
 		"deleted_at", stringSchema(),
 		"created_at", stringSchema(),
 		"updated_at", stringSchema(),
+	))
+}
+
+func authConnectionStatusSchema() map[string]any {
+	return object([]string{"status", "connection_ids"}, props(
+		"status", schemaRef("CloudAuthConnectionStatus"),
+		"connection_ids", stringArray(),
 	))
 }
 

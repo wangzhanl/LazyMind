@@ -556,6 +556,56 @@ func TestListSourcesReturnsPlanFlatItems(t *testing.T) {
 	}
 }
 
+func TestListSourcesAttachesBatchAuthConnectionStatus(t *testing.T) {
+	t.Parallel()
+
+	now := fixedSourceTestTime()
+	repo := newSourceEngineRepoStub()
+	repo.listRecords = []store.SourceListRecord{
+		{Source: store.Source{SourceID: "source-1", TenantID: "tenant-1", CreatedBy: "user-1", Name: "Docs", DatasetID: "dataset-1", Status: SourceStatusActive, CreatedAt: now, UpdatedAt: now}, BindingCount: 2},
+		{Source: store.Source{SourceID: "source-2", TenantID: "tenant-1", CreatedBy: "user-1", Name: "Sheets", DatasetID: "dataset-2", Status: SourceStatusActive, CreatedAt: now, UpdatedAt: now}, BindingCount: 1},
+	}
+	repo.sources["source-1"] = repo.listRecords[0].Source
+	repo.sources["source-2"] = repo.listRecords[1].Source
+	repo.bindings["source-1"] = []store.Binding{
+		{SourceID: "source-1", BindingID: "binding-1", ConnectorType: "feishu", AuthConnectionID: "auth-1", Status: BindingStatusActive},
+		{SourceID: "source-1", BindingID: "binding-2", ConnectorType: "feishu", AuthConnectionID: "auth-2", Status: BindingStatusActive},
+	}
+	repo.bindings["source-2"] = []store.Binding{
+		{SourceID: "source-2", BindingID: "binding-3", ConnectorType: "feishu", AuthConnectionID: "auth-1", Status: BindingStatusActive},
+		{SourceID: "source-2", BindingID: "binding-4", ConnectorType: "local_fs", AgentID: "agent-1", Status: BindingStatusActive},
+	}
+	authStatus := &sourceAuthStatusStub{
+		statuses: map[string]AuthConnectionStatus{
+			"auth-1": {ConnectionID: "auth-1", Status: "ACTIVE"},
+		},
+	}
+	engine := newTestSourceEngineWithScheduleAndAuthStatus(t, repo, &sourceCoreSpy{}, &sourceSpyConnector{}, sourceTestScheduleEngine{}, authStatus, now)
+
+	resp, err := engine.ListSources(context.Background(), ListSourcesRequest{CallerID: "user-1", TenantID: "tenant-1"})
+	if err != nil {
+		t.Fatalf("list sources: %v", err)
+	}
+	if authStatus.calls != 1 {
+		t.Fatalf("expected one batch auth status call, got %d", authStatus.calls)
+	}
+	if !reflect.DeepEqual(authStatus.lastReq.ConnectionIDs, []string{"auth-1", "auth-2"}) {
+		t.Fatalf("unexpected batch auth ids: %#v", authStatus.lastReq.ConnectionIDs)
+	}
+	if authStatus.lastReq.UserID != "" || authStatus.lastReq.TenantID != "tenant-1" {
+		t.Fatalf("auth status request did not carry caller scope: %+v", authStatus.lastReq)
+	}
+	if resp.Items[0].AuthConnectionStatus == nil || resp.Items[0].AuthConnectionStatus.Status != "REVOKED" {
+		t.Fatalf("source-1 should aggregate missing auth-2 as revoked: %+v", resp.Items[0].AuthConnectionStatus)
+	}
+	if !reflect.DeepEqual(resp.Items[0].AuthConnectionStatus.ConnectionIDs, []string{"auth-1", "auth-2"}) {
+		t.Fatalf("unexpected source-1 connection ids: %#v", resp.Items[0].AuthConnectionStatus.ConnectionIDs)
+	}
+	if resp.Items[1].AuthConnectionStatus == nil || resp.Items[1].AuthConnectionStatus.Status != "ACTIVE" {
+		t.Fatalf("source-2 should aggregate active auth: %+v", resp.Items[1].AuthConnectionStatus)
+	}
+}
+
 func TestCreateSourceIdempotencyReplaysSameRequestAndRejectsDrift(t *testing.T) {
 	t.Parallel()
 
@@ -1231,6 +1281,10 @@ func newTestSourceEngine(t *testing.T, repo *sourceEngineRepoStub, core *sourceC
 }
 
 func newTestSourceEngineWithSchedule(t *testing.T, repo *sourceEngineRepoStub, core *sourceCoreSpy, spy *sourceSpyConnector, scheduler ScheduleEngine, now time.Time) *DefaultEngine {
+	return newTestSourceEngineWithScheduleAndAuthStatus(t, repo, core, spy, scheduler, nil, now)
+}
+
+func newTestSourceEngineWithScheduleAndAuthStatus(t *testing.T, repo *sourceEngineRepoStub, core *sourceCoreSpy, spy *sourceSpyConnector, scheduler ScheduleEngine, authStatus AuthConnectionStatusClient, now time.Time) *DefaultEngine {
 	t.Helper()
 	registry, err := connector.NewDefaultConnectorRegistry(spy)
 	if err != nil {
@@ -1244,6 +1298,7 @@ func newTestSourceEngineWithSchedule(t *testing.T, repo *sourceEngineRepoStub, c
 		WithClock(func() time.Time { return now }),
 		WithIDGenerator(sourceTestIDGenerator()),
 		WithDefaultDatasetAlgo(coreclient.DatasetAlgo{AlgoID: "general_algo", DisplayName: "General"}),
+		WithAuthConnectionStatusClient(authStatus),
 	)
 }
 
@@ -1631,6 +1686,26 @@ func (r *sourceEngineRepoStub) ListBindings(_ context.Context, sourceID string) 
 	return append([]store.Binding(nil), r.bindings[sourceID]...), nil
 }
 
+func (r *sourceEngineRepoStub) ListBindingsBySourceIDs(_ context.Context, sourceIDs []string) ([]store.Binding, error) {
+	sourceSet := map[string]struct{}{}
+	for _, sourceID := range sourceIDs {
+		sourceSet[sourceID] = struct{}{}
+	}
+	out := []store.Binding{}
+	for sourceID, bindings := range r.bindings {
+		if _, ok := sourceSet[sourceID]; !ok {
+			continue
+		}
+		for _, binding := range bindings {
+			if binding.Status == BindingStatusDeleting {
+				continue
+			}
+			out = append(out, binding)
+		}
+	}
+	return out, nil
+}
+
 func (r *sourceEngineRepoStub) GetBinding(_ context.Context, sourceID, bindingID string) (store.Binding, error) {
 	for _, binding := range r.bindings[sourceID] {
 		if binding.BindingID == bindingID {
@@ -1638,6 +1713,26 @@ func (r *sourceEngineRepoStub) GetBinding(_ context.Context, sourceID, bindingID
 		}
 	}
 	return store.Binding{}, store.NewStoreError(store.ErrCodeBindingNotFound, "binding not found")
+}
+
+type sourceAuthStatusStub struct {
+	calls    int
+	lastReq  AuthConnectionStatusRequest
+	statuses map[string]AuthConnectionStatus
+	err      error
+}
+
+func (s *sourceAuthStatusStub) BatchStatus(_ context.Context, req AuthConnectionStatusRequest) (map[string]AuthConnectionStatus, error) {
+	s.calls++
+	s.lastReq = req
+	if s.err != nil {
+		return nil, s.err
+	}
+	out := make(map[string]AuthConnectionStatus, len(s.statuses))
+	for key, value := range s.statuses {
+		out[key] = value
+	}
+	return out, nil
 }
 
 func (r *sourceEngineRepoStub) GetObject(_ context.Context, sourceID, bindingID, objectKey string) (store.SourceObject, error) {
