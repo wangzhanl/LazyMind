@@ -40,6 +40,24 @@ func (e *DefaultTargetTreeEngine) searchCachedTargets(ctx context.Context, conn 
 	return page, nil
 }
 
+func (e *DefaultTargetTreeEngine) buildAndSearchCachedTargets(ctx context.Context, conn connector.SourceConnector, req TargetTreeSearchRequest) (TreeNodePage, error) {
+	pageSize := normalizePageSize(req.PageSize, e.limitForConnector(conn.Spec()))
+	snapshot := e.cache.buildIfUnlocked(ctx, conn, req, e.buildTargetSearchCache)
+	if snapshot.status == targetSearchCacheStatusFailed && strings.TrimSpace(snapshot.lastError) != "" {
+		return TreeNodePage{}, NewError(ErrCodeInternal, "target search cache build failed: "+snapshot.lastError)
+	}
+	page, err := paginateCachedTargetNodes(snapshot.nodes, req.Keyword, req.IncludeFiles, pageSize, req.Cursor)
+	if err != nil {
+		return TreeNodePage{}, err
+	}
+	page.CacheStatus = snapshot.status
+	page.CacheBuilding = snapshot.building
+	page.CacheComplete = snapshot.complete
+	page.Truncated = snapshot.truncated
+	page.CacheError = snapshot.lastError
+	return page, nil
+}
+
 func (e *DefaultTargetTreeEngine) Prewarm(ctx context.Context, req TargetTreeSearchRequest) error {
 	conn, err := e.registry.Get(req.ConnectorType)
 	if err != nil {
@@ -56,16 +74,17 @@ func (e *DefaultTargetTreeEngine) Prewarm(ctx context.Context, req TargetTreeSea
 }
 
 func (e *DefaultTargetTreeEngine) buildTargetSearchCache(ctx context.Context, conn connector.SourceConnector, req TargetTreeSearchRequest) ([]TreeNode, bool, error) {
-	queue := []targetCacheListScope{{}}
+	queue := initialTargetCacheQueue(req)
 	seenScopes := map[string]struct{}{}
 	seenNodes := map[string]struct{}{}
 	nodes := make([]TreeNode, 0)
 	truncated := false
 	pageSize := e.limitForConnector(conn.Spec()).MaxPageSize
 	listCalls := 0
+	listDelay := targetSearchCacheListDelay(req, e.cache.delay)
 	startedAt := time.Now()
 	nextProgressLog := startedAt.Add(targetSearchCacheProgressLog)
-	fmt.Fprintf(os.Stdout, "target search cache build start connector=%s auth_connection_id=%s page_size=%d max_items=%d delay=%s\n", req.ConnectorType, req.AuthConnectionID, pageSize, e.cache.maxItems, e.cache.delay)
+	fmt.Fprintf(os.Stdout, "target search cache build start connector=%s auth_connection_id=%s page_size=%d max_items=%d delay=%s\n", req.ConnectorType, req.AuthConnectionID, pageSize, e.cache.maxItems, listDelay)
 	for len(queue) > 0 {
 		if err := ctx.Err(); err != nil {
 			return nodes, truncated, err
@@ -79,8 +98,8 @@ func (e *DefaultTargetTreeEngine) buildTargetSearchCache(ctx context.Context, co
 		seenScopes[scopeKey] = struct{}{}
 		cursor := ""
 		for {
-			if listCalls > 0 && e.cache.delay > 0 {
-				if err := sleepTargetCache(ctx, e.cache.delay); err != nil {
+			if listCalls > 0 && listDelay > 0 {
+				if err := sleepTargetCache(ctx, listDelay); err != nil {
 					return nodes, truncated, err
 				}
 			}
@@ -140,6 +159,24 @@ func (e *DefaultTargetTreeEngine) buildTargetSearchCache(ctx context.Context, co
 		}
 	}
 	return nodes, truncated, nil
+}
+
+func initialTargetCacheQueue(req TargetTreeSearchRequest) []targetCacheListScope {
+	if targetSearchHasCurrentLevel(req) {
+		return []targetCacheListScope{{
+			targetType: req.TargetType,
+			targetRef:  req.TargetRef,
+			nodeRef:    req.NodeRef,
+		}}
+	}
+	return []targetCacheListScope{{}}
+}
+
+func targetSearchCacheListDelay(req TargetTreeSearchRequest, delay time.Duration) time.Duration {
+	if strings.EqualFold(strings.TrimSpace(string(req.ConnectorType)), "feishu") {
+		return delay
+	}
+	return 0
 }
 
 func listTargetCacheChildrenWithRetry(ctx context.Context, conn connector.SourceConnector, req connector.ListChildrenRequest) (connector.RawObjectPage, error) {

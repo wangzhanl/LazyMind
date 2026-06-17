@@ -196,6 +196,82 @@ func TestTargetTreeSearchRespectsIncludeFiles(t *testing.T) {
 	}
 }
 
+func TestLocalFSTargetSearchWithCurrentLevelBuildsRecursiveCache(t *testing.T) {
+	t.Parallel()
+
+	spy := &treeConnectorSpy{
+		connectorType:  connector.ConnectorType("local_fs"),
+		supportsSearch: true,
+		childrenByNodeRef: map[string][]connector.RawObject{
+			"/workspace/docs": {
+				rawTreeObject("/workspace/docs/guides", "", "Guides", false, true),
+				rawTreeObject("/workspace/docs/readme.md", "", "Readme.md", true, false),
+			},
+			"/workspace/docs/guides": {
+				rawTreeObject("/workspace/docs/guides/test-plan.md", "/workspace/docs/guides", "test-plan.md", true, false),
+			},
+		},
+	}
+	registry, err := connector.NewDefaultConnectorRegistry(spy)
+	if err != nil {
+		t.Fatalf("create registry: %v", err)
+	}
+	engine := NewDefaultTargetTreeEngine(registry)
+	engine.cache.delay = time.Hour
+
+	page, err := engine.Search(context.Background(), TargetTreeSearchRequest{
+		ConnectorType: connector.ConnectorType("local_fs"),
+		TargetType:    connector.TargetType("local_path"),
+		TargetRef:     "/workspace/docs",
+		Keyword:       "test",
+		PageSize:      10,
+		IncludeFiles:  true,
+	})
+	if err != nil {
+		t.Fatalf("search local recursive cache: %v", err)
+	}
+	if page.SearchMode != SearchModeCache || page.CacheStatus != targetSearchCacheStatusComplete || !page.CacheComplete {
+		t.Fatalf("local current-level search should build and read cache, got %+v", page)
+	}
+	if len(page.Items) != 1 || page.Items[0].ObjectKey != "/workspace/docs/guides/test-plan.md" {
+		t.Fatalf("local recursive search should find nested match, got %+v", page.Items)
+	}
+	if len(spy.searchRequests) != 0 || len(spy.listRequests) != 2 {
+		t.Fatalf("local recursive search should list subtree without connector search, searches=%d lists=%d", len(spy.searchRequests), len(spy.listRequests))
+	}
+}
+
+func TestLocalFSTargetSearchWithoutCurrentLevelUsesConnectorSearch(t *testing.T) {
+	t.Parallel()
+
+	spy := &treeConnectorSpy{
+		connectorType:  connector.ConnectorType("local_fs"),
+		supportsSearch: true,
+	}
+	registry, err := connector.NewDefaultConnectorRegistry(spy)
+	if err != nil {
+		t.Fatalf("create registry: %v", err)
+	}
+	engine := NewDefaultTargetTreeEngine(registry)
+
+	page, err := engine.Search(context.Background(), TargetTreeSearchRequest{
+		ConnectorType: connector.ConnectorType("local_fs"),
+		TargetType:    connector.TargetType("local_path"),
+		Keyword:       "welcome",
+		PageSize:      10,
+		IncludeFiles:  true,
+	})
+	if err != nil {
+		t.Fatalf("search local roots: %v", err)
+	}
+	if page.SearchMode != SearchModeConnector || len(page.Items) != 1 || page.Items[0].ObjectKey != "doc-1" {
+		t.Fatalf("local search without current level should use connector search, got %+v", page)
+	}
+	if len(spy.searchRequests) != 1 || len(spy.listRequests) != 0 {
+		t.Fatalf("local search without current level should not build recursive cache, searches=%d lists=%d", len(spy.searchRequests), len(spy.listRequests))
+	}
+}
+
 func TestTargetTreeSearchWithoutCurrentLevelUsesCache(t *testing.T) {
 	t.Parallel()
 
@@ -1362,17 +1438,18 @@ const (
 )
 
 type treeConnectorSpy struct {
-	connectorType  connector.ConnectorType
-	supportsSearch bool
-	childrenSet    bool
-	children       []connector.RawObject
-	listErr        error
-	repeatCursor   bool
-	fetchPage      connector.RawObjectPage
-	listRequests   []connector.ListChildrenRequest
-	fetchRequests  []connector.FetchPageRequest
-	searchRequests []connector.SearchRequest
-	mapObjects     []connector.RawObject
+	connectorType     connector.ConnectorType
+	supportsSearch    bool
+	childrenSet       bool
+	children          []connector.RawObject
+	childrenByNodeRef map[string][]connector.RawObject
+	listErr           error
+	repeatCursor      bool
+	fetchPage         connector.RawObjectPage
+	listRequests      []connector.ListChildrenRequest
+	fetchRequests     []connector.FetchPageRequest
+	searchRequests    []connector.SearchRequest
+	mapObjects        []connector.RawObject
 }
 
 func (c *treeConnectorSpy) Spec() connector.ConnectorSpec {
@@ -1405,8 +1482,8 @@ func (c *treeConnectorSpy) ListChildren(_ context.Context, req connector.ListChi
 			NextCursor: "cursor-1",
 		}, nil
 	}
-	items := c.children
-	if !c.childrenSet && len(items) == 0 {
+	items, hasNodeChildren := c.childrenForListRequest(req)
+	if !hasNodeChildren && !c.childrenSet && len(items) == 0 {
 		items = []connector.RawObject{
 			rawTreeObject("folder-1", "", "Guides", false, true),
 			rawTreeObject("doc-1", "", "Welcome.md", true, false),
@@ -1427,6 +1504,18 @@ func (c *treeConnectorSpy) ListChildren(_ context.Context, req connector.ListChi
 		page.NextCursor = "2"
 	}
 	return page, nil
+}
+
+func (c *treeConnectorSpy) childrenForListRequest(req connector.ListChildrenRequest) ([]connector.RawObject, bool) {
+	if c.childrenByNodeRef == nil {
+		return c.children, false
+	}
+	key := strings.TrimSpace(req.NodeRef)
+	if key == "" {
+		key = strings.TrimSpace(req.TargetRef)
+	}
+	items, ok := c.childrenByNodeRef[key]
+	return items, ok
 }
 
 func (c *treeConnectorSpy) Search(_ context.Context, req connector.SearchRequest) (connector.RawObjectPage, error) {

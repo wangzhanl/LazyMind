@@ -221,6 +221,9 @@ func targetSearchCacheKey(req TargetTreeSearchRequest) string {
 		req.AuthConnectionID,
 		stableTargetSearchCacheProviderOptions(req.ConnectorType, req.ProviderOptions),
 	}
+	if targetSearchHasCurrentLevel(req) {
+		parts = append(parts, string(req.TargetType), req.TargetRef, req.NodeRef)
+	}
 	return strings.Join(parts, "\x00")
 }
 
