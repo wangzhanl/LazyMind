@@ -439,8 +439,9 @@ type targetCacheConnectionLister interface {
 }
 
 type targetTreeCachePrewarmer struct {
-	auth   targetCacheConnectionLister
-	engine *tree.DefaultTargetTreeEngine
+	auth    targetCacheConnectionLister
+	engine  *tree.DefaultTargetTreeEngine
+	stagger time.Duration
 }
 
 func buildTargetSearchCachePrewarmer(built Components, cfg config.Config) (*targetTreeCachePrewarmer, error) {
@@ -458,8 +459,9 @@ func buildTargetSearchCachePrewarmer(built Components, cfg config.Config) (*targ
 	options := []tree.TargetTreeOption{tree.WithTargetTreeLimits(tree.TreeQueryLimits{DefaultPageSize: 50, MaxPageSize: 100, MaxAllCurrentLevelItems: 1000})}
 	options = append(options, built.TargetTreeOptions...)
 	return &targetTreeCachePrewarmer{
-		auth:   auth,
-		engine: tree.NewDefaultTargetTreeEngine(registry, options...),
+		auth:    auth,
+		engine:  tree.NewDefaultTargetTreeEngine(registry, options...),
+		stagger: cfg.TargetSearchCachePrewarmStagger,
 	}, nil
 }
 
@@ -474,6 +476,7 @@ func (p *targetTreeCachePrewarmer) RunOnce(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	started := 0
 	for _, item := range connections {
 		if err := ctx.Err(); err != nil {
 			return err
@@ -481,7 +484,18 @@ func (p *targetTreeCachePrewarmer) RunOnce(ctx context.Context) error {
 		if strings.TrimSpace(item.ConnectionID) == "" || strings.ToUpper(strings.TrimSpace(item.Status)) != "ACTIVE" {
 			continue
 		}
+		if started > 0 && p.stagger > 0 {
+			if err := sleepTargetCachePrewarm(ctx, p.stagger); err != nil {
+				return err
+			}
+		}
 		options := map[string]any{}
+		if userID := strings.TrimSpace(item.OwnerUserID); userID != "" {
+			options["user_id"] = userID
+		}
+		if tenantID := strings.TrimSpace(item.TenantID); tenantID != "" {
+			options["tenant_id"] = tenantID
+		}
 		if tenantKey := strings.TrimSpace(item.ProviderTenantKey); tenantKey != "" {
 			options["tenant_key"] = tenantKey
 		}
@@ -490,8 +504,20 @@ func (p *targetTreeCachePrewarmer) RunOnce(ctx context.Context) error {
 			AuthConnectionID: item.ConnectionID,
 			ProviderOptions:  options,
 		})
+		started++
 	}
 	return nil
+}
+
+func sleepTargetCachePrewarm(ctx context.Context, delay time.Duration) error {
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
 }
 
 func buildParseWorkerRunner(built Components, cfg config.Config) (*worker.Runner, error) {

@@ -115,6 +115,48 @@ func TestOpenAPISpecIncludesEvalReportResultSchema(t *testing.T) {
 	}
 }
 
+func TestOpenAPISpecDocumentsFeedbackCancellation(t *testing.T) {
+	r := mux.NewRouter()
+	registerCoreRoutes(r)
+
+	specJSON, err := buildOpenAPISpecFromRouter(r)
+	if err != nil {
+		t.Fatalf("build openapi spec: %v", err)
+	}
+
+	var spec map[string]any
+	if err := json.Unmarshal(specJSON, &spec); err != nil {
+		t.Fatalf("decode openapi spec: %v", err)
+	}
+	op := openAPIOperationForTest(t, spec, "post", "/api/core/conversations:feedBackChatHistory")
+	requestBody, ok := op["requestBody"].(map[string]any)
+	if !ok {
+		t.Fatalf("requestBody missing")
+	}
+	content := requestBody["content"].(map[string]any)
+	jsonContent := content["application/json"].(map[string]any)
+	schema := jsonContent["schema"].(map[string]any)
+	ref, _ := schema["$ref"].(string)
+	if ref != "#/components/schemas/ConversationFeedbackRequest" {
+		t.Fatalf("unexpected feedback request ref: %q", ref)
+	}
+
+	schemas := spec["components"].(map[string]any)["schemas"].(map[string]any)
+	props := schemaPropertiesForTest(t, schemas, "ConversationFeedbackRequest")
+	typeSchema, ok := props["type"].(map[string]any)
+	if !ok {
+		t.Fatalf("feedback type schema missing")
+	}
+	description, _ := typeSchema["description"].(string)
+	if !strings.Contains(description, "FEED_BACK_TYPE_UNSPECIFIED") || !strings.Contains(description, "cancels feedback") {
+		t.Fatalf("feedback type description does not document cancellation: %q", description)
+	}
+	oneOf, ok := typeSchema["oneOf"].([]any)
+	if !ok || len(oneOf) != 2 {
+		t.Fatalf("feedback type should document numeric and string forms, got %#v", typeSchema["oneOf"])
+	}
+}
+
 func openAPIOperationForTest(t *testing.T, spec map[string]any, method, path string) map[string]any {
 	t.Helper()
 	paths, ok := spec["paths"].(map[string]any)

@@ -29,6 +29,7 @@ type Config struct {
 	TempDir                           string
 	TempTTL                           time.Duration
 	TargetSearchCachePrewarmInterval  time.Duration
+	TargetSearchCachePrewarmStagger   time.Duration
 	WorkerLeaseTTL                    time.Duration
 	WorkerMaxBackoff                  time.Duration
 	ParseDeadLetterAfter              int64
@@ -59,6 +60,7 @@ func defaultConfig() Config {
 		TempDir:                           filepath.Join(os.TempDir(), "scan-control-plane", "sourceengine"),
 		TempTTL:                           24 * time.Hour,
 		TargetSearchCachePrewarmInterval:  time.Minute,
+		TargetSearchCachePrewarmStagger:   10 * time.Second,
 		WorkerLeaseTTL:                    60 * time.Second,
 		WorkerMaxBackoff:                  10 * time.Minute,
 		ParseDeadLetterAfter:              3,
@@ -129,6 +131,7 @@ func (c *Config) applyEnv() {
 	}
 	c.TempTTL = durationEnv("SOURCEENGINE_TEMP_TTL", c.TempTTL)
 	c.TargetSearchCachePrewarmInterval = durationEnv("SOURCEENGINE_TARGET_SEARCH_CACHE_PREWARM_INTERVAL", c.TargetSearchCachePrewarmInterval)
+	c.TargetSearchCachePrewarmStagger = durationEnv("SOURCEENGINE_TARGET_SEARCH_CACHE_PREWARM_STAGGER", c.TargetSearchCachePrewarmStagger)
 	c.WorkerLeaseTTL = durationEnv("SOURCEENGINE_WORKER_LEASE_TTL", c.WorkerLeaseTTL)
 	c.WorkerMaxBackoff = durationEnv("SOURCEENGINE_WORKER_MAX_BACKOFF", c.WorkerMaxBackoff)
 	c.ParseDeadLetterAfter = int64Env("SOURCEENGINE_PARSE_DEAD_LETTER_AFTER", c.ParseDeadLetterAfter)
@@ -182,6 +185,9 @@ func (c Config) Validate() error {
 	}
 	if c.TargetSearchCachePrewarmInterval < 0 {
 		return fmt.Errorf("target search cache prewarm interval must be positive")
+	}
+	if c.TargetSearchCachePrewarmStagger < 0 {
+		return fmt.Errorf("target search cache prewarm stagger must be positive")
 	}
 	if c.WorkerLeaseTTL <= 0 {
 		return fmt.Errorf("worker lease ttl must be positive")

@@ -2,9 +2,15 @@ package tree
 
 import (
 	"context"
+	"strings"
 	"time"
 
 	"github.com/lazymind/scan_control_plane/internal/sourceengine/connector"
+)
+
+const (
+	targetSearchCacheListRetries = 4
+	targetSearchCacheRetryDelay  = 2 * time.Second
 )
 
 type targetCacheListScope struct {
@@ -69,7 +75,7 @@ func (e *DefaultTargetTreeEngine) buildTargetSearchCache(ctx context.Context, co
 				}
 			}
 			listCalls++
-			rawPage, err := conn.ListChildren(ctx, connector.ListChildrenRequest{
+			rawPage, err := listTargetCacheChildrenWithRetry(ctx, conn, connector.ListChildrenRequest{
 				TargetType:       scope.targetType,
 				TargetRef:        scope.targetRef,
 				NodeRef:          scope.nodeRef,
@@ -115,6 +121,35 @@ func (e *DefaultTargetTreeEngine) buildTargetSearchCache(ctx context.Context, co
 		}
 	}
 	return nodes, truncated, nil
+}
+
+func listTargetCacheChildrenWithRetry(ctx context.Context, conn connector.SourceConnector, req connector.ListChildrenRequest) (connector.RawObjectPage, error) {
+	var lastErr error
+	for attempt := 0; attempt <= targetSearchCacheListRetries; attempt++ {
+		page, err := conn.ListChildren(ctx, req)
+		if err == nil {
+			return page, nil
+		}
+		lastErr = err
+		if attempt == targetSearchCacheListRetries || !isTargetCacheRetriableListError(err) {
+			return connector.RawObjectPage{}, err
+		}
+		delay := targetSearchCacheRetryDelay << attempt
+		if err := sleepTargetCache(ctx, delay); err != nil {
+			return connector.RawObjectPage{}, err
+		}
+	}
+	return connector.RawObjectPage{}, lastErr
+}
+
+func isTargetCacheRetriableListError(err error) bool {
+	code, ok := connector.ErrorCodeOf(err)
+	if ok && code == connector.ErrorCodeRateLimited {
+		return true
+	}
+	message := strings.ToLower(err.Error())
+	return strings.Contains(message, "request trigger frequency limit") ||
+		strings.Contains(message, "rate_limited")
 }
 
 func targetCacheChildScope(raw connector.RawObject, parent targetCacheListScope) targetCacheListScope {

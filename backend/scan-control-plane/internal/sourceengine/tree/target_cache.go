@@ -17,7 +17,7 @@ import (
 const (
 	targetSearchCacheTTL        = 10 * time.Minute
 	targetSearchCacheMaxObjects = 5000
-	targetSearchCachePageDelay  = 200 * time.Millisecond
+	targetSearchCachePageDelay  = time.Second
 )
 
 type targetSearchCache struct {
@@ -143,9 +143,28 @@ func targetSearchCacheKey(req TargetTreeSearchRequest) string {
 		string(req.ConnectorType),
 		req.AgentID,
 		req.AuthConnectionID,
-		stableProviderOptions(req.ProviderOptions),
+		stableTargetSearchCacheProviderOptions(req.ConnectorType, req.ProviderOptions),
 	}
 	return strings.Join(parts, "\x00")
+}
+
+func stableTargetSearchCacheProviderOptions(connectorType connector.ConnectorType, options map[string]any) string {
+	if connectorType != "feishu" {
+		return stableProviderOptions(options)
+	}
+	if len(options) == 0 {
+		return ""
+	}
+	filtered := make(map[string]any, len(options))
+	for key, value := range options {
+		switch key {
+		case "tenant_key", "tenant_id", "user_id":
+			continue
+		default:
+			filtered[key] = value
+		}
+	}
+	return stableProviderOptions(filtered)
 }
 
 func targetSearchCacheRedisKey(key string) string {
