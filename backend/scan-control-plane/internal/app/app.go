@@ -480,6 +480,7 @@ func (p *targetTreeCachePrewarmer) RunOnce(ctx context.Context) error {
 	if p == nil || p.auth == nil || p.engine == nil {
 		return nil
 	}
+	roundStartedAt := time.Now()
 	connections, err := p.auth.ListTargetCacheConnections(ctx, feishu.ConnectionListRequest{
 		Provider: string(feishu.ConnectorType),
 		Limit:    100,
@@ -524,6 +525,7 @@ func (p *targetTreeCachePrewarmer) RunOnce(ctx context.Context) error {
 		}
 		started++
 	}
+	fmt.Fprintf(os.Stdout, "target search cache prewarm round finish candidates=%d started=%d elapsed=%s\n", len(connections), started, time.Since(roundStartedAt).Truncate(time.Millisecond))
 	return nil
 }
 
@@ -688,7 +690,12 @@ func (r *Runtime) Start(ctx context.Context) {
 	}
 	if r.targetCachePrewarmer != nil {
 		r.startLoop(ctx, &wg, r.targetCacheInterval, func(ctx context.Context) {
-			_ = r.targetCachePrewarmer.RunOnce(ctx)
+			startedAt := time.Now()
+			if err := r.targetCachePrewarmer.RunOnce(ctx); err != nil {
+				fmt.Fprintf(os.Stdout, "target search cache prewarm loop finish status=error elapsed=%s next_interval=%s error=%v\n", time.Since(startedAt).Truncate(time.Millisecond), r.targetCacheInterval, err)
+				return
+			}
+			fmt.Fprintf(os.Stdout, "target search cache prewarm loop finish status=ok elapsed=%s next_interval=%s\n", time.Since(startedAt).Truncate(time.Millisecond), r.targetCacheInterval)
 		})
 	}
 	go func() {

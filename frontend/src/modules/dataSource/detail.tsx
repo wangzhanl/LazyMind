@@ -708,7 +708,6 @@ export default function DataSourceDetail() {
         );
         const documentsResponse = await client.listSourceDocuments({
           sourceId: id,
-          bindingId: getScanBindingId(binding) || routeSource?.bindingId,
           page: 1,
           pageSize: 200,
         });
