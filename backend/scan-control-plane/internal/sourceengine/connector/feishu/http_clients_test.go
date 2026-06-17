@@ -147,6 +147,44 @@ func TestHTTPAuthConnectionClientListTargetCacheConnections(t *testing.T) {
 	}
 }
 
+func TestOpenAPIPagesRespectExplicitHasMoreFalse(t *testing.T) {
+	t.Parallel()
+
+	hasMore := false
+	drive := driveObjectPage(openAPIDriveFiles{
+		Files: []map[string]any{
+			{"type": "file", "token": "file-1", "name": "File"},
+		},
+		PageToken: "echoed-token",
+		HasMore:   &hasMore,
+	}, "root")
+	if drive.HasMore {
+		t.Fatalf("drive page should respect explicit has_more=false: %+v", drive)
+	}
+
+	spaces := wikiSpacesPage(openAPIWikiSpaces{
+		Items: []map[string]any{
+			{"space_id": "space-1", "name": "Space"},
+		},
+		PageToken: "echoed-token",
+		HasMore:   &hasMore,
+	})
+	if spaces.HasMore {
+		t.Fatalf("wiki spaces page should respect explicit has_more=false: %+v", spaces)
+	}
+
+	nodes := wikiNodesPage(openAPIWikiNodes{
+		Items: []map[string]any{
+			{"node_token": "node-1", "title": "Node"},
+		},
+		PageToken: "echoed-token",
+		HasMore:   &hasMore,
+	}, "space-1", "")
+	if nodes.HasMore {
+		t.Fatalf("wiki nodes page should respect explicit has_more=false: %+v", nodes)
+	}
+}
+
 func TestHTTPAuthConnectionClientMapsExpiredToken(t *testing.T) {
 	t.Parallel()
 

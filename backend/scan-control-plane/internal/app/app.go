@@ -511,12 +511,16 @@ func (p *targetTreeCachePrewarmer) RunOnce(ctx context.Context) error {
 		if tenantKey := strings.TrimSpace(item.ProviderTenantKey); tenantKey != "" {
 			options["tenant_key"] = tenantKey
 		}
+		startedAt := time.Now()
+		fmt.Fprintf(os.Stdout, "target search cache prewarm start connection=%s owner_user_id=%s tenant_id=%s tenant_key=%s index=%d\n", item.ConnectionID, item.OwnerUserID, item.TenantID, item.ProviderTenantKey, started+1)
 		if err := p.engine.Prewarm(ctx, tree.TargetTreeSearchRequest{
 			ConnectorType:    feishu.ConnectorType,
 			AuthConnectionID: item.ConnectionID,
 			ProviderOptions:  options,
 		}); err != nil {
-			fmt.Fprintf(os.Stdout, "target search cache prewarm connection=%s error=%v\n", item.ConnectionID, err)
+			fmt.Fprintf(os.Stdout, "target search cache prewarm finish connection=%s status=error elapsed=%s error=%v\n", item.ConnectionID, time.Since(startedAt).Truncate(time.Millisecond), err)
+		} else {
+			fmt.Fprintf(os.Stdout, "target search cache prewarm finish connection=%s status=ok elapsed=%s\n", item.ConnectionID, time.Since(startedAt).Truncate(time.Millisecond))
 		}
 		started++
 	}

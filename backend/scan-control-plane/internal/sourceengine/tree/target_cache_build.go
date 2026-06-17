@@ -2,6 +2,8 @@ package tree
 
 import (
 	"context"
+	"fmt"
+	"os"
 	"strings"
 	"time"
 
@@ -11,6 +13,7 @@ import (
 const (
 	targetSearchCacheListRetries = 4
 	targetSearchCacheRetryDelay  = 2 * time.Second
+	targetSearchCacheProgressLog = 30 * time.Second
 )
 
 type targetCacheListScope struct {
@@ -60,6 +63,9 @@ func (e *DefaultTargetTreeEngine) buildTargetSearchCache(ctx context.Context, co
 	truncated := false
 	pageSize := e.limitForConnector(conn.Spec()).MaxPageSize
 	listCalls := 0
+	startedAt := time.Now()
+	nextProgressLog := startedAt.Add(targetSearchCacheProgressLog)
+	fmt.Fprintf(os.Stdout, "target search cache build start connector=%s auth_connection_id=%s page_size=%d max_items=%d delay=%s\n", req.ConnectorType, req.AuthConnectionID, pageSize, e.cache.maxItems, e.cache.delay)
 	for len(queue) > 0 {
 		if err := ctx.Err(); err != nil {
 			return nodes, truncated, err
@@ -93,6 +99,10 @@ func (e *DefaultTargetTreeEngine) buildTargetSearchCache(ctx context.Context, co
 			if err != nil {
 				return nodes, truncated, mapConnectorError(err)
 			}
+			if time.Now().After(nextProgressLog) {
+				fmt.Fprintf(os.Stdout, "target search cache build progress connector=%s auth_connection_id=%s list_calls=%d nodes=%d queue=%d scopes=%d target_type=%s target_ref=%q node_ref=%q cursor=%q has_more=%t next_cursor=%q elapsed=%s\n", req.ConnectorType, req.AuthConnectionID, listCalls, len(nodes), len(queue), len(seenScopes), scope.targetType, scope.targetRef, scope.nodeRef, cursor, rawPage.HasMore, rawPage.NextCursor, time.Since(startedAt).Truncate(time.Second))
+				nextProgressLog = time.Now().Add(targetSearchCacheProgressLog)
+			}
 			for _, raw := range rawPage.Items {
 				normalized, err := conn.MapObject(ctx, raw)
 				if err != nil {
@@ -119,7 +129,12 @@ func (e *DefaultTargetTreeEngine) buildTargetSearchCache(ctx context.Context, co
 				break
 			}
 			if rawPage.NextCursor == "" {
+				fmt.Fprintf(os.Stdout, "target search cache build pagination_error connector=%s auth_connection_id=%s reason=empty_cursor list_calls=%d nodes=%d target_type=%s target_ref=%q node_ref=%q cursor=%q elapsed=%s\n", req.ConnectorType, req.AuthConnectionID, listCalls, len(nodes), scope.targetType, scope.targetRef, scope.nodeRef, cursor, time.Since(startedAt).Truncate(time.Second))
 				return nodes, truncated, NewError(ErrCodeInternal, "target cache pagination cursor is empty")
+			}
+			if rawPage.NextCursor == cursor {
+				fmt.Fprintf(os.Stdout, "target search cache build pagination_error connector=%s auth_connection_id=%s reason=cursor_not_advanced list_calls=%d nodes=%d target_type=%s target_ref=%q node_ref=%q cursor=%q elapsed=%s\n", req.ConnectorType, req.AuthConnectionID, listCalls, len(nodes), scope.targetType, scope.targetRef, scope.nodeRef, cursor, time.Since(startedAt).Truncate(time.Second))
+				return nodes, truncated, NewError(ErrCodeInternal, "target cache pagination cursor did not advance")
 			}
 			cursor = rawPage.NextCursor
 		}
@@ -139,6 +154,7 @@ func listTargetCacheChildrenWithRetry(ctx context.Context, conn connector.Source
 			return connector.RawObjectPage{}, err
 		}
 		delay := targetSearchCacheRetryDelay << attempt
+		fmt.Fprintf(os.Stdout, "target search cache list retry auth_connection_id=%s attempt=%d delay=%s target_type=%s target_ref=%q node_ref=%q cursor=%q error=%q\n", req.AuthConnectionID, attempt+1, delay, req.TargetType, req.TargetRef, req.NodeRef, req.Cursor, err.Error())
 		if err := sleepTargetCache(ctx, delay); err != nil {
 			return connector.RawObjectPage{}, err
 		}

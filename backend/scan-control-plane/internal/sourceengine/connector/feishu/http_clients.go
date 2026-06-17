@@ -412,6 +412,7 @@ type openAPIDriveFiles struct {
 	Files         []map[string]any `json:"files"`
 	NextPageToken string           `json:"next_page_token"`
 	PageToken     string           `json:"page_token"`
+	HasMore       *bool            `json:"has_more"`
 }
 
 type openAPIWikiSpaces struct {
@@ -419,7 +420,7 @@ type openAPIWikiSpaces struct {
 	Spaces        []map[string]any `json:"spaces"`
 	NextPageToken string           `json:"next_page_token"`
 	PageToken     string           `json:"page_token"`
-	HasMore       bool             `json:"has_more"`
+	HasMore       *bool            `json:"has_more"`
 }
 
 type openAPIWikiNodes struct {
@@ -427,7 +428,7 @@ type openAPIWikiNodes struct {
 	Nodes         []map[string]any `json:"nodes"`
 	NextPageToken string           `json:"next_page_token"`
 	PageToken     string           `json:"page_token"`
-	HasMore       bool             `json:"has_more"`
+	HasMore       *bool            `json:"has_more"`
 }
 
 func doFeishuOpenAPIJSON(ctx context.Context, client *http.Client, url, method, token string, in any, out any) error {
@@ -583,10 +584,11 @@ func driveObjectPage(data openAPIDriveFiles, parentToken string) ObjectPage {
 	for _, item := range data.Files {
 		items = append(items, driveObject(item, parentToken))
 	}
+	next := firstNonEmpty(data.NextPageToken, data.PageToken)
 	return ObjectPage{
 		Items:      items,
-		NextCursor: firstNonEmpty(data.NextPageToken, data.PageToken),
-		HasMore:    firstNonEmpty(data.NextPageToken, data.PageToken) != "",
+		NextCursor: next,
+		HasMore:    openAPIHasMore(data.HasMore, next),
 	}
 }
 
@@ -660,7 +662,7 @@ func wikiSpacesPage(data openAPIWikiSpaces) ObjectPage {
 		})
 	}
 	next := firstNonEmpty(data.NextPageToken, data.PageToken)
-	return ObjectPage{Items: items, NextCursor: next, HasMore: data.HasMore || next != ""}
+	return ObjectPage{Items: items, NextCursor: next, HasMore: openAPIHasMore(data.HasMore, next)}
 }
 
 func wikiNodesPage(data openAPIWikiNodes, spaceID, parentNodeToken string) ObjectPage {
@@ -673,7 +675,14 @@ func wikiNodesPage(data openAPIWikiNodes, spaceID, parentNodeToken string) Objec
 		items = append(items, wikiNodeObjectWithParent(node, spaceID, "", parentNodeToken))
 	}
 	next := firstNonEmpty(data.NextPageToken, data.PageToken)
-	return ObjectPage{Items: items, NextCursor: next, HasMore: data.HasMore || next != ""}
+	return ObjectPage{Items: items, NextCursor: next, HasMore: openAPIHasMore(data.HasMore, next)}
+}
+
+func openAPIHasMore(hasMore *bool, nextCursor string) bool {
+	if hasMore != nil {
+		return *hasMore
+	}
+	return strings.TrimSpace(nextCursor) != ""
 }
 
 func wikiNodeObject(node map[string]any, spaceID, fallbackToken string) Object {

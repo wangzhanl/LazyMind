@@ -2,6 +2,7 @@ package tree
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -329,6 +330,38 @@ func TestTargetTreeSearchCacheFailureIsReadableAndRetryable(t *testing.T) {
 	}
 	if page.CacheStatus != targetSearchCacheStatusComplete || !page.CacheComplete || len(page.Items) != 1 {
 		t.Fatalf("retry prewarm should replace failed state with complete cache, got %+v", page)
+	}
+}
+
+func TestTargetTreeSearchCacheFailsWhenPaginationCursorDoesNotAdvance(t *testing.T) {
+	t.Parallel()
+
+	spy := &treeConnectorSpy{
+		supportsSearch: true,
+		repeatCursor:   true,
+	}
+	registry, err := connector.NewDefaultConnectorRegistry(spy)
+	if err != nil {
+		t.Fatalf("create registry: %v", err)
+	}
+	engine := NewDefaultTargetTreeEngine(registry)
+	engine.cache.delay = 0
+
+	req := TargetTreeSearchRequest{
+		ConnectorType: treeTestConnectorType,
+		Keyword:       "welcome",
+		PageSize:      10,
+		IncludeFiles:  true,
+	}
+	if err := engine.Prewarm(context.Background(), req); err == nil {
+		t.Fatalf("prewarm should fail when pagination cursor does not advance")
+	}
+	page, err := engine.Search(context.Background(), req)
+	if err != nil {
+		t.Fatalf("cached search after pagination failure: %v", err)
+	}
+	if page.CacheStatus != targetSearchCacheStatusFailed || !strings.Contains(page.CacheError, "cursor did not advance") {
+		t.Fatalf("pagination failure should leave readable failed cache state, got %+v", page)
 	}
 }
 
@@ -1334,6 +1367,7 @@ type treeConnectorSpy struct {
 	childrenSet    bool
 	children       []connector.RawObject
 	listErr        error
+	repeatCursor   bool
 	fetchPage      connector.RawObjectPage
 	listRequests   []connector.ListChildrenRequest
 	fetchRequests  []connector.FetchPageRequest
@@ -1363,6 +1397,13 @@ func (c *treeConnectorSpy) ListChildren(_ context.Context, req connector.ListChi
 	c.listRequests = append(c.listRequests, req)
 	if c.listErr != nil {
 		return connector.RawObjectPage{}, c.listErr
+	}
+	if c.repeatCursor {
+		return connector.RawObjectPage{
+			Items:      []connector.RawObject{rawTreeObject("doc-1", "", "Welcome.md", true, false)},
+			HasMore:    true,
+			NextCursor: "cursor-1",
+		}, nil
 	}
 	items := c.children
 	if !c.childrenSet && len(items) == 0 {

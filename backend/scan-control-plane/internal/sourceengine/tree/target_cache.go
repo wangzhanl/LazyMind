@@ -138,7 +138,7 @@ func (c *targetSearchCache) build(ctx context.Context, key string, conn connecto
 			persistErr = err.Error()
 		}
 	}
-	fmt.Fprintf(os.Stdout, "target search cache build status=%s nodes=%d truncated=%t error=%q persist_error=%q\n", snapshot.status, len(snapshot.nodes), snapshot.truncated, snapshot.lastError, persistErr)
+	fmt.Fprintf(os.Stdout, "target search cache build status=%s connector=%s auth_connection_id=%s nodes=%d truncated=%t error=%q persist_error=%q\n", snapshot.status, req.ConnectorType, req.AuthConnectionID, len(snapshot.nodes), snapshot.truncated, snapshot.lastError, persistErr)
 	return snapshot
 }
 
@@ -149,6 +149,7 @@ func (c *targetSearchCache) buildIfUnlocked(ctx context.Context, conn connector.
 	key := targetSearchCacheKey(req)
 	if c.store != nil {
 		if snapshot, ok, err := c.store.Get(ctx, key); err == nil && ok && snapshot.complete {
+			fmt.Fprintf(os.Stdout, "target search cache prewarm skip connector=%s auth_connection_id=%s status=%s nodes=%d truncated=%t\n", req.ConnectorType, req.AuthConnectionID, snapshot.status, len(snapshot.nodes), snapshot.truncated)
 			return snapshot
 		}
 		locked, err := c.store.TryLock(ctx, key, c.lockTTL)
@@ -157,8 +158,10 @@ func (c *targetSearchCache) buildIfUnlocked(ctx context.Context, conn connector.
 		}
 		if !locked {
 			if snapshot, ok, err := c.store.Get(ctx, key); err == nil && ok {
+				fmt.Fprintf(os.Stdout, "target search cache prewarm locked connector=%s auth_connection_id=%s status=%s nodes=%d truncated=%t error=%q\n", req.ConnectorType, req.AuthConnectionID, snapshot.status, len(snapshot.nodes), snapshot.truncated, snapshot.lastError)
 				return snapshot
 			}
+			fmt.Fprintf(os.Stdout, "target search cache prewarm locked connector=%s auth_connection_id=%s status=%s\n", req.ConnectorType, req.AuthConnectionID, targetSearchCacheStatusBuilding)
 			return targetSearchCacheSnapshot{status: targetSearchCacheStatusBuilding, building: true}
 		}
 		return c.build(ctx, key, conn, req, build)
