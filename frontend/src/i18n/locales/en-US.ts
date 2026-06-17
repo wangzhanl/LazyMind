@@ -1206,6 +1206,9 @@ const enUS = {
     dataSourceTypeFeishu: "Feishu",
     dataSourceTypeLocalDesc: "Supports selecting multiple local paths and connection testing",
     dataSourceTypeFeishuDesc: "Set App ID / App Secret first, then connect via OAuth",
+    dataSourceTypeNotion: "Notion",
+    dataSourceTypeNotionDesc:
+      "Connect Notion pages or databases, sync by authorization scope and serve chat.",
     dataSourceTypeStepIntro:
       "Currently supports local directory and Feishu data source access. Select one to continue.",
     dataSourceAdminOnly: "Admin",
@@ -1233,6 +1236,38 @@ const enUS = {
     dataSourceFeishuNotReady: "Feishu data source setup is incomplete",
     dataSourceFeishuNotReadyDesc:
       "Go back to set App ID and App Secret, then continue to connect your Feishu account.",
+    dataSourceNotionLockHint: "Requires Client ID / Client Secret to be set before selecting Notion data source",
+    dataSourceNotionAuthReadyHint: "Credentials saved but not yet authorized. Click to update Client ID / Client Secret and reauthorize.",
+    dataSourceNotionAuthConnectedHint: "Currently authorized: {{account}}.",
+    dataSourceNotionCredentialModalTitle: "Configure Notion OAuth App",
+    dataSourceNotionCredentialSaveAndSelect: "Save and Authorize Notion",
+    dataSourceNotionCredentialHint:
+      "Go to Notion Developers to create a Public Integration, get OAuth Client ID and Client Secret; the Redirect URI must be set to /oauth/notion/data-source/callback.",
+    dataSourceNotionCredentialSaved: "Notion OAuth credentials saved",
+    dataSourceNotionCredentialReset: "Notion OAuth credentials disconnected",
+    dataSourceNotionResetCredentialAction: "Reset credentials",
+    dataSourceNotionCredentialResetConfirmTitle: "Reset Notion OAuth credentials?",
+    dataSourceNotionCredentialResetConfirmContent:
+      "This will clear the current Notion Client ID / Client Secret and OAuth connection state. You will need to configure them again before using Notion data sources.",
+    dataSourceNotionAuthRequired: "Please complete Notion authorization first.",
+    dataSourceNotionConnected: "Connected {{account}}",
+    dataSourceNotionSetupRequiredHint: "Please configure Notion OAuth app credentials first.",
+    dataSourceNotionAuthPendingHint: "Credentials saved. Click to complete Notion authorization.",
+    dataSourceNotionCredentialRequired:
+      "Please enter Notion OAuth Client ID and Client Secret.",
+    dataSourceNotionCredentialFirst:
+      "Please enter and save the Notion Client ID / Client Secret before reauthorizing.",
+    dataSourceNotionAuthWindowTitle: "Notion Authorization",
+    dataSourceNotionNotReady: "Notion data source setup is incomplete",
+    dataSourceNotionNotReadyDesc:
+      "Go back to set Client ID and Client Secret, then continue to connect your Notion account.",
+    dataSourceNotionTargetPlaceholder: "https://www.notion.so/... or Notion page/database id",
+    dataSourceNotionTargetRequired: "Please paste a Notion page/database link or ID.",
+    dataSourceNotionSourceCreationFailed: "Data source created but no source id returned. Cannot continue Notion binding configuration.",
+    dataSourceNotionSetupRequiredForCreate: "OAuth credentials must be configured before creating a Notion data source.",
+    dataSourceNotionTargetTypeLabel: "Notion target type",
+    dataSourceNotionTargetTypeRequired: "Please select Notion target type",
+    dataSourceNotionTargetLabel: "Notion page or database",
     dataSourceAppIdRequired: "Please enter App ID",
     dataSourceAppSecretRequired: "Please enter App Secret",
     dataSourceAppId: "App ID",
@@ -1255,6 +1290,7 @@ const enUS = {
     dataSourceFeishuSpace: "Feishu Space / Wiki ID",
     dataSourceFeishuSpaceRequired: "Please enter target space identifier",
     dataSourceFeishuSetupGuideAction: "Setup Guide",
+    dataSourceNotionSetupGuideAction: "Setup Guide",
     dataSourceFeishuTargetType: "Sync Target Type",
     dataSourceFeishuTargetTypeRequired: "Please select a Feishu sync target type",
     dataSourceFeishuTargetTypeWiki: "Wiki Space",
@@ -1341,8 +1377,8 @@ const enUS = {
     dataSourceTenantKey: "Tenant Key",
     dataSourceTokenSummary: "Token Summary",
     dataSourceGrantedScopes: "Granted Scopes",
-    dataSourceOauthSuccess: "Feishu OAuth succeeded. Account connection status updated.",
-    dataSourceOauthFailedRetry: "Feishu OAuth failed. Please try again later.",
+    dataSourceOauthSuccess: "OAuth succeeded. Account connection status updated.",
+    dataSourceOauthFailedRetry: "OAuth failed. Please try again later.",
     dataSourceOauthSessionMissing:
       "Authorization session expired. Please start Feishu OAuth again.",
     dataSourceOauthStateMismatch:

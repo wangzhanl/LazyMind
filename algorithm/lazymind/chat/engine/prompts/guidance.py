@@ -115,6 +115,16 @@ SEARCH_GUIDANCE = (
     "or `ArxivSearch`, do not "
     "fabricate `[[document.chunk]]`; instead, mention the source title or URL plainly.\n"
 )
+DOCUMENT_LINK_GUIDANCE = (
+    "# Cloud document link rules\n"
+    "When the user provides a Feishu/Lark document URL, use the Feishu file-system tools "
+    "to resolve the link and read the document before summarizing or analyzing it.\n"
+    "When the user provides a Notion URL (`notion.so`, `notion.site`, `notion.com`, or "
+    "`app.notion.com`), use the Notion file-system tools first. Prefer resolving the "
+    "link, then reading with references when the task asks for analysis, summary, or "
+    "linked-page context. Do not fall back to generic URL fetching for private Notion "
+    "pages unless Notion tools are unavailable or unauthorized."
+)
 WEB_SEARCH_GUIDANCE = (
     "# Web Search Tool Rules\n"
     "When using `web_search`, the `query` must represent one search intent. "

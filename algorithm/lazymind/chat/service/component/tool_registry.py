@@ -6,6 +6,7 @@ from typing import Any
 
 import docstring_parser
 from lazyllm.tools.fs.supplier.feishu import FeishuFS
+from lazyllm.tools.fs.supplier.notion import NotionFS
 from lazyllm.tools.tools.search import (
     ArxivSearch,
     BingSearch,
@@ -151,6 +152,12 @@ DEFAULT_TOOLS: list[ToolGroupConfig] = [
         label='飞书文件系统',
         description='浏览和管理飞书云文档',
         instance=FeishuFS(space_id='dynamic', dynamic_auth=True),
+    ),
+    ToolGroupConfig(
+        name='notion',
+        label='Notion 文件系统',
+        description='浏览、搜索和管理 Notion 页面',
+        instance=NotionFS(dynamic_auth=True),
     ),
 ]
 

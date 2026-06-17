@@ -556,7 +556,7 @@ func handleNonStreamChat(
 ) {
 	pyBody, _ := json.Marshal(reqBody)
 	upstreamURL := common.JoinURL(baseURL, "/api/chat")
-	fmt.Printf("DEBUG upstream request url=%s params=%+v\n", upstreamURL, reqBody)
+	fmt.Printf("DEBUG upstream request url=%s params=%s\n", upstreamURL, debugJSON(reqBody))
 	respBytes, statusCode, err := common.HTTPPost(reqCtx, upstreamURL, "application/json", pyBody)
 	if err != nil {
 		fmt.Println("DEBUG upstream request failed url=", upstreamURL, " err=", err)

@@ -507,6 +507,14 @@ export default function FeishuAccountPage() {
             return;
           }
 
+          // Fallback: postMessage may not have been processed yet —
+          // check sessionStorage for OAuth result saved synchronously by callback page.
+          const storedFallback = consumeFeishuDataSourceOAuthResult();
+          if (storedFallback) {
+            applyOauthResult(storedFallback);
+            return;
+          }
+
           restorePreviousOauthState(t("admin.dataSourceOauthWindowClosed"));
         }, 400);
 
