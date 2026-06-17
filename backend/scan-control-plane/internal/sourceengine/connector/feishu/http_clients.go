@@ -186,10 +186,24 @@ func (c *HTTPAuthConnectionClient) doAuthServiceRequest(ctx context.Context, url
 		_, _ = io.Copy(io.Discard, resp.Body)
 		return nil
 	}
-	if err := json.NewDecoder(resp.Body).Decode(out); err != nil {
+	if err := decodeAuthServiceJSON(resp.Body, out); err != nil {
 		return err
 	}
 	return nil
+}
+
+func decodeAuthServiceJSON(r io.Reader, out any) error {
+	var raw json.RawMessage
+	if err := json.NewDecoder(r).Decode(&raw); err != nil {
+		return err
+	}
+	var envelope struct {
+		Data json.RawMessage `json:"data"`
+	}
+	if err := json.Unmarshal(raw, &envelope); err == nil && len(envelope.Data) > 0 && string(envelope.Data) != "null" {
+		return json.Unmarshal(envelope.Data, out)
+	}
+	return json.Unmarshal(raw, out)
 }
 
 func (c *HTTPAuthConnectionClient) doAuthServiceToken(ctx context.Context, url string, out *Token) error {

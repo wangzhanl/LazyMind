@@ -89,6 +89,11 @@ func (s *redisTargetSearchCacheStore) Set(ctx context.Context, key string, snaps
 	pipe.Set(ctx, s.dataKey(key), data, ttl)
 	pipe.Del(ctx, s.lockKey(key))
 	_, err = pipe.Exec(ctx)
+	if err != nil {
+		releaseCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_, _ = s.client.Del(releaseCtx, s.lockKey(key)).Result()
+	}
 	return err
 }
 

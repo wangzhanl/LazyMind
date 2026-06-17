@@ -17,9 +17,10 @@ import (
 )
 
 const (
-	targetSearchCacheTTL        = 10 * time.Minute
-	targetSearchCacheMaxObjects = 5000
-	targetSearchCachePageDelay  = time.Second
+	targetSearchCacheTTL          = 10 * time.Minute
+	targetSearchCacheBuildTimeout = 2 * time.Hour
+	targetSearchCacheMaxObjects   = 5000
+	targetSearchCachePageDelay    = time.Second
 
 	targetSearchCacheStatusMissing  = "missing"
 	targetSearchCacheStatusBuilding = "building"
@@ -32,6 +33,8 @@ type targetSearchCache struct {
 	entries  map[string]*targetSearchCacheEntry
 	store    targetSearchCacheStore
 	ttl      time.Duration
+	lockTTL  time.Duration
+	timeout  time.Duration
 	maxItems int
 	delay    time.Duration
 }
@@ -66,6 +69,8 @@ func newTargetSearchCache() *targetSearchCache {
 	return &targetSearchCache{
 		entries:  map[string]*targetSearchCacheEntry{},
 		ttl:      targetSearchCacheTTL,
+		lockTTL:  targetSearchCacheBuildTimeout,
+		timeout:  targetSearchCacheBuildTimeout,
 		maxItems: targetSearchCacheMaxObjects,
 		delay:    targetSearchCachePageDelay,
 	}
@@ -96,7 +101,7 @@ func (c *targetSearchCache) build(ctx context.Context, key string, conn connecto
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	buildCtx, cancel := context.WithTimeout(ctx, c.ttl)
+	buildCtx, cancel := context.WithTimeout(ctx, c.timeout)
 	defer cancel()
 	nodes, truncated, err := build(buildCtx, conn, req)
 	snapshot := targetSearchCacheSnapshot{
@@ -125,12 +130,15 @@ func (c *targetSearchCache) build(ctx context.Context, key string, conn connecto
 	entry.lastError = snapshot.lastError
 	entry.expiresAt = time.Now().Add(c.ttl)
 	c.mu.Unlock()
+	persistErr := ""
 	if c.store != nil {
-		setCtx, setCancel := context.WithTimeout(context.Background(), 10*time.Second)
+		setCtx, setCancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer setCancel()
-		_ = c.store.Set(setCtx, key, snapshot, c.ttl)
+		if err := c.store.Set(setCtx, key, snapshot, c.ttl); err != nil {
+			persistErr = err.Error()
+		}
 	}
-	fmt.Fprintf(os.Stdout, "target search cache build status=%s nodes=%d truncated=%t error=%q\n", snapshot.status, len(snapshot.nodes), snapshot.truncated, snapshot.lastError)
+	fmt.Fprintf(os.Stdout, "target search cache build status=%s nodes=%d truncated=%t error=%q persist_error=%q\n", snapshot.status, len(snapshot.nodes), snapshot.truncated, snapshot.lastError, persistErr)
 	return snapshot
 }
 
@@ -143,7 +151,7 @@ func (c *targetSearchCache) buildIfUnlocked(ctx context.Context, conn connector.
 		if snapshot, ok, err := c.store.Get(ctx, key); err == nil && ok && snapshot.complete {
 			return snapshot
 		}
-		locked, err := c.store.TryLock(ctx, key, c.ttl)
+		locked, err := c.store.TryLock(ctx, key, c.lockTTL)
 		if err != nil {
 			return targetSearchCacheSnapshot{status: targetSearchCacheStatusFailed, lastError: err.Error()}
 		}
@@ -167,7 +175,7 @@ func (c *targetSearchCache) buildIfUnlocked(ctx context.Context, conn connector.
 		c.mu.Unlock()
 		return snapshot
 	}
-	c.entries[key] = &targetSearchCacheEntry{building: true, expiresAt: time.Now().Add(c.ttl)}
+	c.entries[key] = &targetSearchCacheEntry{building: true, expiresAt: time.Now().Add(c.lockTTL)}
 	c.mu.Unlock()
 	return c.build(ctx, key, conn, req, build)
 }

@@ -45,7 +45,10 @@ func (e *DefaultTargetTreeEngine) Prewarm(ctx context.Context, req TargetTreeSea
 	if !conn.Spec().SupportsSearch {
 		return nil
 	}
-	_ = e.cache.buildIfUnlocked(ctx, conn, req, e.buildTargetSearchCache)
+	snapshot := e.cache.buildIfUnlocked(ctx, conn, req, e.buildTargetSearchCache)
+	if snapshot.status == targetSearchCacheStatusFailed && strings.TrimSpace(snapshot.lastError) != "" {
+		return NewError(ErrCodeInternal, "target search cache prewarm failed: "+snapshot.lastError)
+	}
 	return nil
 }
 

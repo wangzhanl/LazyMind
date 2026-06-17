@@ -246,6 +246,48 @@ func TestTargetTreeSearchWithoutCurrentLevelUsesCache(t *testing.T) {
 	}
 }
 
+func TestTargetTreeSearchCachePersistsThroughStore(t *testing.T) {
+	t.Parallel()
+
+	store := newMemoryTargetSearchCacheStore()
+	buildSpy := &treeConnectorSpy{supportsSearch: true}
+	buildRegistry, err := connector.NewDefaultConnectorRegistry(buildSpy)
+	if err != nil {
+		t.Fatalf("create build registry: %v", err)
+	}
+	buildEngine := NewDefaultTargetTreeEngine(buildRegistry, WithTargetSearchCacheStore(store))
+	buildEngine.cache.delay = 0
+	req := TargetTreeSearchRequest{
+		ConnectorType: treeTestConnectorType,
+		Keyword:       "welcome",
+		PageSize:      10,
+		IncludeFiles:  true,
+	}
+	if err := buildEngine.Prewarm(context.Background(), req); err != nil {
+		t.Fatalf("prewarm target search cache: %v", err)
+	}
+	if store.locks != 1 || store.sets != 1 {
+		t.Fatalf("prewarm should lock and persist cache once, locks=%d sets=%d", store.locks, store.sets)
+	}
+
+	readSpy := &treeConnectorSpy{supportsSearch: true}
+	readRegistry, err := connector.NewDefaultConnectorRegistry(readSpy)
+	if err != nil {
+		t.Fatalf("create read registry: %v", err)
+	}
+	readEngine := NewDefaultTargetTreeEngine(readRegistry, WithTargetSearchCacheStore(store))
+	page, err := readEngine.Search(context.Background(), req)
+	if err != nil {
+		t.Fatalf("cached search from store: %v", err)
+	}
+	if page.CacheStatus != targetSearchCacheStatusComplete || !page.CacheComplete || len(page.Items) != 1 || page.Items[0].ObjectKey != "doc-1" {
+		t.Fatalf("search should read completed cache from store, got %+v", page)
+	}
+	if len(readSpy.listRequests) != 0 || len(readSpy.searchRequests) != 0 {
+		t.Fatalf("store-backed search should not access connector, lists=%d searches=%d", len(readSpy.listRequests), len(readSpy.searchRequests))
+	}
+}
+
 func TestTargetTreeSearchCacheFailureIsReadableAndRetryable(t *testing.T) {
 	t.Parallel()
 
@@ -266,8 +308,8 @@ func TestTargetTreeSearchCacheFailureIsReadableAndRetryable(t *testing.T) {
 		PageSize:      10,
 		IncludeFiles:  true,
 	}
-	if err := engine.Prewarm(context.Background(), req); err != nil {
-		t.Fatalf("prewarm target search cache: %v", err)
+	if err := engine.Prewarm(context.Background(), req); err == nil {
+		t.Fatalf("failed prewarm should return an error")
 	}
 	page, err := engine.Search(context.Background(), req)
 	if err != nil {
@@ -1408,6 +1450,44 @@ func (s *panicFallbackSearch) Search(context.Context, TargetTreeSearchRequest) (
 	s.called = true
 	s.t.Fatalf("fallback search should not be called")
 	return TreeNodePage{}, nil
+}
+
+type memoryTargetSearchCacheStore struct {
+	snapshots map[string]targetSearchCacheSnapshot
+	locks     int
+	sets      int
+	locked    bool
+}
+
+func newMemoryTargetSearchCacheStore() *memoryTargetSearchCacheStore {
+	return &memoryTargetSearchCacheStore{snapshots: map[string]targetSearchCacheSnapshot{}}
+}
+
+func (s *memoryTargetSearchCacheStore) Get(_ context.Context, key string) (targetSearchCacheSnapshot, bool, error) {
+	snapshot, ok := s.snapshots[key]
+	if ok {
+		return snapshot, true, nil
+	}
+	if s.locked {
+		return targetSearchCacheSnapshot{status: targetSearchCacheStatusBuilding, building: true}, true, nil
+	}
+	return targetSearchCacheSnapshot{}, false, nil
+}
+
+func (s *memoryTargetSearchCacheStore) Set(_ context.Context, key string, snapshot targetSearchCacheSnapshot, _ time.Duration) error {
+	s.sets++
+	s.locked = false
+	s.snapshots[key] = snapshot
+	return nil
+}
+
+func (s *memoryTargetSearchCacheStore) TryLock(context.Context, string, time.Duration) (bool, error) {
+	if s.locked {
+		return false, nil
+	}
+	s.locks++
+	s.locked = true
+	return true, nil
 }
 
 type treeReadRepo struct {

@@ -127,7 +127,7 @@ func TestHTTPAuthConnectionClientListTargetCacheConnections(t *testing.T) {
 		if r.Header.Get("X-LazyMind-Internal-Token") != "internal-token" {
 			t.Fatalf("missing internal service token")
 		}
-		body := `{"items":[{"connection_id":"auth-1","owner_user_id":"user-1","provider":"feishu","provider_tenant_key":"tenant-demo","status":"active"}]}`
+		body := `{"code":200,"message":"success","data":{"items":[{"connection_id":"auth-1","owner_user_id":"user-1","provider":"feishu","provider_tenant_key":"tenant-demo","status":"active"}]}}`
 		return &http.Response{
 			StatusCode: http.StatusOK,
 			Header:     http.Header{"Content-Type": []string{"application/json"}},
