@@ -288,6 +288,41 @@ func TestListDocumentsByDatasetsKeywordMatchesDocumentNameOnly(t *testing.T) {
 	}
 }
 
+func TestListDocumentsByDatasetsExcludesFolders(t *testing.T) {
+	db := newDocumentTestDB(t)
+	seedDocumentListDataset(t, db, "dataset-a", "user-1")
+	now := time.Date(2026, 6, 4, 10, 0, 0, 0, time.UTC)
+	if err := db.Create(&orm.Document{
+		ID:          "folder-1",
+		DatasetID:   "dataset-a",
+		DisplayName: "folder",
+		Tags:        []byte(`[]`),
+		Ext:         json.RawMessage(`{}`),
+		BaseModel: orm.BaseModel{
+			CreateUserID:   "user-1",
+			CreateUserName: "Alice",
+			CreatedAt:      now.Add(-time.Hour),
+			UpdatedAt:      now,
+		},
+	}).Error; err != nil {
+		t.Fatalf("create folder: %v", err)
+	}
+	seedDocumentListDoc(t, db, "dataset-a", "doc-1", "report.pdf", now.Add(-time.Minute), "Alice", nil)
+
+	rec := requestListDocumentsByDatasets(t, `{"dataset_ids":["dataset-a"]}`, "user-1")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected status 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	var body ListDocumentsResponse
+	decodeRecorderJSON(t, rec, &body)
+	if body.TotalSize != 1 || len(body.Documents) != 1 {
+		t.Fatalf("expected only one document, total=%d len=%d body=%s", body.TotalSize, len(body.Documents), rec.Body.String())
+	}
+	if got, want := body.Documents[0].DocumentID, "doc-1"; got != want {
+		t.Fatalf("expected %q, got %q", want, got)
+	}
+}
+
 func TestListDocumentsByDatasetsSkipsInaccessibleAndMissingDatasets(t *testing.T) {
 	db := newDocumentTestDB(t)
 	seedDocumentListDataset(t, db, "dataset-owned", "user-1")

@@ -282,12 +282,6 @@ func TestOpenAPISpecCoversEvolutionSkillMemoryPreferenceOperations(t *testing.T)
 		expectParams    bool
 		expectResponses bool
 	}{
-		{"get", "/api/core/evolution/suggestions", false, true, true},
-		{"get", "/api/core/evolution/suggestions/{id}", false, true, true},
-		{"post", "/api/core/evolution/suggestions/{id}:approve", false, true, true},
-		{"post", "/api/core/evolution/suggestions/{id}:reject", false, true, true},
-		{"post", "/api/core/evolution/suggestions:batchApprove", true, false, true},
-		{"post", "/api/core/evolution/suggestions:batchReject", true, false, true},
 		{"get", "/api/core/skills", false, true, true},
 		{"get", "/api/core/skills/tags", false, false, true},
 		{"post", "/api/core/skills", true, false, true},
@@ -305,9 +299,7 @@ func TestOpenAPISpecCoversEvolutionSkillMemoryPreferenceOperations(t *testing.T)
 		{"get", "/api/core/skill-shares/{share_item_id}", false, true, true},
 		{"post", "/api/core/skill-shares/{share_item_id}:accept", false, true, true},
 		{"post", "/api/core/skill-shares/{share_item_id}:reject", false, true, true},
-		{"post", "/api/core/skill/suggestion", true, false, true},
 		{"post", "/api/core/skill/create", true, false, true},
-		{"post", "/api/core/skill/remove", true, false, true},
 		{"get", "/api/core/personalization-items", false, false, true},
 		{"get", "/api/core/model_providers", false, true, true},
 		{"get", "/api/core/model_providers/features", false, false, true},
@@ -327,13 +319,11 @@ func TestOpenAPISpecCoversEvolutionSkillMemoryPreferenceOperations(t *testing.T)
 		{"put", "/api/core/personalization-setting", true, false, true},
 		{"put", "/api/core/memory", true, false, true},
 		{"get", "/api/core/memory:draft-preview", false, false, true},
-		{"post", "/api/core/memory/suggestion", true, false, true},
 		{"post", "/api/core/memory:generate", true, false, true},
 		{"post", "/api/core/memory:confirm", false, false, true},
 		{"post", "/api/core/memory:discard", false, false, true},
 		{"put", "/api/core/user-preference", true, false, true},
 		{"get", "/api/core/user-preference:draft-preview", false, false, true},
-		{"post", "/api/core/user_preference/suggestion", true, false, true},
 		{"post", "/api/core/user-preference:generate", true, false, true},
 		{"post", "/api/core/user-preference:confirm", false, false, true},
 		{"post", "/api/core/user-preference:discard", false, false, true},
@@ -380,39 +370,21 @@ func TestOpenAPISpecCoversEvolutionSkillMemoryPreferenceOperations(t *testing.T)
 		}
 	}
 
-	pathItem, ok := paths["/api/core/evolution/suggestions"].(map[string]any)
-	if !ok {
-		t.Fatalf("path missing from openapi spec: /api/core/evolution/suggestions")
+	removedPaths := []string{
+		"/api/core/evolution/suggestions",
+		"/api/core/evolution/suggestions/{id}",
+		"/api/core/evolution/suggestions/{id}:approve",
+		"/api/core/evolution/suggestions/{id}:reject",
+		"/api/core/evolution/suggestions:batchApprove",
+		"/api/core/evolution/suggestions:batchReject",
+		"/api/core/skill/suggestion",
+		"/api/core/skill/remove",
+		"/api/core/memory/suggestion",
+		"/api/core/user_preference/suggestion",
 	}
-	getOp, ok := pathItem["get"].(map[string]any)
-	if !ok {
-		t.Fatalf("operation missing from openapi spec: get /api/core/evolution/suggestions")
-	}
-	params, ok := getOp["parameters"].([]any)
-	if !ok {
-		t.Fatalf("parameters missing for get /api/core/evolution/suggestions")
-	}
-
-	paramNames := make(map[string]struct{}, len(params))
-	for _, item := range params {
-		param, ok := item.(map[string]any)
-		if !ok {
-			continue
-		}
-		name, _ := param["name"].(string)
-		if name != "" {
-			paramNames[name] = struct{}{}
-		}
-	}
-
-	for _, name := range []string{"page", "page_size", "evolution_id", "resource_type", "resource_key", "keyword"} {
-		if _, ok := paramNames[name]; !ok {
-			t.Fatalf("expected query parameter %q on get /api/core/evolution/suggestions", name)
-		}
-	}
-	for _, name := range []string{"user_id", "skill_id", "memory_id", "user_preference_id", "preference_id"} {
-		if _, ok := paramNames[name]; ok {
-			t.Fatalf("unexpected removed query parameter %q on get /api/core/evolution/suggestions", name)
+	for _, path := range removedPaths {
+		if _, ok := paths[path]; ok {
+			t.Fatalf("removed legacy suggestion path still present in openapi spec: %s", path)
 		}
 	}
 

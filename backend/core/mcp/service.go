@@ -196,6 +196,12 @@ func CheckServer(ctx context.Context, db *gorm.DB, userID, id string) (*CheckRes
 	if err != nil {
 		return &CheckResponse{Success: false, Message: sanitizeError(err.Error(), row.HeadersJSON), ToolCount: 0}, nil
 	}
+	now := time.Now()
+	if err := db.WithContext(ctx).Model(&orm.MCPServer{}).
+		Where("id = ? AND create_user_id = ? AND deleted_at IS NULL", row.ID, strings.TrimSpace(userID)).
+		Updates(map[string]any{"is_verified": true, "updated_at": now}).Error; err != nil {
+		return nil, err
+	}
 	return &CheckResponse{Success: true, Message: "连接成功", ToolCount: len(tools)}, nil
 }
 

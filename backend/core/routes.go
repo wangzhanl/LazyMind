@@ -162,12 +162,6 @@ func registerAllRoutes(r *mux.Router) {
 	handleAPI(r, "POST", "/conversations:resumeChat", []string{"qa.write"}, chat.ResumeChat)
 	handleAPI(r, "POST", "/conversations:stopChatGeneration", []string{"qa.write"}, chat.StopChatGeneration)
 	handleAPI(r, "GET", "/conversations/{conversation_id}:status", []string{"qa.read"}, chat.GetChatStatus)
-	handleAPI(r, "GET", "/evolution/suggestions", []string{"qa.read"}, evolution.ListSuggestions)
-	handleAPI(r, "GET", "/evolution/suggestions/{id}", []string{"qa.read"}, evolution.GetSuggestion)
-	handleAPI(r, "POST", "/evolution/suggestions/{id}:approve", []string{"qa.read"}, evolution.ApproveSuggestion)
-	handleAPI(r, "POST", "/evolution/suggestions/{id}:reject", []string{"qa.read"}, evolution.RejectSuggestion)
-	handleAPI(r, "POST", "/evolution/suggestions:batchApprove", []string{"qa.read"}, evolution.BatchApproveSuggestions)
-	handleAPI(r, "POST", "/evolution/suggestions:batchReject", []string{"qa.read"}, evolution.BatchRejectSuggestions)
 	handleAPI(r, "GET", "/evolution/tasks", []string{"qa.read"}, resourceupdate.ListTasks)
 	handleAPI(r, "GET", "/evolution/tasks/{task_id}", []string{"qa.read"}, resourceupdate.GetTask)
 	handleAPI(r, "GET", "/skill-review-results", []string{"qa.read"}, resourceupdate.ListSkillReviewResults)
@@ -180,10 +174,6 @@ func registerAllRoutes(r *mux.Router) {
 	handleAPI(r, "POST", "/memory-review-results/{review_result_id}:reject", []string{"qa.read"}, resourceupdate.RejectMemoryReviewResult)
 	handleAPI(r, "GET", "/resource-versions", []string{"qa.read"}, resourcechange.ListVersions)
 	handleAPI(r, "GET", "/resource-versions/{version_id}", []string{"qa.read"}, resourcechange.GetVersion)
-	handleAPI(r, "POST", "/evolution/suggestions/{id}:approve", []string{"qa.write"}, evolution.ApproveSuggestion)
-	handleAPI(r, "POST", "/evolution/suggestions/{id}:reject", []string{"qa.write"}, evolution.RejectSuggestion)
-	handleAPI(r, "POST", "/evolution/suggestions:batchApprove", []string{"qa.write"}, evolution.BatchApproveSuggestions)
-	handleAPI(r, "POST", "/evolution/suggestions:batchReject", []string{"qa.write"}, evolution.BatchRejectSuggestions)
 	handleAPI(r, "GET", "/personalization-items", []string{"qa.read"}, evolution.ListManagedStates)
 	handleAPI(r, "GET", "/personalization-setting", []string{"qa.read"}, evolution.GetPersonalizationSetting)
 	handleAPI(r, "PUT", "/personalization-setting", []string{"qa.write"}, evolution.SetPersonalizationSetting)
@@ -287,15 +277,11 @@ func registerAllRoutes(r *mux.Router) {
 
 	// ----- Evolution / long-term state -----
 	// Algorithm service callbacks: no request-level RBAC, protected by internal service token at infra level.
-	handleAPI(r, "POST", "/skill/suggestion", nil, skill.Suggestion)
 	handleAPI(r, "POST", "/skill/create", nil, skill.Create)
-	handleAPI(r, "POST", "/skill/remove", nil, skill.Remove)
 	handleAPI(r, "GET", "/remote-fs/list", []string{"qa.read"}, skill.RemoteFSList)
 	handleAPI(r, "GET", "/remote-fs/info", []string{"qa.read"}, skill.RemoteFSInfo)
 	handleAPI(r, "GET", "/remote-fs/exists", []string{"qa.read"}, skill.RemoteFSExists)
 	handleAPI(r, "GET", "/remote-fs/content", []string{"qa.read"}, skill.RemoteFSContent)
-	handleAPI(r, "POST", "/memory/suggestion", nil, memory.Suggestion)
-	handleAPI(r, "POST", "/user_preference/suggestion", nil, preference.Suggestion)
 
 	// ----- ACL（Knowledge basetextPermission） -----
 	handleAPI(r, "GET", "/kb/list", []string{"document.read"}, acl.ListKB)

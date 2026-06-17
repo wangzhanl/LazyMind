@@ -63,6 +63,80 @@ func TestCreateServerMasksAndEncryptsAPIKey(t *testing.T) {
 	}
 }
 
+func TestCheckServerMarksVerifiedOnSuccess(t *testing.T) {
+	db := newTestDB(t)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req jsonRPCRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			t.Fatalf("decode rpc request: %v", err)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		switch req.Method {
+		case "initialize":
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"jsonrpc": "2.0",
+				"id":      req.ID,
+				"result": map[string]any{
+					"protocolVersion": "2024-11-05",
+					"capabilities":    map[string]any{},
+					"serverInfo":      map[string]any{"name": "test", "version": "1"},
+				},
+			})
+		case "notifications/initialized":
+			_ = json.NewEncoder(w).Encode(map[string]any{"jsonrpc": "2.0", "result": map[string]any{}})
+		case "tools/list":
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"jsonrpc": "2.0",
+				"id":      req.ID,
+				"result": map[string]any{
+					"tools": []map[string]any{{
+						"name":        "search",
+						"description": "search docs",
+						"inputSchema": map[string]any{"type": "object"},
+					}},
+				},
+			})
+		default:
+			t.Fatalf("unexpected rpc method: %s", req.Method)
+		}
+	}))
+	defer server.Close()
+
+	created, err := CreateServer(context.Background(), db.DB, CreateServerRequest{
+		Name:      "local",
+		Transport: "http",
+		URL:       server.URL,
+		Timeout:   2,
+	}, "u1", "User 1")
+	if err != nil {
+		t.Fatalf("create server: %v", err)
+	}
+
+	var before orm.MCPServer
+	if err := db.First(&before, "id = ?", created.ID).Error; err != nil {
+		t.Fatalf("query created server: %v", err)
+	}
+	if before.IsVerified {
+		t.Fatalf("new server should start unverified")
+	}
+
+	resp, err := CheckServer(context.Background(), db.DB, "u1", created.ID)
+	if err != nil {
+		t.Fatalf("check server: %v", err)
+	}
+	if !resp.Success || resp.ToolCount != 1 {
+		t.Fatalf("unexpected check response: %#v", resp)
+	}
+
+	var row orm.MCPServer
+	if err := db.First(&row, "id = ?", created.ID).Error; err != nil {
+		t.Fatalf("query checked server: %v", err)
+	}
+	if !row.IsVerified {
+		t.Fatalf("expected successful check to mark server verified")
+	}
+}
+
 func TestDiscoverReplacesToolsAndSoftDeletesMissing(t *testing.T) {
 	db := newTestDB(t)
 	now := time.Now()

@@ -1134,6 +1134,7 @@ type treeConnectorSpy struct {
 	supportsSearch bool
 	childrenSet    bool
 	children       []connector.RawObject
+	listErr        error
 	fetchPage      connector.RawObjectPage
 	listRequests   []connector.ListChildrenRequest
 	fetchRequests  []connector.FetchPageRequest
@@ -1161,6 +1162,9 @@ func (c *treeConnectorSpy) ValidateTarget(context.Context, connector.ValidateTar
 
 func (c *treeConnectorSpy) ListChildren(_ context.Context, req connector.ListChildrenRequest) (connector.RawObjectPage, error) {
 	c.listRequests = append(c.listRequests, req)
+	if c.listErr != nil {
+		return connector.RawObjectPage{}, c.listErr
+	}
 	items := c.children
 	if !c.childrenSet && len(items) == 0 {
 		items = []connector.RawObject{
