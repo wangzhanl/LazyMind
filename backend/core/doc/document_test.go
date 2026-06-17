@@ -176,6 +176,33 @@ func TestBuildTaskResponseDoesNotSucceedBeforeExternalTaskRowExists(t *testing.T
 	}
 }
 
+func TestUITaskStatusRunningIncludesLazyllmActiveStates(t *testing.T) {
+	states := uiTaskStatusToInternalStates("running")
+	for _, want := range []string{"WAITING", "WORKING"} {
+		found := false
+		for _, state := range states {
+			if state == want {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Fatalf("expected running filter to include %s, got %v", want, states)
+		}
+	}
+}
+
+func TestTaskStateMatchesUIRunningFilter(t *testing.T) {
+	for _, state := range []string{"WAITING", "WORKING"} {
+		if !taskStateMatchesFilter(state, "running") {
+			t.Fatalf("expected %s to match running filter", state)
+		}
+	}
+	if taskStateMatchesFilter("SUCCESS", "running") {
+		t.Fatalf("expected SUCCESS not to match running filter")
+	}
+}
+
 func TestListDocumentsByDatasetsDefaultPaginationCursorNoDuplicates(t *testing.T) {
 	db := newDocumentTestDB(t)
 	seedDocumentListDataset(t, db, "dataset-a", "user-1")

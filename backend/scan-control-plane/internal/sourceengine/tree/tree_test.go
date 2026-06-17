@@ -157,6 +157,8 @@ func TestTargetTreeSearchRespectsIncludeFiles(t *testing.T) {
 
 	withoutFiles, err := engine.Search(context.Background(), TargetTreeSearchRequest{
 		ConnectorType: treeTestConnectorType,
+		TargetType:    treeTestTargetType,
+		TargetRef:     "tree-test://root",
 		Keyword:       "welcome",
 		PageSize:      10,
 		IncludeFiles:  false,
@@ -176,6 +178,8 @@ func TestTargetTreeSearchRespectsIncludeFiles(t *testing.T) {
 
 	withFiles, err := engine.Search(context.Background(), TargetTreeSearchRequest{
 		ConnectorType: treeTestConnectorType,
+		TargetType:    treeTestTargetType,
+		TargetRef:     "tree-test://root",
 		Keyword:       "welcome",
 		PageSize:      10,
 		IncludeFiles:  true,
@@ -188,6 +192,54 @@ func TestTargetTreeSearchRespectsIncludeFiles(t *testing.T) {
 	}
 	if len(spy.searchRequests) != 0 || len(spy.listRequests) != 2 {
 		t.Fatalf("target search should continue using normal list results, searches=%d lists=%d", len(spy.searchRequests), len(spy.listRequests))
+	}
+}
+
+func TestTargetTreeSearchWithoutCurrentLevelUsesCache(t *testing.T) {
+	t.Parallel()
+
+	spy := &treeConnectorSpy{supportsSearch: true}
+	registry, err := connector.NewDefaultConnectorRegistry(spy)
+	if err != nil {
+		t.Fatalf("create registry: %v", err)
+	}
+	engine := NewDefaultTargetTreeEngine(registry)
+	engine.cache.delay = 0
+
+	first, err := engine.Search(context.Background(), TargetTreeSearchRequest{
+		ConnectorType: treeTestConnectorType,
+		Keyword:       "welcome",
+		PageSize:      10,
+		IncludeFiles:  true,
+	})
+	if err != nil {
+		t.Fatalf("cached search first response: %v", err)
+	}
+	if first.SearchMode != SearchModeCache || !first.CacheBuilding {
+		t.Fatalf("first cached search should start background build, got %+v", first)
+	}
+
+	var page TreeNodePage
+	for i := 0; i < 20; i++ {
+		page, err = engine.Search(context.Background(), TargetTreeSearchRequest{
+			ConnectorType: treeTestConnectorType,
+			Keyword:       "welcome",
+			PageSize:      10,
+			IncludeFiles:  true,
+		})
+		if err != nil {
+			t.Fatalf("cached search: %v", err)
+		}
+		if !page.CacheBuilding {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if page.CacheBuilding || !page.CacheComplete || len(page.Items) != 1 || page.Items[0].ObjectKey != "doc-1" {
+		t.Fatalf("cached search should return completed cache matches, got %+v", page)
+	}
+	if len(spy.searchRequests) != 0 || len(spy.listRequests) == 0 {
+		t.Fatalf("cached search should build from normal list calls only, searches=%d lists=%d", len(spy.searchRequests), len(spy.listRequests))
 	}
 }
 

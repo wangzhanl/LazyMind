@@ -392,6 +392,8 @@ export function normalizeDataSourceParseStatus(parseState?: string): DetailParse
       "reindexing",
       "running",
       "pending",
+      "waiting",
+      "working",
       "queued",
       "processing",
       "parsing",

@@ -110,6 +110,58 @@ func (c *HTTPAuthConnectionClient) BatchStatus(ctx context.Context, req Connecti
 	return statuses, nil
 }
 
+func (c *HTTPAuthConnectionClient) ListTargetCacheConnections(ctx context.Context, req ConnectionListRequest) ([]ConnectionStatus, error) {
+	query := url.Values{}
+	if provider := strings.TrimSpace(req.Provider); provider != "" {
+		query.Set("provider", provider)
+	}
+	if req.Limit > 0 {
+		query.Set("limit", strconv.Itoa(req.Limit))
+	}
+	var payload struct {
+		Items []struct {
+			ConnectionID      string `json:"connection_id"`
+			TenantID          string `json:"tenant_id"`
+			OwnerUserID       string `json:"owner_user_id"`
+			Provider          string `json:"provider"`
+			AuthMode          string `json:"auth_mode"`
+			ProviderAccountID string `json:"provider_account_id"`
+			DisplayName       string `json:"display_name"`
+			ProviderTenantKey string `json:"provider_tenant_key"`
+			Status            string `json:"status"`
+			LastError         string `json:"last_error"`
+			LastUsedAt        string `json:"last_used_at"`
+			UpdatedAt         string `json:"updated_at"`
+		} `json:"items"`
+	}
+	path := "/api/authservice/v1/cloud/connections/internal/target-cache-candidates"
+	if err := c.doAuthServiceRequest(ctx, endpoint(c.baseURL, path, query), http.MethodGet, nil, &payload); err != nil {
+		return nil, err
+	}
+	items := make([]ConnectionStatus, 0, len(payload.Items))
+	for _, item := range payload.Items {
+		connectionID := strings.TrimSpace(item.ConnectionID)
+		if connectionID == "" {
+			continue
+		}
+		items = append(items, ConnectionStatus{
+			ConnectionID:      connectionID,
+			TenantID:          item.TenantID,
+			OwnerUserID:       item.OwnerUserID,
+			Provider:          item.Provider,
+			AuthMode:          item.AuthMode,
+			ProviderAccountID: item.ProviderAccountID,
+			DisplayName:       item.DisplayName,
+			ProviderTenantKey: item.ProviderTenantKey,
+			Status:            strings.ToUpper(strings.TrimSpace(item.Status)),
+			LastError:         item.LastError,
+			LastUsedAt:        item.LastUsedAt,
+			UpdatedAt:         item.UpdatedAt,
+		})
+	}
+	return items, nil
+}
+
 func (c *HTTPAuthConnectionClient) doAuthServiceRequest(ctx context.Context, url, method string, body io.Reader, out any) error {
 	req, err := http.NewRequestWithContext(ctx, method, url, body)
 	if err != nil {

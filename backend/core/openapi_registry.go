@@ -407,6 +407,12 @@ type toolPathParams struct {
 	ToolName string `path:"tool_name"`
 }
 
+type toolListQueryParams struct {
+	Keyword  string `query:"keyword"`
+	Page     int32  `query:"page"`
+	PageSize int32  `query:"page_size"`
+}
+
 type mcpServerPathParams struct {
 	ID string `path:"id"`
 }
@@ -432,6 +438,9 @@ type toolGroupOpenAPIResponse struct {
 
 type toolListOpenAPIResponse struct {
 	ToolGroups []toolGroupOpenAPIResponse `json:"tool_groups"`
+	Page       int32                      `json:"page"`
+	PageSize   int32                      `json:"page_size"`
+	Total      int32                      `json:"total"`
 }
 
 type toolStateOpenAPIResponse struct {
@@ -2359,11 +2368,12 @@ func registeredCoreOperations() []openAPIOperation {
 			Responses: map[int]openAPIResponse{200: resp("Discarded user preference draft", systemDiscardOpenAPIResponse{})},
 		},
 		{
-			Method:    "GET",
-			Path:      "/tools",
-			Summary:   "Tool list",
-			Tags:      []string{"tools"},
-			Responses: map[int]openAPIResponse{200: resp("Tool list", toolListOpenAPIResponse{})},
+			Method:      "GET",
+			Path:        "/tools",
+			Summary:     "Tool list",
+			Tags:        []string{"tools"},
+			QueryParams: toolListQueryParams{},
+			Responses:   map[int]openAPIResponse{200: resp("Tool list", toolListOpenAPIResponse{})},
 		},
 		{
 			Method:     "POST",

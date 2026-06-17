@@ -736,13 +736,14 @@ func TestOpenAPISpecIncludesToolOperations(t *testing.T) {
 	}
 
 	cases := []struct {
-		method       string
-		path         string
-		expectParams bool
+		method             string
+		path               string
+		expectedQueryNames []string
+		expectedPathName   string
 	}{
-		{"get", "/api/core/tools", false},
-		{"post", "/api/core/tools/{tool_name}:disable", true},
-		{"post", "/api/core/tools/{tool_name}:enable", true},
+		{"get", "/api/core/tools", []string{"keyword", "page", "page_size"}, ""},
+		{"post", "/api/core/tools/{tool_name}:disable", nil, "tool_name"},
+		{"post", "/api/core/tools/{tool_name}:enable", nil, "tool_name"},
 	}
 	for _, tc := range cases {
 		pathItem, ok := paths[tc.path].(map[string]any)
@@ -769,14 +770,41 @@ func TestOpenAPISpecIncludesToolOperations(t *testing.T) {
 		if !ok || len(content) == 0 {
 			t.Fatalf("response schema missing for %s %s", tc.method, tc.path)
 		}
-		if tc.expectParams {
+		if len(tc.expectedQueryNames) > 0 {
 			params, ok := op["parameters"].([]any)
 			if !ok || len(params) == 0 {
 				t.Fatalf("parameters missing for %s %s", tc.method, tc.path)
 			}
-			param, ok := params[0].(map[string]any)
-			if !ok || param["name"] != "tool_name" || param["in"] != "path" {
-				t.Fatalf("expected tool_name path parameter for %s %s, got %#v", tc.method, tc.path, params)
+			queryNames := map[string]struct{}{}
+			for _, item := range params {
+				param, ok := item.(map[string]any)
+				if !ok || param["in"] != "query" {
+					continue
+				}
+				name, _ := param["name"].(string)
+				queryNames[name] = struct{}{}
+			}
+			for _, name := range tc.expectedQueryNames {
+				if _, ok := queryNames[name]; !ok {
+					t.Fatalf("expected query parameter %q for %s %s, got %#v", name, tc.method, tc.path, params)
+				}
+			}
+		}
+		if tc.expectedPathName != "" {
+			params, ok := op["parameters"].([]any)
+			if !ok || len(params) == 0 {
+				t.Fatalf("parameters missing for %s %s", tc.method, tc.path)
+			}
+			found := false
+			for _, item := range params {
+				param, ok := item.(map[string]any)
+				if ok && param["name"] == tc.expectedPathName && param["in"] == "path" {
+					found = true
+					break
+				}
+			}
+			if !found {
+				t.Fatalf("expected %s path parameter for %s %s, got %#v", tc.expectedPathName, tc.method, tc.path, params)
 			}
 		}
 	}
@@ -800,6 +828,19 @@ func TestOpenAPISpecIncludesToolOperations(t *testing.T) {
 	for _, name := range []string{"name", "can_disable", "active", "disabled"} {
 		if _, ok := properties[name]; !ok {
 			t.Fatalf("toolGroupOpenAPIResponse expected property %q", name)
+		}
+	}
+	listSchema, ok := schemas["toolListOpenAPIResponse"].(map[string]any)
+	if !ok {
+		t.Fatalf("toolListOpenAPIResponse schema missing")
+	}
+	listProperties, ok := listSchema["properties"].(map[string]any)
+	if !ok {
+		t.Fatalf("toolListOpenAPIResponse properties missing")
+	}
+	for _, name := range []string{"tool_groups", "page", "page_size", "total"} {
+		if _, ok := listProperties[name]; !ok {
+			t.Fatalf("toolListOpenAPIResponse expected property %q", name)
 		}
 	}
 }

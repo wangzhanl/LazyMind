@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"strings"
 	"sync"
 	"time"
 
@@ -49,6 +50,8 @@ type Components struct {
 	TempObjectStore                   worker.TempObjectStore
 	JobQueue                          taskengine.JobQueue
 	Scheduler                         *schedule.CheckpointScheduleEngine
+	TargetTreeOptions                 []tree.TargetTreeOption
+	TargetSearchCachePrewarmer        *targetTreeCachePrewarmer
 	ParseWorkerRunner                 *worker.Runner
 	CrawlWorker                       *crawl.RunOnceWorker
 	CoreResultRunner                  *worker.ReconcilerRunner
@@ -163,6 +166,11 @@ func buildSQLComponents(cfg config.Config, opener DBOpener) (Components, error) 
 	adapters.CrawlWorker = crawlWorker
 	adapters.CoreResultRunner = buildCoreResultRunner(adapters, cfg)
 	adapters.TempCleanupRunner = buildTempCleanupRunner(adapters, cfg)
+	if prewarmer, err := buildTargetSearchCachePrewarmer(adapters, cfg); err != nil {
+		return Components{}, err
+	} else {
+		adapters.TargetSearchCachePrewarmer = prewarmer
+	}
 	return adapters, nil
 }
 
@@ -195,6 +203,10 @@ func buildAdapters(cfg config.Config) (Components, error) {
 	if err != nil {
 		return Components{}, err
 	}
+	targetTreeOptions, err := buildTargetTreeOptions(cfg)
+	if err != nil {
+		return Components{}, err
+	}
 	temp := buildTempObjectStore(cfg)
 	connectorTypes := enabledConnectorTypes()
 	return Components{
@@ -207,6 +219,7 @@ func buildAdapters(cfg config.Config) (Components, error) {
 		AuthConnectionClient:              auth,
 		FeishuClient:                      feishuClient,
 		TempObjectStore:                   temp,
+		TargetTreeOptions:                 targetTreeOptions,
 		Metrics:                           observability.NewRegistry(),
 		Logger:                            observability.DefaultLogger(),
 		ConnectorTypes:                    connectorTypes,
@@ -264,11 +277,12 @@ func newHandlerWithComponents(built Components) http.Handler {
 	sourceTree := tree.NewDBSourceTreeQueryEngine(repo, limits, tree.WithSourceTreeConnectorRegistry(registry))
 	documents := tree.NewDBSourceDocumentQuery(repo, limits)
 	readRefresher := tree.NewDBSourceReadRefresher(built.Repository, registry)
-	targetTree := tree.NewDefaultTargetTreeEngine(
-		registry,
+	targetTreeOptions := []tree.TargetTreeOption{
 		tree.WithTargetTreeLimits(limits),
 		tree.WithFallbackSearch(tree.NewIndexedTargetTreeFallbackSearch(repo, limits)),
-	)
+	}
+	targetTreeOptions = append(targetTreeOptions, built.TargetTreeOptions...)
+	targetTree := tree.NewDefaultTargetTreeEngine(registry, targetTreeOptions...)
 	adminSvc := adminservice.NewService(built.Repository, taskPlanner, coreResource, metrics, logger)
 	return server.NewHandler(
 		server.WithConnectorRegistry(registry),
@@ -405,8 +419,79 @@ func buildFeishuClients(cfg config.Config) (feishu.AuthConnectionClient, feishu.
 	return auth, api, nil
 }
 
+func buildTargetTreeOptions(cfg config.Config) ([]tree.TargetTreeOption, error) {
+	store, err := tree.NewRedisTargetSearchCacheStore(cfg.RedisURL)
+	if err != nil {
+		return nil, fmt.Errorf("configure target search cache redis: %w", err)
+	}
+	if store == nil {
+		return nil, nil
+	}
+	return []tree.TargetTreeOption{tree.WithTargetSearchCacheStore(store)}, nil
+}
+
 func buildTempObjectStore(cfg config.Config) worker.TempObjectStore {
 	return worker.NewFileTempObjectStore(cfg.TempDir)
+}
+
+type targetCacheConnectionLister interface {
+	ListTargetCacheConnections(ctx context.Context, req feishu.ConnectionListRequest) ([]feishu.ConnectionStatus, error)
+}
+
+type targetTreeCachePrewarmer struct {
+	auth   targetCacheConnectionLister
+	engine *tree.DefaultTargetTreeEngine
+}
+
+func buildTargetSearchCachePrewarmer(built Components, cfg config.Config) (*targetTreeCachePrewarmer, error) {
+	if strings.TrimSpace(cfg.RedisURL) == "" {
+		return nil, nil
+	}
+	auth, ok := built.AuthConnectionClient.(targetCacheConnectionLister)
+	if !ok {
+		return nil, nil
+	}
+	registry, err := connectorRegistryFromTypes(built.ConnectorTypes, built.AgentClient, built.LocalFSDefaultAgentID, built.LocalFSPublicRoot, built.AuthConnectionClient, built.FeishuClient, built.TempObjectStore)
+	if err != nil {
+		return nil, err
+	}
+	options := []tree.TargetTreeOption{tree.WithTargetTreeLimits(tree.TreeQueryLimits{DefaultPageSize: 50, MaxPageSize: 100, MaxAllCurrentLevelItems: 1000})}
+	options = append(options, built.TargetTreeOptions...)
+	return &targetTreeCachePrewarmer{
+		auth:   auth,
+		engine: tree.NewDefaultTargetTreeEngine(registry, options...),
+	}, nil
+}
+
+func (p *targetTreeCachePrewarmer) RunOnce(ctx context.Context) error {
+	if p == nil || p.auth == nil || p.engine == nil {
+		return nil
+	}
+	connections, err := p.auth.ListTargetCacheConnections(ctx, feishu.ConnectionListRequest{
+		Provider: string(feishu.ConnectorType),
+		Limit:    100,
+	})
+	if err != nil {
+		return err
+	}
+	for _, item := range connections {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if strings.TrimSpace(item.ConnectionID) == "" || strings.ToUpper(strings.TrimSpace(item.Status)) != "ACTIVE" {
+			continue
+		}
+		options := map[string]any{}
+		if tenantKey := strings.TrimSpace(item.ProviderTenantKey); tenantKey != "" {
+			options["tenant_key"] = tenantKey
+		}
+		_ = p.engine.Prewarm(ctx, tree.TargetTreeSearchRequest{
+			ConnectorType:    feishu.ConnectorType,
+			AuthConnectionID: item.ConnectionID,
+			ProviderOptions:  options,
+		})
+	}
+	return nil
 }
 
 func buildParseWorkerRunner(built Components, cfg config.Config) (*worker.Runner, error) {
@@ -504,8 +589,10 @@ type Runtime struct {
 	crawlWorker          *crawl.RunOnceWorker
 	reconcilerRunner     *worker.ReconcilerRunner
 	tempCleanupRunner    *worker.TempCleanupRunner
+	targetCachePrewarmer *targetTreeCachePrewarmer
 	workerPollInterval   time.Duration
 	tempCleanupInterval  time.Duration
+	targetCacheInterval  time.Duration
 	compensationInterval time.Duration
 }
 
@@ -523,8 +610,10 @@ func NewRuntime(built Components, cfg config.Config) *Runtime {
 		crawlWorker:          built.CrawlWorker,
 		reconcilerRunner:     built.CoreResultRunner,
 		tempCleanupRunner:    built.TempCleanupRunner,
+		targetCachePrewarmer: built.TargetSearchCachePrewarmer,
 		workerPollInterval:   cfg.WorkerPollInterval,
 		tempCleanupInterval:  cfg.TempTTL,
+		targetCacheInterval:  cfg.TargetSearchCachePrewarmInterval,
 		compensationInterval: cfg.CompensationPollInterval,
 	}
 }
@@ -551,6 +640,11 @@ func (r *Runtime) Start(ctx context.Context) {
 	if r.tempCleanupRunner != nil {
 		r.startLoop(ctx, &wg, r.tempCleanupInterval, func(ctx context.Context) {
 			_ = r.tempCleanupRunner.RunOnce(ctx)
+		})
+	}
+	if r.targetCachePrewarmer != nil {
+		r.startLoop(ctx, &wg, r.targetCacheInterval, func(ctx context.Context) {
+			_ = r.targetCachePrewarmer.RunOnce(ctx)
 		})
 	}
 	go func() {
