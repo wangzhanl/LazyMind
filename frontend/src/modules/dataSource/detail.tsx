@@ -246,6 +246,13 @@ function getParseStatusMeta(status: DocumentStatusRow["parseStatus"], t: TFuncti
       icon: <SyncOutlined spin />,
     };
   }
+  if (status === "pending") {
+    return {
+      color: "#1677ff",
+      text: t("admin.dataSourceParsePending"),
+      icon: <ClockCircleFilled />,
+    };
+  }
   if (status === "duplicate") {
     return {
       color: "#f79009",
@@ -1314,7 +1321,7 @@ export default function DataSourceDetail() {
             color={
               parseStatus === "parsed"
                 ? "success"
-                : parseStatus === "reindexing"
+                : parseStatus === "reindexing" || parseStatus === "pending"
                   ? "processing"
                   : parseStatus === "duplicate"
                     ? "warning"
