@@ -1426,6 +1426,54 @@ func TestBuildAnalysisMarkdownResultReadsMarkdownPath(t *testing.T) {
 	}
 }
 
+func TestFindClassificationReportResultReturnsWholeRow(t *testing.T) {
+	classificationReport := map[string]any{
+		"artifact_id":         "classification_report",
+		"runtime_artifact_id": "analysis.summary",
+		"source_artifact_id":  "analysis.summary",
+		"ref":                 "analysis.summary@v1",
+		"schema":              "analysis.summary",
+		"data": map[string]any{
+			"cases": []any{
+				map[string]any{
+					"case_id":       "case_0002",
+					"question":      "What does sample.md state about # Reader Test Markdown?",
+					"reference_doc": []any{"sample.md"},
+				},
+			},
+		},
+	}
+	payload := []any{
+		map[string]any{"artifact_id": "repair_loop_plan", "data": map[string]any{}},
+		classificationReport,
+	}
+
+	body, found := findClassificationReportResult(payload)
+	if !found {
+		t.Fatalf("expected classification_report to be found")
+	}
+	result := body.(map[string]any)
+	if result["artifact_id"] != "classification_report" {
+		t.Fatalf("unexpected artifact_id: %#v", result["artifact_id"])
+	}
+	data, ok := result["data"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected classification_report data to be preserved, got %#v", result["data"])
+	}
+	cases, ok := data["cases"].([]any)
+	if !ok || len(cases) != 1 {
+		t.Fatalf("unexpected cases: %#v", data["cases"])
+	}
+	firstCase, ok := cases[0].(map[string]any)
+	if !ok {
+		t.Fatalf("unexpected case row: %#v", cases[0])
+	}
+	referenceDocs, ok := firstCase["reference_doc"].([]any)
+	if !ok || len(referenceDocs) != 1 || referenceDocs[0] != "sample.md" {
+		t.Fatalf("unexpected reference_doc: %#v", firstCase["reference_doc"])
+	}
+}
+
 func TestBuildDiffJSONResultReadsJSONPath(t *testing.T) {
 	tmpDir := t.TempDir()
 	jsonPath := filepath.Join(tmpDir, "diffs.json")
