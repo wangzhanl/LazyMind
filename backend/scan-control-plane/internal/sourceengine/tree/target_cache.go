@@ -18,6 +18,8 @@ import (
 
 const (
 	targetSearchCacheTTL          = 10 * time.Minute
+	targetSearchCacheLocalFSTTL   = 30 * time.Minute
+	targetSearchCacheExpireTTL    = 24 * time.Hour
 	targetSearchCacheBuildTimeout = 2 * time.Hour
 	targetSearchCacheMaxObjects   = 5000
 	targetSearchCachePageDelay    = time.Second
@@ -29,14 +31,15 @@ const (
 )
 
 type targetSearchCache struct {
-	mu       sync.Mutex
-	entries  map[string]*targetSearchCacheEntry
-	store    targetSearchCacheStore
-	ttl      time.Duration
-	lockTTL  time.Duration
-	timeout  time.Duration
-	maxItems int
-	delay    time.Duration
+	mu        sync.Mutex
+	entries   map[string]*targetSearchCacheEntry
+	store     targetSearchCacheStore
+	ttl       time.Duration
+	expireTTL time.Duration
+	lockTTL   time.Duration
+	timeout   time.Duration
+	maxItems  int
+	delay     time.Duration
 }
 
 type targetSearchCacheEntry struct {
@@ -45,6 +48,7 @@ type targetSearchCacheEntry struct {
 	complete  bool
 	truncated bool
 	lastError string
+	staleAt   time.Time
 	expiresAt time.Time
 }
 
@@ -55,11 +59,13 @@ type targetSearchCacheSnapshot struct {
 	complete  bool
 	truncated bool
 	lastError string
+	stale     bool
+	staleAt   time.Time
 }
 
 type TargetSearchCacheStore interface {
 	Get(ctx context.Context, key string) (targetSearchCacheSnapshot, bool, error)
-	Set(ctx context.Context, key string, snapshot targetSearchCacheSnapshot, ttl time.Duration) error
+	Set(ctx context.Context, key string, snapshot targetSearchCacheSnapshot, staleTTL, expireTTL time.Duration) error
 	TryLock(ctx context.Context, key string, ttl time.Duration) (bool, error)
 }
 
@@ -67,12 +73,13 @@ type targetSearchCacheStore = TargetSearchCacheStore
 
 func newTargetSearchCache() *targetSearchCache {
 	return &targetSearchCache{
-		entries:  map[string]*targetSearchCacheEntry{},
-		ttl:      targetSearchCacheTTL,
-		lockTTL:  targetSearchCacheBuildTimeout,
-		timeout:  targetSearchCacheBuildTimeout,
-		maxItems: targetSearchCacheMaxObjects,
-		delay:    targetSearchCachePageDelay,
+		entries:   map[string]*targetSearchCacheEntry{},
+		ttl:       targetSearchCacheTTL,
+		expireTTL: targetSearchCacheExpireTTL,
+		lockTTL:   targetSearchCacheBuildTimeout,
+		timeout:   targetSearchCacheBuildTimeout,
+		maxItems:  targetSearchCacheMaxObjects,
+		delay:     targetSearchCachePageDelay,
 	}
 }
 
@@ -97,7 +104,7 @@ func (c *targetSearchCache) snapshot(ctx context.Context, req TargetTreeSearchRe
 	return targetSearchCacheSnapshot{status: targetSearchCacheStatusMissing}
 }
 
-func (c *targetSearchCache) build(ctx context.Context, key string, conn connector.SourceConnector, req TargetTreeSearchRequest, build func(context.Context, connector.SourceConnector, TargetTreeSearchRequest) ([]TreeNode, bool, error)) targetSearchCacheSnapshot {
+func (c *targetSearchCache) build(ctx context.Context, key string, conn connector.SourceConnector, req TargetTreeSearchRequest, previous targetSearchCacheSnapshot, build func(context.Context, connector.SourceConnector, TargetTreeSearchRequest) ([]TreeNode, bool, error)) targetSearchCacheSnapshot {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -111,12 +118,26 @@ func (c *targetSearchCache) build(ctx context.Context, key string, conn connecto
 		truncated: truncated,
 	}
 	if err != nil {
-		snapshot.nodes = nil
-		snapshot.status = targetSearchCacheStatusFailed
-		snapshot.complete = false
-		snapshot.truncated = false
-		snapshot.lastError = err.Error()
+		if previous.complete {
+			snapshot = previous
+			snapshot.status = targetSearchCacheStatusComplete
+			snapshot.complete = true
+			snapshot.stale = true
+			snapshot.lastError = err.Error()
+		} else {
+			snapshot.nodes = nil
+			snapshot.status = targetSearchCacheStatusFailed
+			snapshot.complete = false
+			snapshot.truncated = false
+			snapshot.lastError = err.Error()
+		}
 	}
+	now := time.Now()
+	staleTTL := c.staleTTL(req)
+	if snapshot.staleAt.IsZero() || err == nil {
+		snapshot.staleAt = now.Add(staleTTL)
+	}
+	snapshot.stale = now.After(snapshot.staleAt)
 	c.mu.Lock()
 	entry := c.entries[key]
 	if entry == nil {
@@ -128,17 +149,18 @@ func (c *targetSearchCache) build(ctx context.Context, key string, conn connecto
 	entry.complete = snapshot.complete
 	entry.building = false
 	entry.lastError = snapshot.lastError
-	entry.expiresAt = time.Now().Add(c.ttl)
+	entry.staleAt = snapshot.staleAt
+	entry.expiresAt = now.Add(c.expireTTL)
 	c.mu.Unlock()
 	persistErr := ""
 	if c.store != nil {
 		setCtx, setCancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer setCancel()
-		if err := c.store.Set(setCtx, key, snapshot, c.ttl); err != nil {
+		if err := c.store.Set(setCtx, key, snapshot, staleTTL, c.expireTTL); err != nil {
 			persistErr = err.Error()
 		}
 	}
-	fmt.Fprintf(os.Stdout, "target search cache build status=%s connector=%s auth_connection_id=%s nodes=%d truncated=%t error=%q persist_error=%q\n", snapshot.status, req.ConnectorType, req.AuthConnectionID, len(snapshot.nodes), snapshot.truncated, snapshot.lastError, persistErr)
+	fmt.Fprintf(os.Stdout, "target search cache build status=%s connector=%s auth_connection_id=%s nodes=%d truncated=%t stale=%t error=%q persist_error=%q\n", snapshot.status, req.ConnectorType, req.AuthConnectionID, len(snapshot.nodes), snapshot.truncated, snapshot.stale, snapshot.lastError, persistErr)
 	return snapshot
 }
 
@@ -148,9 +170,10 @@ func (c *targetSearchCache) buildIfUnlocked(ctx context.Context, conn connector.
 	}
 	key := targetSearchCacheKey(req)
 	if c.store != nil {
-		if snapshot, ok, err := c.store.Get(ctx, key); err == nil && ok && snapshot.complete {
-			fmt.Fprintf(os.Stdout, "target search cache prewarm skip connector=%s auth_connection_id=%s status=%s nodes=%d truncated=%t\n", req.ConnectorType, req.AuthConnectionID, snapshot.status, len(snapshot.nodes), snapshot.truncated)
-			return snapshot
+		previous, hasPrevious, err := c.store.Get(ctx, key)
+		if err == nil && hasPrevious && previous.complete && !previous.stale {
+			fmt.Fprintf(os.Stdout, "target search cache prewarm skip connector=%s auth_connection_id=%s status=%s nodes=%d truncated=%t stale=%t\n", req.ConnectorType, req.AuthConnectionID, previous.status, len(previous.nodes), previous.truncated, previous.stale)
+			return previous
 		}
 		locked, err := c.store.TryLock(ctx, key, c.lockTTL)
 		if err != nil {
@@ -158,17 +181,17 @@ func (c *targetSearchCache) buildIfUnlocked(ctx context.Context, conn connector.
 		}
 		if !locked {
 			if snapshot, ok, err := c.store.Get(ctx, key); err == nil && ok {
-				fmt.Fprintf(os.Stdout, "target search cache prewarm locked connector=%s auth_connection_id=%s status=%s nodes=%d truncated=%t error=%q\n", req.ConnectorType, req.AuthConnectionID, snapshot.status, len(snapshot.nodes), snapshot.truncated, snapshot.lastError)
+				fmt.Fprintf(os.Stdout, "target search cache prewarm locked connector=%s auth_connection_id=%s status=%s nodes=%d truncated=%t stale=%t error=%q\n", req.ConnectorType, req.AuthConnectionID, snapshot.status, len(snapshot.nodes), snapshot.truncated, snapshot.stale, snapshot.lastError)
 				return snapshot
 			}
 			fmt.Fprintf(os.Stdout, "target search cache prewarm locked connector=%s auth_connection_id=%s status=%s\n", req.ConnectorType, req.AuthConnectionID, targetSearchCacheStatusBuilding)
 			return targetSearchCacheSnapshot{status: targetSearchCacheStatusBuilding, building: true}
 		}
-		return c.build(ctx, key, conn, req, build)
+		return c.build(ctx, key, conn, req, previous, build)
 	}
 	c.mu.Lock()
 	entry := c.entries[key]
-	if entry != nil && time.Now().Before(entry.expiresAt) && entry.complete {
+	if entry != nil && time.Now().Before(entry.expiresAt) && entry.complete && time.Now().Before(entry.staleAt) {
 		snapshot := entry.snapshot()
 		c.mu.Unlock()
 		return snapshot
@@ -178,9 +201,22 @@ func (c *targetSearchCache) buildIfUnlocked(ctx context.Context, conn connector.
 		c.mu.Unlock()
 		return snapshot
 	}
-	c.entries[key] = &targetSearchCacheEntry{building: true, expiresAt: time.Now().Add(c.lockTTL)}
+	previous := targetSearchCacheSnapshot{}
+	if entry != nil && time.Now().Before(entry.expiresAt) {
+		previous = entry.snapshot()
+		entry.building = true
+	} else {
+		c.entries[key] = &targetSearchCacheEntry{building: true, expiresAt: time.Now().Add(c.lockTTL)}
+	}
 	c.mu.Unlock()
-	return c.build(ctx, key, conn, req, build)
+	return c.build(ctx, key, conn, req, previous, build)
+}
+
+func (c *targetSearchCache) staleTTL(req TargetTreeSearchRequest) time.Duration {
+	if isLocalFSTargetSearch(req) {
+		return targetSearchCacheLocalFSTTL
+	}
+	return c.ttl
 }
 
 func (e *targetSearchCacheEntry) snapshot() targetSearchCacheSnapshot {
@@ -195,6 +231,8 @@ func (e *targetSearchCacheEntry) snapshot() targetSearchCacheSnapshot {
 		complete:  e.complete,
 		truncated: e.truncated,
 		lastError: e.lastError,
+		stale:     !e.staleAt.IsZero() && time.Now().After(e.staleAt),
+		staleAt:   e.staleAt,
 	}
 }
 

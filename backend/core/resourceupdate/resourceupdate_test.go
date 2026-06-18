@@ -950,6 +950,9 @@ func TestListSkillReviewResultsFiltersSkillName(t *testing.T) {
 	insertFullSkillReviewResult(t, db, SkillReviewResult{ID: "target-1", UserID: "user-1", SkillName: "git-workflow", Type: skillReviewTypePatch, ReviewStatus: reviewStatusPending, SkillContent: skillContent("git-workflow", "target"), Time: now})
 	insertFullSkillReviewResult(t, db, SkillReviewResult{ID: "other-skill", UserID: "user-1", SkillName: "release-check", Type: skillReviewTypePatch, ReviewStatus: reviewStatusPending, SkillContent: skillContent("release-check", "other"), Time: now})
 	insertFullSkillReviewResult(t, db, SkillReviewResult{ID: "other-user", UserID: "user-2", SkillName: "git-workflow", Type: skillReviewTypePatch, ReviewStatus: reviewStatusPending, SkillContent: skillContent("git-workflow", "other user"), Time: now})
+	if err := db.Exec("UPDATE skill_review_results SET summary = NULL WHERE id = ?", "target-1").Error; err != nil {
+		t.Fatalf("set summary null: %v", err)
+	}
 
 	req := httptest.NewRequest(http.MethodGet, "/api/core/skill-review-results?review_status=pending&type=patch&skill_name=git-workflow", nil)
 	req.Header.Set("X-User-Id", "user-1")
@@ -975,6 +978,9 @@ func TestListSkillReviewResultsFiltersSkillName(t *testing.T) {
 	}
 	if resp.Data.Total != 1 || len(resp.Data.Items) != 1 || resp.Data.Items[0].ID != "target-1" {
 		t.Fatalf("expected only target result, got %#v", resp.Data)
+	}
+	if resp.Data.Items[0].Summary != "" {
+		t.Fatalf("expected null summary to be returned as empty string, got %q", resp.Data.Items[0].Summary)
 	}
 }
 
@@ -1305,12 +1311,12 @@ func createSkillReviewResultsTable(t *testing.T, db *gorm.DB) {
 	if err := db.Exec(`
 CREATE TABLE skill_review_results (
 	id varchar(128) PRIMARY KEY,
-	skill_name varchar(255) NOT NULL DEFAULT '',
-	type varchar(32) NOT NULL DEFAULT '',
+	skill_name varchar(255) NOT NULL,
+	type varchar(32) NOT NULL,
 	userid varchar(255) NOT NULL,
-	requestid varchar(128) NOT NULL DEFAULT '',
-	skill_content text NOT NULL DEFAULT '',
-	summary text NOT NULL DEFAULT '',
+	requestid varchar(128) NOT NULL,
+	skill_content text NOT NULL,
+	summary text,
 	review_status varchar(32) NOT NULL,
 	time datetime NOT NULL
 )`).Error; err != nil {

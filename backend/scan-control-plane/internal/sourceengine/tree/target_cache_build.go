@@ -73,6 +73,28 @@ func (e *DefaultTargetTreeEngine) Prewarm(ctx context.Context, req TargetTreeSea
 	return nil
 }
 
+func (e *DefaultTargetTreeEngine) PrewarmLocalFSRootCaches(ctx context.Context, req TargetTreeSearchRequest) error {
+	if !isLocalFSTargetSearch(req) {
+		return NewError(ErrCodeInvalidRequest, "connector_type must be local_fs")
+	}
+	conn, err := e.registry.Get(req.ConnectorType)
+	if err != nil {
+		return mapConnectorError(err)
+	}
+	roots, err := e.listLocalFSRootTargets(ctx, conn, req)
+	if err != nil {
+		return err
+	}
+	for _, root := range roots {
+		rootReq := localFSRootSearchRequest(req, root)
+		snapshot := e.cache.buildIfUnlocked(ctx, conn, rootReq, e.buildTargetSearchCache)
+		if snapshot.status == targetSearchCacheStatusFailed && strings.TrimSpace(snapshot.lastError) != "" {
+			return NewError(ErrCodeInternal, "local_fs target search cache prewarm failed: "+snapshot.lastError)
+		}
+	}
+	return nil
+}
+
 func (e *DefaultTargetTreeEngine) buildTargetSearchCache(ctx context.Context, conn connector.SourceConnector, req TargetTreeSearchRequest) ([]TreeNode, bool, error) {
 	queue := initialTargetCacheQueue(req)
 	seenScopes := map[string]struct{}{}

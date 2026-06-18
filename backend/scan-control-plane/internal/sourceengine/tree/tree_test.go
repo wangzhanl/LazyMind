@@ -241,12 +241,23 @@ func TestLocalFSTargetSearchWithCurrentLevelBuildsRecursiveCache(t *testing.T) {
 	}
 }
 
-func TestLocalFSTargetSearchWithoutCurrentLevelUsesConnectorSearch(t *testing.T) {
+func TestLocalFSTargetSearchWithoutCurrentLevelBuildsRootCaches(t *testing.T) {
 	t.Parallel()
 
 	spy := &treeConnectorSpy{
 		connectorType:  connector.ConnectorType("local_fs"),
 		supportsSearch: true,
+		childrenByNodeRef: map[string][]connector.RawObject{
+			"": {
+				rawTreeObject("/workspace/docs", "", "docs", false, true),
+			},
+			"/workspace/docs": {
+				rawTreeObject("/workspace/docs/guides", "/workspace/docs", "Guides", false, true),
+			},
+			"/workspace/docs/guides": {
+				rawTreeObject("/workspace/docs/guides/test-plan.md", "/workspace/docs/guides", "test-plan.md", true, false),
+			},
+		},
 	}
 	registry, err := connector.NewDefaultConnectorRegistry(spy)
 	if err != nil {
@@ -257,18 +268,21 @@ func TestLocalFSTargetSearchWithoutCurrentLevelUsesConnectorSearch(t *testing.T)
 	page, err := engine.Search(context.Background(), TargetTreeSearchRequest{
 		ConnectorType: connector.ConnectorType("local_fs"),
 		TargetType:    connector.TargetType("local_path"),
-		Keyword:       "welcome",
+		Keyword:       "test",
 		PageSize:      10,
 		IncludeFiles:  true,
 	})
 	if err != nil {
 		t.Fatalf("search local roots: %v", err)
 	}
-	if page.SearchMode != SearchModeConnector || len(page.Items) != 1 || page.Items[0].ObjectKey != "doc-1" {
-		t.Fatalf("local search without current level should use connector search, got %+v", page)
+	if page.SearchMode != SearchModeCache || page.CacheStatus != targetSearchCacheStatusComplete || !page.CacheComplete {
+		t.Fatalf("local search without current level should build root caches, got %+v", page)
 	}
-	if len(spy.searchRequests) != 1 || len(spy.listRequests) != 0 {
-		t.Fatalf("local search without current level should not build recursive cache, searches=%d lists=%d", len(spy.searchRequests), len(spy.listRequests))
+	if len(page.Items) != 1 || page.Items[0].ObjectKey != "/workspace/docs/guides/test-plan.md" {
+		t.Fatalf("local root cache search should find nested match, got %+v", page.Items)
+	}
+	if len(spy.searchRequests) != 0 || len(spy.listRequests) != 3 {
+		t.Fatalf("local search without current level should list recommended roots and subtree, searches=%d lists=%d", len(spy.searchRequests), len(spy.listRequests))
 	}
 }
 
@@ -362,6 +376,224 @@ func TestTargetTreeSearchCachePersistsThroughStore(t *testing.T) {
 	}
 	if len(readSpy.listRequests) != 0 || len(readSpy.searchRequests) != 0 {
 		t.Fatalf("store-backed search should not access connector, lists=%d searches=%d", len(readSpy.listRequests), len(readSpy.searchRequests))
+	}
+}
+
+func TestTargetTreeSearchReturnsStaleStoreCacheUntilPrewarmRefreshes(t *testing.T) {
+	t.Parallel()
+
+	store := newMemoryTargetSearchCacheStore()
+	buildSpy := &treeConnectorSpy{supportsSearch: true}
+	buildRegistry, err := connector.NewDefaultConnectorRegistry(buildSpy)
+	if err != nil {
+		t.Fatalf("create build registry: %v", err)
+	}
+	req := TargetTreeSearchRequest{
+		ConnectorType: treeTestConnectorType,
+		Keyword:       "welcome",
+		PageSize:      10,
+		IncludeFiles:  true,
+	}
+	buildEngine := NewDefaultTargetTreeEngine(buildRegistry, WithTargetSearchCacheStore(store))
+	buildEngine.cache.delay = 0
+	if err := buildEngine.Prewarm(context.Background(), req); err != nil {
+		t.Fatalf("prewarm target search cache: %v", err)
+	}
+	key := targetSearchCacheKey(req)
+	snapshot := store.snapshots[key]
+	snapshot.staleAt = time.Now().Add(-time.Second)
+	snapshot.stale = true
+	store.snapshots[key] = snapshot
+
+	readSpy := &treeConnectorSpy{supportsSearch: true}
+	readRegistry, err := connector.NewDefaultConnectorRegistry(readSpy)
+	if err != nil {
+		t.Fatalf("create read registry: %v", err)
+	}
+	readEngine := NewDefaultTargetTreeEngine(readRegistry, WithTargetSearchCacheStore(store))
+	page, err := readEngine.Search(context.Background(), req)
+	if err != nil {
+		t.Fatalf("search stale cache from store: %v", err)
+	}
+	if page.CacheStatus != targetSearchCacheStatusComplete || !page.CacheComplete || len(page.Items) != 1 || page.Items[0].ObjectKey != "doc-1" {
+		t.Fatalf("search should keep returning stale completed cache, got %+v", page)
+	}
+	if len(readSpy.listRequests) != 0 || len(readSpy.searchRequests) != 0 {
+		t.Fatalf("search should only read stale cache, lists=%d searches=%d", len(readSpy.listRequests), len(readSpy.searchRequests))
+	}
+
+	refreshSpy := &treeConnectorSpy{
+		supportsSearch: true,
+		childrenSet:    true,
+		children:       []connector.RawObject{rawTreeObject("doc-2", "", "Updated.md", true, false)},
+	}
+	refreshRegistry, err := connector.NewDefaultConnectorRegistry(refreshSpy)
+	if err != nil {
+		t.Fatalf("create refresh registry: %v", err)
+	}
+	refreshEngine := NewDefaultTargetTreeEngine(refreshRegistry, WithTargetSearchCacheStore(store))
+	refreshEngine.cache.delay = 0
+	if err := refreshEngine.Prewarm(context.Background(), req); err != nil {
+		t.Fatalf("refresh stale target search cache: %v", err)
+	}
+	if store.sets != 2 || len(refreshSpy.listRequests) == 0 {
+		t.Fatalf("stale cache should be rebuilt once, sets=%d lists=%d", store.sets, len(refreshSpy.listRequests))
+	}
+
+	updatedReq := req
+	updatedReq.Keyword = "updated"
+	page, err = readEngine.Search(context.Background(), updatedReq)
+	if err != nil {
+		t.Fatalf("search refreshed cache from store: %v", err)
+	}
+	if len(page.Items) != 1 || page.Items[0].ObjectKey != "doc-2" || page.CacheError != "" {
+		t.Fatalf("search should read refreshed cache, got %+v", page)
+	}
+}
+
+func TestTargetTreeSearchCacheFailedRefreshPreservesPreviousCompleteSnapshot(t *testing.T) {
+	t.Parallel()
+
+	store := newMemoryTargetSearchCacheStore()
+	buildSpy := &treeConnectorSpy{supportsSearch: true}
+	buildRegistry, err := connector.NewDefaultConnectorRegistry(buildSpy)
+	if err != nil {
+		t.Fatalf("create build registry: %v", err)
+	}
+	req := TargetTreeSearchRequest{
+		ConnectorType: treeTestConnectorType,
+		Keyword:       "welcome",
+		PageSize:      10,
+		IncludeFiles:  true,
+	}
+	buildEngine := NewDefaultTargetTreeEngine(buildRegistry, WithTargetSearchCacheStore(store))
+	buildEngine.cache.delay = 0
+	if err := buildEngine.Prewarm(context.Background(), req); err != nil {
+		t.Fatalf("prewarm target search cache: %v", err)
+	}
+	key := targetSearchCacheKey(req)
+	snapshot := store.snapshots[key]
+	snapshot.staleAt = time.Now().Add(-time.Second)
+	snapshot.stale = true
+	store.snapshots[key] = snapshot
+
+	failSpy := &treeConnectorSpy{
+		supportsSearch: true,
+		listErr:        connector.NewError(connector.ErrorCodePermissionDenied, "permission denied"),
+	}
+	failRegistry, err := connector.NewDefaultConnectorRegistry(failSpy)
+	if err != nil {
+		t.Fatalf("create failed refresh registry: %v", err)
+	}
+	failEngine := NewDefaultTargetTreeEngine(failRegistry, WithTargetSearchCacheStore(store))
+	failEngine.cache.delay = 0
+	if err := failEngine.Prewarm(context.Background(), req); err != nil {
+		t.Fatalf("failed refresh with previous complete cache should keep cache readable: %v", err)
+	}
+
+	page, err := buildEngine.Search(context.Background(), req)
+	if err != nil {
+		t.Fatalf("search preserved cache after failed refresh: %v", err)
+	}
+	if page.CacheStatus != targetSearchCacheStatusComplete || !page.CacheComplete || len(page.Items) != 1 || page.Items[0].ObjectKey != "doc-1" {
+		t.Fatalf("failed refresh should preserve previous nodes, got %+v", page)
+	}
+	if !strings.Contains(page.CacheError, "permission denied") {
+		t.Fatalf("failed refresh should expose last error, got %+v", page)
+	}
+}
+
+func TestLocalFSTargetSearchCacheUsesLongerStaleTTL(t *testing.T) {
+	t.Parallel()
+
+	store := newMemoryTargetSearchCacheStore()
+	spy := &treeConnectorSpy{
+		connectorType:  connector.ConnectorType("local_fs"),
+		supportsSearch: true,
+		childrenByNodeRef: map[string][]connector.RawObject{
+			"/workspace/docs": {
+				rawTreeObject("/workspace/docs/readme.md", "/workspace/docs", "Readme.md", true, false),
+			},
+		},
+	}
+	registry, err := connector.NewDefaultConnectorRegistry(spy)
+	if err != nil {
+		t.Fatalf("create registry: %v", err)
+	}
+	engine := NewDefaultTargetTreeEngine(registry, WithTargetSearchCacheStore(store))
+	before := time.Now()
+	req := TargetTreeSearchRequest{
+		ConnectorType: connector.ConnectorType("local_fs"),
+		TargetType:    connector.TargetType("local_path"),
+		TargetRef:     "/workspace/docs",
+		IncludeFiles:  true,
+	}
+	if err := engine.Prewarm(context.Background(), req); err != nil {
+		t.Fatalf("prewarm local_fs target search cache: %v", err)
+	}
+	snapshot, ok := store.snapshots[targetSearchCacheKey(req)]
+	if !ok {
+		t.Fatalf("local_fs cache snapshot was not persisted")
+	}
+	minStaleAt := before.Add(targetSearchCacheLocalFSTTL - time.Second)
+	if snapshot.staleAt.Before(minStaleAt) {
+		t.Fatalf("local_fs cache should use longer stale ttl, stale_at=%s min=%s", snapshot.staleAt, minStaleAt)
+	}
+}
+
+func TestLocalFSRootCachePrewarmBuildsCachesSearchCanReuse(t *testing.T) {
+	t.Parallel()
+
+	store := newMemoryTargetSearchCacheStore()
+	spy := &treeConnectorSpy{
+		connectorType:  connector.ConnectorType("local_fs"),
+		supportsSearch: true,
+		childrenByNodeRef: map[string][]connector.RawObject{
+			"": {
+				rawTreeObject("/workspace/docs", "", "docs", false, true),
+			},
+			"/workspace/docs": {
+				rawTreeObject("/workspace/docs/guides", "/workspace/docs", "Guides", false, true),
+			},
+			"/workspace/docs/guides": {
+				rawTreeObject("/workspace/docs/guides/test-plan.md", "/workspace/docs/guides", "test-plan.md", true, false),
+			},
+		},
+	}
+	registry, err := connector.NewDefaultConnectorRegistry(spy)
+	if err != nil {
+		t.Fatalf("create registry: %v", err)
+	}
+	engine := NewDefaultTargetTreeEngine(registry, WithTargetSearchCacheStore(store))
+	engine.cache.delay = 0
+	req := TargetTreeSearchRequest{
+		ConnectorType: connector.ConnectorType("local_fs"),
+		TargetType:    connector.TargetType("local_path"),
+		IncludeFiles:  true,
+	}
+	if err := engine.PrewarmLocalFSRootCaches(context.Background(), req); err != nil {
+		t.Fatalf("prewarm local_fs root caches: %v", err)
+	}
+	if len(spy.listRequests) != 3 {
+		t.Fatalf("prewarm should list roots and subtree once, got %d requests", len(spy.listRequests))
+	}
+
+	spy.listRequests = nil
+	page, err := engine.Search(context.Background(), TargetTreeSearchRequest{
+		ConnectorType: connector.ConnectorType("local_fs"),
+		TargetType:    connector.TargetType("local_path"),
+		Keyword:       "test",
+		PageSize:      10,
+		IncludeFiles:  true,
+	})
+	if err != nil {
+		t.Fatalf("search local_fs root cache: %v", err)
+	}
+	if len(page.Items) != 1 || page.Items[0].ObjectKey != "/workspace/docs/guides/test-plan.md" {
+		t.Fatalf("search should reuse prewarmed root cache, got %+v", page)
+	}
+	if len(spy.listRequests) != 1 {
+		t.Fatalf("search should only refresh root list and reuse subtree cache, got %d list requests", len(spy.listRequests))
 	}
 }
 
@@ -1596,6 +1828,7 @@ func newMemoryTargetSearchCacheStore() *memoryTargetSearchCacheStore {
 func (s *memoryTargetSearchCacheStore) Get(_ context.Context, key string) (targetSearchCacheSnapshot, bool, error) {
 	snapshot, ok := s.snapshots[key]
 	if ok {
+		snapshot.stale = !snapshot.staleAt.IsZero() && time.Now().After(snapshot.staleAt)
 		return snapshot, true, nil
 	}
 	if s.locked {
@@ -1604,9 +1837,13 @@ func (s *memoryTargetSearchCacheStore) Get(_ context.Context, key string) (targe
 	return targetSearchCacheSnapshot{}, false, nil
 }
 
-func (s *memoryTargetSearchCacheStore) Set(_ context.Context, key string, snapshot targetSearchCacheSnapshot, _ time.Duration) error {
+func (s *memoryTargetSearchCacheStore) Set(_ context.Context, key string, snapshot targetSearchCacheSnapshot, staleTTL, _ time.Duration) error {
 	s.sets++
 	s.locked = false
+	if snapshot.staleAt.IsZero() {
+		snapshot.staleAt = time.Now().Add(staleTTL)
+	}
+	snapshot.stale = !snapshot.staleAt.IsZero() && time.Now().After(snapshot.staleAt)
 	s.snapshots[key] = snapshot
 	return nil
 }
