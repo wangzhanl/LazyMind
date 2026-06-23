@@ -84,10 +84,6 @@ def create_app(*, planner_factory: Any | None = None) -> FastAPI:
     async def create_thread(body: dict = BODY_REQUIRED) -> dict:
         return await asyncio.to_thread(hub.create_thread, body)
 
-    @app.get('/v1/evo/threads')
-    def list_threads() -> list[dict]:
-        return hub.list_threads()
-
     @app.get('/v1/evo/threads/statuses')
     def list_thread_statuses() -> dict:
         rows = [
@@ -104,34 +100,17 @@ def create_app(*, planner_factory: Any | None = None) -> FastAPI:
             counts[row['status']] = counts.get(row['status'], 0) + 1
         return {'total': len(rows), 'counts': counts, 'threads': rows}
 
-    @app.get('/v1/evo/threads/{thread_id}')
-    def get_thread(thread_id: str) -> dict:
-        return hub.get_thread(thread_id)
-
     @app.delete('/v1/evo/threads/{thread_id}')
     def delete_thread(thread_id: str) -> dict:
         return hub.delete_thread(thread_id)
-
-    @app.get('/v1/evo/threads/{thread_id}/history')
-    def history(thread_id: str) -> dict:
-        return hub.history(thread_id)
 
     @app.get('/v1/evo/threads/{thread_id}/flow-status')
     def flow_status(thread_id: str) -> dict:
         return hub.flow_status(thread_id)
 
-    @app.post('/v1/evo/threads/{thread_id}:messages')
     @app.post('/v1/evo/threads/{thread_id}/messages')
-    async def post_message(thread_id: str, request: Request, body: dict = BODY_REQUIRED):
-        if 'text/event-stream' in request.headers.get('accept', ''):
-            return EventSourceResponse(hub.post_message_stream(thread_id, body))
-        return await asyncio.to_thread(hub.post_message, thread_id, body)
-
-    @app.get('/v1/evo/threads/{thread_id}/message-events')
-    async def message_events(thread_id: str, request: Request, since: int = 0) -> EventSourceResponse:
-        hub.get_thread(thread_id)
-        last = request.headers.get('last-event-id') or ''
-        return EventSourceResponse(hub.message_events(thread_id, int(last) if last.isdigit() else since))
+    async def post_message(thread_id: str, body: dict = BODY_REQUIRED) -> EventSourceResponse:
+        return EventSourceResponse(hub.post_message_stream(thread_id, body))
 
     @app.post('/v1/evo/threads/{thread_id}/start')
     async def start(thread_id: str, body: dict = BODY_DEFAULT) -> dict:
@@ -153,46 +132,17 @@ def create_app(*, planner_factory: Any | None = None) -> FastAPI:
     async def continue_thread(thread_id: str, body: dict = BODY_DEFAULT) -> dict:
         return await asyncio.to_thread(hub.continue_thread, thread_id, body)
 
-    @app.post('/v1/evo/threads/{thread_id}/auto/step')
-    async def auto_step(thread_id: str, body: dict = BODY_DEFAULT) -> dict:
-        return await asyncio.to_thread(hub.auto_step, thread_id, body)
-
-    @app.post('/v1/evo/threads/{thread_id}/auto/start')
-    async def auto_start(thread_id: str, request: Request, body: dict = BODY_DEFAULT):
-        if 'text/event-stream' in request.headers.get('accept', ''):
-            return EventSourceResponse(_single_sse(
-                'auto_start', {'thread_id': thread_id, **hub.auto_start(thread_id, body)}))
-        return await asyncio.to_thread(hub.auto_start, thread_id, body)
-
-    @app.post('/v1/evo/threads/{thread_id}/auto/stop')
-    def auto_stop(thread_id: str) -> dict:
-        return hub.auto_stop(thread_id)
-
-    @app.get('/v1/evo/threads/{thread_id}/auto/status')
-    def auto_status(thread_id: str) -> dict:
-        return hub.auto_status(thread_id)
-
-    @app.post('/v1/evo/threads/{thread_id}/approvals/{approval_token}:approve')
-    async def approve_pending(thread_id: str, approval_token: str, body: dict = BODY_DEFAULT) -> dict:
-        return await asyncio.to_thread(hub.resolve_approval, thread_id, action='approve',
-                                       approval_token=approval_token, command_id=str(body.get('command_id') or ''))
-
-    @app.post('/v1/evo/threads/{thread_id}/approvals/{approval_token}:reject')
-    async def reject_pending(thread_id: str, approval_token: str, body: dict = BODY_DEFAULT) -> dict:
-        return await asyncio.to_thread(hub.resolve_approval, thread_id, action='reject',
-                                       approval_token=approval_token, command_id=str(body.get('command_id') or ''))
-
-    @app.post('/v1/evo/threads/{thread_id}/approvals/{approval_token}:cancel')
-    async def cancel_pending(thread_id: str, approval_token: str, body: dict = BODY_DEFAULT) -> dict:
-        return await asyncio.to_thread(hub.resolve_approval, thread_id, action='cancel',
-                                       approval_token=approval_token, command_id=str(body.get('command_id') or ''))
-
-    @app.get('/v1/evo/threads/{thread_id}:events')
     @app.get('/v1/evo/threads/{thread_id}/events')
     def events(thread_id: str, request: Request, since: int = 0) -> EventSourceResponse:
         hub.get_thread(thread_id)
         last = request.headers.get('last-event-id') or ''
         return EventSourceResponse(hub.events(thread_id, int(last) if last.isdigit() else since))
+
+    @app.get('/v1/evo/threads/{thread_id}/events/{step_run_id}')
+    def step_events(thread_id: str, step_run_id: str, request: Request, since: int = 0) -> EventSourceResponse:
+        hub.get_thread(thread_id)
+        last = request.headers.get('last-event-id') or ''
+        return EventSourceResponse(hub.events(thread_id, int(last) if last.isdigit() else since, step_run_id))
 
     @app.get('/v1/evo/threads/{thread_id}/results/traces/{trace_id}')
     def trace_detail(thread_id: str, trace_id: str) -> dict:
@@ -209,13 +159,6 @@ def create_app(*, planner_factory: Any | None = None) -> FastAPI:
     @app.get('/v1/evo/threads/{thread_id}/artifacts/{artifact_id}')
     def artifact(thread_id: str, artifact_id: str) -> dict:
         return hub.artifact(thread_id, artifact_id)
-
-    @app.get('/v1/evo/threads/{thread_id}/reports/{report_id}/content')
-    def thread_report_content(thread_id: str, report_id: str, fmt: str = ''):
-        content = hub.report_content(thread_id, report_id)
-        if fmt in {'md', 'markdown', 'text'}:
-            return Response(content, media_type='text/markdown; charset=utf-8')
-        return {'thread_id': thread_id, 'report_id': report_id, 'content': content}
 
     @app.get('/v1/evo/reports/{report_id}/content')
     def report_content(report_id: str, fmt: str = ''):
@@ -293,25 +236,6 @@ class EvoMessageHub:
             'cancelled': False,
         }
 
-    def history(self, thread_id: str) -> dict:
-        meta = self._meta(thread_id)
-        messages = []
-        service_path = self._message_store_path(thread_id)
-        if service_path.exists():
-            store = MessageSessionStore(service_path)
-            try:
-                messages = store.events_as_history(thread_id)
-            finally:
-                store.close()
-        messages = messages or _read_messages(self._thread_dir(thread_id) / 'messages.jsonl')
-        messages = messages or [_thread_summary_message(meta, self.flow_status(thread_id))]
-        return {
-            'thread_id': thread_id,
-            'title': meta.get('title') or thread_id,
-            'messages': messages,
-            'rounds': _history_rounds(thread_id, messages),
-        }
-
     def start(self, thread_id: str, payload: dict[str, Any] | None = None) -> dict:
         payload = payload or {}
         self._update_llm_config(thread_id, payload)
@@ -374,18 +298,6 @@ class EvoMessageHub:
     def auto_start(self, thread_id: str, payload: dict[str, Any] | None = None) -> dict:
         self._meta(thread_id)
         return self._auto_agent.start(thread_id, payload or {})
-
-    def auto_step(self, thread_id: str, payload: dict[str, Any] | None = None) -> dict:
-        self._meta(thread_id)
-        return self._auto_agent.step(thread_id, payload or {})
-
-    def auto_stop(self, thread_id: str) -> dict:
-        self._meta(thread_id)
-        return self._auto_agent.stop(thread_id)
-
-    def auto_status(self, thread_id: str) -> dict:
-        self._meta(thread_id)
-        return self._auto_agent.status(thread_id)
 
     def active_approval(self, thread_id: str) -> ActiveApproval | None:
         self._meta(thread_id)
@@ -450,13 +362,6 @@ class EvoMessageHub:
             'pending_approval': result.pending_approval,
         }
 
-    def reject_message(self, thread_id: str, payload: dict[str, Any]) -> None:
-        self._meta(thread_id)
-        content = str(payload.get('content') or payload.get('message') or '').strip()
-        if not content:
-            raise HTTPException(400, 'message content required')
-        raise HTTPException(409, 'message/NL intervention is not migrated for artifact flow')
-
     async def post_message_stream(self, thread_id: str, payload: dict[str, Any]):
         cursor = 0
         try:
@@ -474,22 +379,7 @@ class EvoMessageHub:
         except HTTPException as exc:
             yield _sse('error', {'thread_id': thread_id, 'code': exc.status_code, 'message': exc.detail})
 
-    async def message_events(self, thread_id: str, since: int = 0):
-        self._meta(thread_id)
-        cursor = max(0, since)
-        idle_ticks = 0
-        while True:
-            with self._message_service_lock:
-                rows = self._message_service(thread_id).subscribe_events(thread_id, cursor)
-            for row in rows:
-                cursor = max(cursor, int(row['id']))
-                yield _sse(str(row['event']), {'thread_id': thread_id, **row['data']}, str(row['id']))
-            idle_ticks = idle_ticks + 1 if not rows else 0
-            if idle_ticks > 4:
-                return
-            await asyncio.sleep(0.5)
-
-    async def events(self, thread_id: str, since: int = 0):
+    async def events(self, thread_id: str, since: int = 0, step_run_id: str = ''):
         self._meta(thread_id)
         if not self._has_artifact_flow(thread_id):
             return
@@ -499,6 +389,8 @@ class EvoMessageHub:
             events = flow.runtime.controller.event_log.scan_since(cursor, limit=100)
             for event in events:
                 cursor = max(cursor, event.seq)
+                if step_run_id and str((event.payload or {}).get('step_run_id') or '') != step_run_id:
+                    continue
                 yield _sse('message', _frontend_event_payload(event), str(event.seq))
             status = self.flow_status(thread_id)['status']
             if status in {'ended', 'failed', 'cancelled'} and not events:
@@ -515,7 +407,9 @@ class EvoMessageHub:
             return _flow_status_row(thread_id, str(meta.get('status') or 'idle'), [])
         flow = self._artifact_flow(thread_id)
         state = flow.step_store.get(RUN_ID)
-        status = _artifact_flow_http_status(state)
+        controller_state = flow.runtime.controller.state(RUN_ID)
+        run_status = controller_state.run.status if controller_state.run_exists else ''
+        status = _artifact_flow_http_status(state, run_status)
         return _flow_status_row(
             thread_id,
             status,
@@ -687,7 +581,9 @@ class EvoMessageHub:
             service.store.close()
 
     def _artifact_flow_response(self, thread_id: str, state: FlowStepState) -> dict:
-        status = _artifact_flow_http_status(state)
+        controller_state = self._artifact_flow(thread_id).runtime.controller.state(state.run_id)
+        run_status = controller_state.run.status if controller_state.run_exists else ''
+        status = _artifact_flow_http_status(state, run_status)
         checkpoint = _artifact_checkpoint_payload(state)
         self._update_meta(thread_id, status=status, pending_checkpoint=checkpoint, updated_at=time.time())
         return {
@@ -729,13 +625,6 @@ class EvoMessageHub:
         self._write_meta(thread_id, meta)
 
 
-def _single_sse(event: str, payload: dict[str, Any]):
-    async def gen():
-        yield _sse(event, payload)
-
-    return gen()
-
-
 def _sse(event: str, payload: dict[str, Any], event_id: str | None = None) -> dict:
     row = {'event': event, 'data': json.dumps({'type': event, **payload}, ensure_ascii=False, default=str)}
     if event_id:
@@ -767,6 +656,7 @@ def _frontend_event_payload(event: Any) -> dict:
     payload = dict(event.payload or {})
     derived = _derive_frontend_event(event.event_type, payload)
     display_payload = _compact_event_payload(event.event_type, payload)
+    step_run = {key: payload.get(key) for key in ('step_run_id', 'next_step_run_id') if payload.get(key)}
     raw_event = {
         'event_type': event.event_type,
         'run_id': event.run_id,
@@ -780,7 +670,8 @@ def _frontend_event_payload(event: Any) -> dict:
         'action': derived.get('action'),
         'event_type': event.event_type,
         'run_id': event.run_id,
-        'payload': {**display_payload, **derived, 'raw_event': raw_event},
+        'payload': {**display_payload, **derived, **step_run, 'raw_event': raw_event},
+        **step_run,
         **{key: value for key, value in derived.items() if value not in (None, '')},
     }
 
@@ -1212,7 +1103,13 @@ def _dict_items(value: Any):
     return value.items() if isinstance(value, dict) else ()
 
 
-def _artifact_flow_http_status(state: FlowStepState | None) -> str:
+def _artifact_flow_http_status(state: FlowStepState | None, run_status: str = '') -> str:
+    if run_status == 'failed':
+        return 'failed'
+    if run_status == 'cancelled':
+        return 'cancelled'
+    if run_status in {'running', 'cancel_requested'}:
+        return 'running'
     if state is None:
         return 'idle'
     if state.gate_status == 'completed':
@@ -1235,57 +1132,6 @@ def _artifact_checkpoint_payload(state: FlowStepState | None) -> dict | None:
         'message': f'{STAGE_LABELS.get(str(state.current_step), state.current_step)}已完成，请确认是否继续执行下一步。',
         'gate_artifact_ref': '' if state.gate_artifact_ref is None else str(state.gate_artifact_ref),
     }
-
-
-def _thread_summary_message(meta: dict, status: dict) -> dict:
-    completed = [STAGE_LABELS.get(str(step), str(step)) for step in status.get('completed_steps') or []]
-    content = f"自进化线程 {meta.get('id') or meta.get('thread_id') or ''} 已恢复。"
-    if completed:
-        content += f" 已完成阶段：{'、'.join(completed)}。"
-    if status.get('status'):
-        content += f" 当前状态：{status['status']}。"
-    return {
-        'id': f"{meta.get('id') or meta.get('thread_id') or 'thread'}-summary",
-        'role': 'assistant',
-        'content': content,
-        'ts': meta.get('updated_at') or meta.get('created_at') or time.time(),
-    }
-
-
-def _history_rounds(thread_id: str, messages: list[dict]) -> list[dict]:
-    rounds, pending_user = [], None
-    for index, message in enumerate(messages):
-        role, content = message.get('role'), str(message.get('content') or '').strip()
-        if not content:
-            continue
-        if role == 'user':
-            pending_user = message
-            continue
-        if role != 'assistant':
-            continue
-        user_message = pending_user or {}
-        round_id = str(user_message.get('id') or message.get('id') or f'{thread_id}-round-{index + 1}')
-        rounds.append(
-            {
-                'round_id': round_id,
-                'thread_id': thread_id,
-                'status': 'completed',
-                'user_message': str(user_message.get('content') or ''),
-                'assistant_message': content,
-                'created_at': _history_timestamp(user_message.get('ts') or message.get('ts')),
-                'updated_at': _history_timestamp(message.get('ts')),
-            }
-        )
-        pending_user = None
-    return rounds
-
-
-def _history_timestamp(value: Any) -> str:
-    if isinstance(value, (int, float)) and value > 0:
-        return time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime(value))
-    if isinstance(value, str) and value.strip():
-        return value.strip()
-    return time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())
 
 
 def _llm_config_payload(payload: dict[str, Any]) -> dict[str, Any]:
@@ -1390,20 +1236,6 @@ def _bounded_positive_int(value: Any, field: str, maximum: int) -> int:
     if out > maximum:
         raise ValueError(f'{field} must be <= {maximum}')
     return out
-
-
-def _read_messages(path: Path) -> list[dict]:
-    if not path.exists():
-        return []
-    rows = []
-    for index, line in enumerate(path.read_text(encoding='utf-8').splitlines()):
-        try:
-            row = json.loads(line)
-        except json.JSONDecodeError:
-            continue
-        if row.get('role') in {'user', 'assistant'} and row.get('content'):
-            rows.append({'id': f'msg-{index + 1}', 'role': row['role'], 'content': row['content'], 'ts': row.get('ts')})
-    return rows
 
 
 def _read_json(path: Path) -> dict:
