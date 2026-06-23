@@ -897,20 +897,21 @@ func TestOpenAPISpecIncludesMCPOperations(t *testing.T) {
 	}
 
 	cases := []struct {
-		method      string
-		path        string
-		requestRef  string
-		responseRef string
-		hasIDParam  bool
+		method             string
+		path               string
+		requestRef         string
+		responseRef        string
+		hasIDParam         bool
+		expectedQueryNames []string
 	}{
-		{"get", "/api/core/mcp_servers", "", "#/components/schemas/ListServersResponse", false},
-		{"post", "/api/core/mcp_servers", "#/components/schemas/CreateServerRequest", "#/components/schemas/ServerResponse", false},
-		{"get", "/api/core/mcp_servers/{id}", "", "#/components/schemas/ServerResponse", true},
-		{"patch", "/api/core/mcp_servers/{id}", "#/components/schemas/UpdateServerRequest", "#/components/schemas/ServerResponse", true},
-		{"delete", "/api/core/mcp_servers/{id}", "", "#/components/schemas/mcpDeleteServerOpenAPIResponse", true},
-		{"post", "/api/core/mcp_servers/{id}:check", "", "#/components/schemas/CheckResponse", true},
-		{"post", "/api/core/mcp_servers/{id}:discover", "", "#/components/schemas/DiscoverResponse", true},
-		{"put", "/api/core/mcp_servers/{id}/tools", "#/components/schemas/UpdateToolsRequest", "#/components/schemas/ServerResponse", true},
+		{"get", "/api/core/mcp_servers", "", "#/components/schemas/ListServersResponse", false, []string{"keyword", "page", "page_size"}},
+		{"post", "/api/core/mcp_servers", "#/components/schemas/CreateServerRequest", "#/components/schemas/ServerResponse", false, nil},
+		{"get", "/api/core/mcp_servers/{id}", "", "#/components/schemas/ServerResponse", true, nil},
+		{"patch", "/api/core/mcp_servers/{id}", "#/components/schemas/UpdateServerRequest", "#/components/schemas/ServerResponse", true, nil},
+		{"delete", "/api/core/mcp_servers/{id}", "", "#/components/schemas/mcpDeleteServerOpenAPIResponse", true, nil},
+		{"post", "/api/core/mcp_servers/{id}:check", "", "#/components/schemas/CheckResponse", true, nil},
+		{"post", "/api/core/mcp_servers/{id}:discover", "", "#/components/schemas/DiscoverResponse", true, nil},
+		{"put", "/api/core/mcp_servers/{id}/tools", "#/components/schemas/UpdateToolsRequest", "#/components/schemas/ServerResponse", true, nil},
 	}
 
 	for _, tc := range cases {
@@ -934,6 +935,26 @@ func TestOpenAPISpecIncludesMCPOperations(t *testing.T) {
 			param, ok := params[0].(map[string]any)
 			if !ok || param["name"] != "id" || param["in"] != "path" || param["required"] != true {
 				t.Fatalf("expected id path parameter for %s %s, got %#v", tc.method, tc.path, params)
+			}
+		}
+		if len(tc.expectedQueryNames) > 0 {
+			params, ok := op["parameters"].([]any)
+			if !ok || len(params) == 0 {
+				t.Fatalf("parameters missing for %s %s", tc.method, tc.path)
+			}
+			queryNames := map[string]struct{}{}
+			for _, item := range params {
+				param, ok := item.(map[string]any)
+				if !ok || param["in"] != "query" {
+					continue
+				}
+				name, _ := param["name"].(string)
+				queryNames[name] = struct{}{}
+			}
+			for _, name := range tc.expectedQueryNames {
+				if _, ok := queryNames[name]; !ok {
+					t.Fatalf("expected query parameter %q for %s %s, got %#v", name, tc.method, tc.path, params)
+				}
 			}
 		}
 		if tc.requestRef != "" {

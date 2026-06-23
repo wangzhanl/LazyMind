@@ -413,6 +413,12 @@ type toolListQueryParams struct {
 	PageSize int32  `query:"page_size"`
 }
 
+type mcpServerListQueryParams struct {
+	Keyword  string `query:"keyword"`
+	Page     int32  `query:"page"`
+	PageSize int32  `query:"page_size"`
+}
+
 type mcpServerPathParams struct {
 	ID string `path:"id"`
 }
@@ -2313,11 +2319,12 @@ func registeredCoreOperations() []openAPIOperation {
 			Responses:  map[int]openAPIResponse{200: resp("Tool enabled", toolStateOpenAPIResponse{})},
 		},
 		{
-			Method:    "GET",
-			Path:      "/mcp_servers",
-			Summary:   "List MCP servers",
-			Tags:      []string{"mcp_servers"},
-			Responses: map[int]openAPIResponse{200: resp("MCP server list", mcp.ListServersResponse{})},
+			Method:      "GET",
+			Path:        "/mcp_servers",
+			Summary:     "List MCP servers",
+			Tags:        []string{"mcp_servers"},
+			QueryParams: mcpServerListQueryParams{},
+			Responses:   map[int]openAPIResponse{200: resp("MCP server list", mcp.ListServersResponse{})},
 		},
 		{
 			Method:      "POST",

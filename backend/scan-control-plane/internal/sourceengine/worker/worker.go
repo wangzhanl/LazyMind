@@ -323,20 +323,38 @@ func (w *DefaultParseWorker) finalize(ctx context.Context, task store.ParseTask,
 	task.LeaseOwner = ""
 	task.LeaseUntil = nil
 	task.UpdatedAt = now
-	if response.Status == coreclient.StatusSubmitted {
+	if response.Status == coreclient.StatusSubmitted || response.Status == coreclient.ResultStatusRunning {
 		task.Status = TaskStatusSubmitted
 		return w.store.SaveParseTask(ctx, task)
 	}
-	task.Status = TaskStatusSucceeded
-	if err := w.store.SaveParseTask(ctx, task); err != nil {
-		return err
+	if response.Status == coreclient.ResultStatusFailed {
+		const reason = "CORE_TASK_FAILED"
+		task.Status = TaskStatusFailed
+		task.LastError = store.JSON{"reason": reason}
+		if err := w.store.SaveParseTask(ctx, task); err != nil {
+			return err
+		}
+		return w.reducer.ApplyTaskFailure(ctx, statepkg.TaskFailureInput{
+			Task:      task,
+			ErrorCode: reason,
+			Message:   reason,
+			FailedAt:  now,
+		})
 	}
-	return w.reducer.ApplyTaskSuccess(ctx, statepkg.TaskSuccessInput{
-		Task:           task,
-		CoreDocumentID: response.CoreDocumentID,
-		CoreVersionID:  response.VersionID,
-		CompletedAt:    now,
-	})
+	if response.Status == coreclient.StatusSucceeded {
+		task.Status = TaskStatusSucceeded
+		if err := w.store.SaveParseTask(ctx, task); err != nil {
+			return err
+		}
+		return w.reducer.ApplyTaskSuccess(ctx, statepkg.TaskSuccessInput{
+			Task:           task,
+			CoreDocumentID: response.CoreDocumentID,
+			CoreVersionID:  response.VersionID,
+			CompletedAt:    now,
+		})
+	}
+	task.Status = TaskStatusSubmitted
+	return w.store.SaveParseTask(ctx, task)
 }
 
 func (w *DefaultParseWorker) supersede(ctx context.Context, task store.ParseTask, reason string) error {
