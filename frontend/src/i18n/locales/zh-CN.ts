@@ -1665,6 +1665,7 @@ const zhCN = {
     dataSourceFallbackName: "数据源",
     dataSourceParseParsed: "已解析",
     dataSourceParsePending: "待解析",
+    dataSourceParseDownloading: "下载中",
     dataSourceParseReindexing: "解析中",
     dataSourceParseDuplicate: "重复文档",
     dataSourceParseDeleted: "待删除",

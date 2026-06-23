@@ -1665,6 +1665,95 @@ func TestSourceDocumentQueryKeepsActiveQueueStateForExistingDocument(t *testing.
 	}
 }
 
+func TestSourceDocumentQueryComputesEffectiveParseStatus(t *testing.T) {
+	t.Parallel()
+
+	repo := newTreeReadRepo()
+	repo.sources["source-1"] = store.Source{SourceID: "source-1"}
+	repo.bindings["source-1"] = []store.Binding{
+		{BindingID: "binding-cloud", SourceID: "source-1", ConnectorType: "feishu"},
+		{BindingID: "binding-local", SourceID: "source-1", ConnectorType: "local_fs"},
+	}
+	cloudRunning := indexedObject("source-1", "binding-cloud", "tree-root", "cloud-running", "", "Cloud Running.md", true, false).Object
+	cloudFailed := indexedObject("source-1", "binding-cloud", "tree-root", "cloud-failed", "", "Cloud Failed.md", true, false).Object
+	localRunning := indexedObject("source-1", "binding-local", "tree-root", "local-running", "", "Local Running.md", true, false).Object
+	localFailed := indexedObject("source-1", "binding-local", "tree-root", "local-failed", "", "Local Failed.md", true, false).Object
+	repo.documents = []DocumentWithState{
+		{
+			Object: cloudRunning,
+			State: store.DocumentState{
+				SourceID:        "source-1",
+				BindingID:       "binding-cloud",
+				ObjectKey:       "cloud-running",
+				SourceState:     "NEW",
+				SyncState:       "IDLE",
+				ParseQueueState: store.ParseTaskStatusRunning,
+			},
+			Document: &store.Document{DocumentID: "document-cloud-running", SourceID: "source-1", BindingID: "binding-cloud", ObjectKey: "cloud-running", ParseStatus: store.ParseTaskStatusPending},
+		},
+		{
+			Object: cloudFailed,
+			State: store.DocumentState{
+				SourceID:        "source-1",
+				BindingID:       "binding-cloud",
+				ObjectKey:       "cloud-failed",
+				SourceState:     "NEW",
+				SyncState:       "IDLE",
+				ParseQueueState: store.ParseTaskStatusFailed,
+				LastError:       store.JSON{"reason": "PERMISSION_DENIED"},
+			},
+			Document: &store.Document{DocumentID: "document-cloud-failed", SourceID: "source-1", BindingID: "binding-cloud", ObjectKey: "cloud-failed", ParseStatus: store.ParseTaskStatusFailed},
+		},
+		{
+			Object: localRunning,
+			State: store.DocumentState{
+				SourceID:        "source-1",
+				BindingID:       "binding-local",
+				ObjectKey:       "local-running",
+				SourceState:     "NEW",
+				SyncState:       "IDLE",
+				ParseQueueState: store.ParseTaskStatusRunning,
+			},
+			Document: &store.Document{DocumentID: "document-local-running", SourceID: "source-1", BindingID: "binding-local", ObjectKey: "local-running", ParseStatus: store.ParseTaskStatusPending},
+		},
+		{
+			Object: localFailed,
+			State: store.DocumentState{
+				SourceID:        "source-1",
+				BindingID:       "binding-local",
+				ObjectKey:       "local-failed",
+				SourceState:     "NEW",
+				SyncState:       "IDLE",
+				ParseQueueState: store.ParseTaskStatusFailed,
+				LastError:       store.JSON{"reason": "PERMISSION_DENIED"},
+			},
+			Document: &store.Document{DocumentID: "document-local-failed", SourceID: "source-1", BindingID: "binding-local", ObjectKey: "local-failed", ParseStatus: store.ParseTaskStatusFailed},
+		},
+	}
+	query := NewDBSourceDocumentQuery(repo, TreeQueryLimits{DefaultPageSize: 10, MaxPageSize: 10})
+
+	resp, err := query.ListDocuments(context.Background(), SourceDocumentListRequest{SourceID: "source-1"})
+	if err != nil {
+		t.Fatalf("list documents: %v", err)
+	}
+	statuses := map[string]string{}
+	for _, item := range resp.Items {
+		statuses[item.ObjectKey] = item.EffectiveParseStatus
+	}
+	if statuses["cloud-running"] != effectiveParseStatusDownloading {
+		t.Fatalf("cloud running task should be downloading, got statuses=%+v", statuses)
+	}
+	if statuses["cloud-failed"] != effectiveParseStatusDownloadFailed {
+		t.Fatalf("cloud permission failure should be download_failed, got statuses=%+v", statuses)
+	}
+	if statuses["local-running"] != effectiveParseStatusParsing {
+		t.Fatalf("local running task should stay parsing, got statuses=%+v", statuses)
+	}
+	if statuses["local-failed"] != effectiveParseStatusFailed {
+		t.Fatalf("local permission failure should stay failed, got statuses=%+v", statuses)
+	}
+}
+
 func TestSourceDocumentQueryDedupesSamePathAndPrefersActiveParse(t *testing.T) {
 	t.Parallel()
 

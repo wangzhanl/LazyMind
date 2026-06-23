@@ -1743,6 +1743,7 @@ const enUS = {
     dataSourceFallbackName: "Data Source",
     dataSourceParseParsed: "Parsed",
     dataSourceParsePending: "Pending parse",
+    dataSourceParseDownloading: "Downloading",
     dataSourceParseReindexing: "Reindexing",
     dataSourceParseDuplicate: "Duplicate",
     dataSourceParseDeleted: "Pending deletion",
