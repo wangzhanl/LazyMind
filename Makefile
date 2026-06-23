@@ -1,5 +1,5 @@
 # Code style: Python (flake8) + Go (gofmt). Mirrors algorithm/lazyllm Makefile pattern.
-.PHONY: help lint install-flake8 lint-python lint-go test test-hermetic test-hermetic-setup test-hermetic-check build up up-build down clear reset-kb reset-all fresh-start file-watcher-dirs file-watcher-build file-watcher-run file-watcher-start file-watcher-stop
+.PHONY: help lint install-flake8 lint-python lint-go test test-hermetic test-hermetic-setup test-hermetic-check build up up-build down clear reset-kb reset-all fresh-start file-watcher-dirs file-watcher-build file-watcher-run file-watcher-start file-watcher-stop local-runtime-build local-runtime-up local-runtime-down local-runtime-status
 .DEFAULT_GOAL := help
 
 # Use legacy Docker builder by default to avoid pulling moby/buildkit:buildx-stable-1 from Docker Hub
@@ -8,6 +8,9 @@ export DOCKER_BUILDKIT ?= 1
 PYTHON ?= python3
 PIP ?= $(PYTHON) -m pip
 GO ?= go
+LAZYMIND_LOCAL_PROFILE ?= linux-browser
+LAZYMIND_LOCAL_BIN ?= local/local-runtime-manager/lazymind-local
+LAZYMIND_LOCAL_GOCACHE ?= $(CURDIR)/.codex-gocache/go-build
 comma := ,
 
 # ---------------------------------------------------------------------------
@@ -17,7 +20,7 @@ comma := ,
 #        make down                         →  docker compose down
 #        make down COMPOSE_PROJECT=myproj  →  docker compose -p myproj down
 # ---------------------------------------------------------------------------
-_COMPOSE = LAZYMIND_RUNTIME_MODE=$(LAZYMIND_RUNTIME_MODE) DOCKER_BUILDKIT=$(DOCKER_BUILDKIT) docker compose $(if $(COMPOSE_PROJECT),-p $(COMPOSE_PROJECT),) $(_COMPOSE_FILE_FLAGS)
+_COMPOSE = DOCKER_BUILDKIT=$(DOCKER_BUILDKIT) docker compose $(if $(COMPOSE_PROJECT),-p $(COMPOSE_PROJECT),)
 # ---------------------------------------------------------------------------
 # Mirror profile: cn (domestic/default) or intl (international).
 # Selects which .env.mirrors.<profile> file to load for all build-time source
@@ -102,18 +105,6 @@ export LAZYMIND_BOOTSTRAP_ADMIN_PASSWORD ?= admin
 export LAZYMIND_RESET_ALGO_ON_STARTUP ?= false
 export LAZYMIND_RESET_ALL_ON_STARTUP ?= false
 export LAZYLLM_ALGO_REGISTER_POLICY ?= none
-# Runtime mode gates local/desktop-only compose overrides. Cloud/server remains
-# the default when unset. Local mode currently uses SQLite for short-lived state.
-_LAZYMIND_RUNTIME_MODE_RAW := $(strip $(LAZYMIND_RUNTIME_MODE))
-_LAZYMIND_STATE_BACKEND_RAW := $(strip $(LAZYMIND_STATE_BACKEND))
-LAZYMIND_RUNTIME_MODE := $(if $(_LAZYMIND_RUNTIME_MODE_RAW),$(_LAZYMIND_RUNTIME_MODE_RAW),cloud)
-ifneq ($(and $(filter-out local,$(LAZYMIND_RUNTIME_MODE)),$(filter sqlite,$(_LAZYMIND_STATE_BACKEND_RAW))),)
-$(error LAZYMIND_STATE_BACKEND=sqlite requires LAZYMIND_RUNTIME_MODE=local)
-endif
-ifneq ($(and $(filter local,$(LAZYMIND_RUNTIME_MODE)),$(filter redis,$(_LAZYMIND_STATE_BACKEND_RAW))),)
-$(error LAZYMIND_RUNTIME_MODE=local requires LAZYMIND_STATE_BACKEND to be unset or sqlite)
-endif
-export LAZYMIND_RUNTIME_MODE
 
 # Core database
 export LAZYMIND_CORE_DATABASE_URL ?= postgresql+psycopg://root:123456@db:5432/core
@@ -180,8 +171,6 @@ help:
 	@echo "                    Use SERVICES=svc1,svc2 to start specific services only"
 	@echo "  make up-build   - Build images and start services"
 	@echo "                    Use SERVICES=svc1,svc2 to target specific services"
-	@echo "                    Use LAZYMIND_RUNTIME_MODE=local to run without Redis"
-	@echo "                    Example: make up-build LAZYMIND_RUNTIME_MODE=local"
 	@echo "  make down       - Stop services"
 	@echo "                    Use SERVICES=svc1,svc2 to stop specific services only"
 	@echo "  make build      - Build compose services (mineru profile only when needed)"
@@ -200,6 +189,12 @@ help:
 	@echo "  make reset-all  - Stop services, wipe ALL persistent data (KB + users, auth, Redis, etc.)"
 	@echo "                    Equivalent to a clean first-run state"
 	@echo "  make fresh-start - reset-kb + up with LAZYMIND_RESET_ALGO_ON_STARTUP=true (standard clean restart)"
+	@echo ""
+	@echo "Local runtime targets:"
+	@echo "  make local-runtime-build       - Build local/local-runtime-manager/lazymind-local"
+	@echo "  make local-runtime-up          - Build and run lazymind-local up (profile: $(LAZYMIND_LOCAL_PROFILE))"
+	@echo "  make local-runtime-down        - Run lazymind-local down (profile: $(LAZYMIND_LOCAL_PROFILE))"
+	@echo "  make local-runtime-status      - Run lazymind-local status --json (profile: $(LAZYMIND_LOCAL_PROFILE))"
 	@echo ""
 	@echo "Mirror profile (build-time source URLs):"
 	@echo "  make up MIRROR_PROFILE=cn    - Use domestic mirrors (default: Aliyun/goproxy.cn/daocloud)"
@@ -263,10 +258,6 @@ _need_opensearch_dashboard := $(and $(_need_opensearch),$(_enable_opensearch_das
 # Start/build profile flags are mode-aware. Cleanup profile flags are intentionally exhaustive.
 _COMPOSE_PROFILES := $(strip $(if $(_need_mineru),--profile mineru) $(if $(_need_milvus),--profile milvus) $(if $(_need_opensearch),--profile opensearch) $(if $(_need_milvus_dashboard),--profile milvus-dashboard) $(if $(_need_opensearch_dashboard),--profile opensearch-dashboard))
 _CLEANUP_COMPOSE_PROFILES := --profile mineru --profile paddleocr --profile milvus --profile opensearch --profile milvus-dashboard --profile opensearch-dashboard --profile file-watcher-artifact
-_IS_LOCAL_RUNTIME := $(filter local,$(strip $(LAZYMIND_RUNTIME_MODE)))
-_REMOVE_REDIS_IF_LOCAL = $(if $(_IS_LOCAL_RUNTIME),$(_COMPOSE) rm -sf redis >/dev/null 2>&1 || true,true)
-_COMPOSE_FILE_FLAGS := $(if $(_IS_LOCAL_RUNTIME),-f docker-compose.yml -f docker-compose.local.yml,)
-_COMPOSE_REDIS_SCALE := $(if $(_IS_LOCAL_RUNTIME),--scale redis=0,)
 _COMPOSE_FILE_WATCHER_SCALE := $(if $(filter container,$(LAZYMIND_FILE_WATCHER_MODE)),,--scale file-watcher=0)
 _COMPOSE_READABLE_PATHS := db-init backend/scan-control-plane/migrations backend/scan-control-plane/scripts
 _PREPARE_COMPOSE_PERMISSIONS = @chmod -R a+rX $(_COMPOSE_READABLE_PATHS) 2>/dev/null || true
@@ -342,8 +333,7 @@ up:
 	fi
 	$(_PREPARE_COMPOSE_PERMISSIONS)
 	$(_SUBMODULE_INIT)
-	@$(_REMOVE_REDIS_IF_LOCAL)
-	@$(_COMPOSE) $(_COMPOSE_PROFILES) up $(_COMPOSE_FILE_WATCHER_SCALE) $(_COMPOSE_REDIS_SCALE) -d \
+	@$(_COMPOSE) $(_COMPOSE_PROFILES) up $(_COMPOSE_FILE_WATCHER_SCALE) -d \
 		$(if $(SERVICES),$(subst $(comma), ,$(SERVICES)),)
 	@if [ "$(LAZYMIND_FILE_WATCHER_MODE)" != "container" ]; then \
 		$(MAKE) --no-print-directory file-watcher-run; \
@@ -367,8 +357,7 @@ up-build:
 	fi
 	$(_PREPARE_COMPOSE_PERMISSIONS)
 	$(_SUBMODULE_INIT)
-	@$(_REMOVE_REDIS_IF_LOCAL)
-	@$(_COMPOSE) $(_COMPOSE_PROFILES) up $(_COMPOSE_FILE_WATCHER_SCALE) $(_COMPOSE_REDIS_SCALE) --build -d \
+	@$(_COMPOSE) $(_COMPOSE_PROFILES) up $(_COMPOSE_FILE_WATCHER_SCALE) --build -d \
 		$(if $(SERVICES),$(subst $(comma), ,$(SERVICES)),)
 	@if [ "$(LAZYMIND_FILE_WATCHER_MODE)" != "container" ]; then \
 		$(MAKE) --no-print-directory file-watcher-run; \
@@ -493,3 +482,20 @@ reset-all: reset-kb
 fresh-start: reset-kb
 	@echo "🚀 Rebuilding images and starting services with LAZYMIND_RESET_ALGO_ON_STARTUP=true..."
 	@$(MAKE) --no-print-directory up-build LAZYMIND_RESET_ALGO_ON_STARTUP=true
+
+# ---------------------------------------------------------------------------
+# Local Runtime Manager v1 entry points (local-only, explicit profile).
+# These call the CLI at local/local-runtime-manager and must be invoked directly.
+# ---------------------------------------------------------------------------
+local-runtime-build:
+	@mkdir -p "$(LAZYMIND_LOCAL_GOCACHE)"
+	@cd local/local-runtime-manager && GOCACHE="$(LAZYMIND_LOCAL_GOCACHE)" $(GO) build -buildvcs=false -o lazymind-local .
+
+local-runtime-up: local-runtime-build
+	@$(LAZYMIND_LOCAL_BIN) up --profile $(LAZYMIND_LOCAL_PROFILE)
+
+local-runtime-down:
+	@$(LAZYMIND_LOCAL_BIN) down --profile $(LAZYMIND_LOCAL_PROFILE)
+
+local-runtime-status:
+	@$(LAZYMIND_LOCAL_BIN) status --json --profile $(LAZYMIND_LOCAL_PROFILE)
