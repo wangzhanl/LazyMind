@@ -53,5 +53,10 @@ services:
     volumes:
       - sqlite-data:/data/sqlite
 
+x-lazymind-local:
+  mode: local
+  disabled_container_services:
+    - redis
+
 volumes:
   sqlite-data:
