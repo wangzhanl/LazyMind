@@ -42,6 +42,8 @@ import {
   dataSourceCloudOauthApi,
   dataSourceDatasetsApi,
   dataSourceModelProvidersApi,
+  getLocalFSChatSetting,
+  updateLocalFSChatSetting,
   unwrapDataSourceApiData,
 } from "./api";
 
@@ -136,7 +138,6 @@ import {
 const { Paragraph, Text } = Typography;
 const DEFAULT_SCHEDULE_TIME = "02:00:00";
 const SCHEDULE_TIME_PATTERN = /^([01]\d|2[0-3]):[0-5]\d:[0-5]\d$/;
-const LOCAL_SCAN_CHAT_STORAGE_KEY = "lazymind:datasource:local-scan:chat-enabled";
 const LOCAL_PATH_CACHE_ROOT_KEY = "__root__";
 const FEISHU_TARGET_CACHE_ROOT_KEY = "__root__";
 const DATA_SOURCE_LIST_DEFAULT_PAGE_SIZE = 10;
@@ -223,18 +224,6 @@ function resolveSourceTypeFromValues(
     return "feishu";
   }
   return fallbackType;
-}
-
-function loadLocalScanChatEnabled() {
-  try {
-    return localStorage.getItem(LOCAL_SCAN_CHAT_STORAGE_KEY) === "true";
-  } catch {
-    return false;
-  }
-}
-
-function persistLocalScanChatEnabled(enabled: boolean) {
-  localStorage.setItem(LOCAL_SCAN_CHAT_STORAGE_KEY, enabled ? "true" : "false");
 }
 
 function loadNotionAppSetup(): FeishuAppSetup | null {
@@ -466,33 +455,6 @@ async function listKnowledgeBaseNames(client = dataSourceDatasetsApi) {
   }
 
   return names;
-}
-
-
-async function listDefaultKnowledgeBaseIds(client = dataSourceDatasetsApi) {
-  const ids: string[] = [];
-  let pageToken: string | undefined;
-
-  for (let pageIndex = 0; pageIndex < 20; pageIndex += 1) {
-    const response = await client.apiCoreDatasetsGet({
-      pageToken,
-      pageSize: 200,
-    });
-    ids.push(
-      ...(response.data.datasets || [])
-        .filter((dataset) => dataset.default_dataset)
-        .map((dataset) => dataset.dataset_id)
-        .filter(Boolean),
-    );
-
-    const nextPageToken = response.data.next_page_token || "";
-    if (!nextPageToken || nextPageToken === pageToken) {
-      break;
-    }
-    pageToken = nextPageToken;
-  }
-
-  return ids;
 }
 
 function sleep(ms: number) {
@@ -1073,10 +1035,7 @@ export default function DataSourceManagement() {
     (item) => !item.adminOnly || canCreateLocalSource,
   );
   const scanAgents: ScanV2AgentHint[] = [];
-  const [defaultDatasetIds, setDefaultDatasetIds] = useState<string[]>([]);
-  const [localScanChatEnabled, setLocalScanChatEnabled] = useState(
-    loadLocalScanChatEnabled,
-  );
+  const [localScanChatEnabled, setLocalScanChatEnabled] = useState(false);
   const [localScanChatSaving, setLocalScanChatSaving] = useState(false);
   const [scanLoading, setScanLoading] = useState(false);
   const [validatedAgentId, setValidatedAgentId] = useState<string | null>(null);
@@ -1670,40 +1629,6 @@ export default function DataSourceManagement() {
     });
   };
 
-  const applyDatasetChatDefault = async (
-    datasetId: string,
-    datasetName: string,
-    chatEnabled: boolean,
-  ) => {
-    const client = dataSourceDatasetsApi;
-    if (chatEnabled) {
-      await client.apiCoreDatasetsDatasetSetDefaultPost({
-        dataset: datasetId,
-        setDefaultDatasetRequest: { name: datasetName },
-      });
-      return;
-    }
-
-    await client.apiCoreDatasetsDatasetUnsetDefaultPost({
-      dataset: datasetId,
-      unsetDefaultDatasetRequest: { name: datasetName },
-    });
-  };
-
-  const syncDefaultDatasetState = (datasetIds: string[], chatEnabled: boolean) => {
-    setDefaultDatasetIds((current) => {
-      const next = new Set(current);
-      datasetIds.forEach((datasetId) => {
-        if (chatEnabled) {
-          next.add(datasetId);
-        } else {
-          next.delete(datasetId);
-        }
-      });
-      return [...next];
-    });
-  };
-
   const handleToggleLocalScanChat = async (chatEnabled: boolean) => {
     if (localScanChatSaving) {
       return;
@@ -1713,29 +1638,13 @@ export default function DataSourceManagement() {
       return;
     }
 
-    const localSources = sources.filter((item) => item.type === "local");
-    const localSourcesWithDataset = localSources.filter((item) => item.datasetId);
     const previousValue = localScanChatEnabled;
     setLocalScanChatSaving(true);
     setLocalScanChatEnabled(chatEnabled);
 
     try {
-      await Promise.all(
-        localSourcesWithDataset.map((source) =>
-          applyDatasetChatDefault(
-            source.datasetId || "",
-            source.knowledgeBase || source.name,
-            chatEnabled,
-          ),
-        ),
-      );
-      syncDefaultDatasetState(
-        localSourcesWithDataset
-          .map((source) => source.datasetId)
-          .filter((datasetId): datasetId is string => Boolean(datasetId)),
-        chatEnabled,
-      );
-      persistLocalScanChatEnabled(chatEnabled);
+      const setting = await updateLocalFSChatSetting(chatEnabled);
+      setLocalScanChatEnabled(Boolean(setting.enabled));
       message.success(
         chatEnabled
           ? t("admin.dataSourceLocalScanChatEnabledSuccess")
@@ -2018,15 +1927,15 @@ export default function DataSourceManagement() {
 
     setScanLoading(true);
     try {
-      const [sourcesResponse, nextDefaultDatasetIds] = await Promise.all([
+      const [sourcesResponse, nextLocalFSChatSetting] = await Promise.all([
         client.listSources({
           keyword: keyword || undefined,
           page: nextPage,
           pageSize: nextPageSize,
         }),
-        listDefaultKnowledgeBaseIds().catch((error) => {
-          console.error("Failed to refresh default knowledge bases", error);
-          return defaultDatasetIds;
+        getLocalFSChatSetting().catch((error) => {
+          console.error("Failed to refresh local fs chat setting", error);
+          return { enabled: localScanChatEnabled };
         }),
       ]);
       const sourceList = (sourcesResponse.data.items || []) as ScanV2Source[];
@@ -2066,17 +1975,7 @@ export default function DataSourceManagement() {
       if (sourceListRequestSeqRef.current !== requestSeq) {
         return;
       }
-      const localDatasetIds = nextSources
-        .filter((item) => item.type === "local")
-        .map((item) => item.datasetId)
-        .filter((datasetId): datasetId is string => Boolean(datasetId));
-      const nextLocalScanChatEnabled = loadLocalScanChatEnabled();
-
-      setDefaultDatasetIds(nextDefaultDatasetIds);
-      setLocalScanChatEnabled(nextLocalScanChatEnabled);
-      if (localDatasetIds.length > 0 && nextLocalScanChatEnabled) {
-        syncDefaultDatasetState(localDatasetIds, true);
-      }
+      setLocalScanChatEnabled(Boolean(nextLocalFSChatSetting.enabled));
       setSources(nextSources);
       setSourceListPage(nextPage);
       setSourceListPageSize(nextPageSize);
@@ -3291,11 +3190,6 @@ export default function DataSourceManagement() {
             },
           });
         }
-      }
-
-      if (localScanChatEnabled && datasetIdForLocalSource) {
-        await applyDatasetChatDefault(datasetIdForLocalSource, sourceName, true);
-        syncDefaultDatasetState([datasetIdForLocalSource], true);
       }
 
       setValidatedAgentId(selectedAgent?.agent_id || validatedAgentId);

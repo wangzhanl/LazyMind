@@ -113,6 +113,24 @@ func TestOpenAPISpecIncludesEvalReportResultSchema(t *testing.T) {
 			t.Fatalf("bad case list schema missing property %q", name)
 		}
 	}
+
+	abCaseOp := openAPIOperationForTest(t, spec, "get", "/api/core/agent/threads/{thread_id}/results/abtests/{abtest_id}/case-details")
+	abCaseResponseRef := openAPIObjectResponseRefForTest(t, abCaseOp)
+	if abCaseResponseRef != "#/components/schemas/agentABTestCaseDetailListOpenAPIResponse" {
+		t.Fatalf("unexpected abtest case detail schema ref: %q", abCaseResponseRef)
+	}
+	abParams := openAPIParameterNamesForTest(t, abCaseOp)
+	for _, name := range []string{"thread_id", "abtest_id", "page_token", "page_size", "keyword", "outcome"} {
+		if _, ok := abParams[name]; !ok {
+			t.Fatalf("abtest case detail operation missing parameter %q", name)
+		}
+	}
+	abCaseProps := schemaPropertiesForTest(t, schemas, "agentABTestCaseDetailListOpenAPIResponse")
+	for _, name := range []string{"items", "total_size", "next_page_token"} {
+		if _, ok := abCaseProps[name]; !ok {
+			t.Fatalf("abtest case detail list schema missing property %q", name)
+		}
+	}
 }
 
 func TestOpenAPISpecDocumentsFeedbackCancellation(t *testing.T) {
@@ -284,6 +302,7 @@ func TestOpenAPISpecCoversEvolutionSkillMemoryPreferenceOperations(t *testing.T)
 	}{
 		{"get", "/api/core/skills", false, true, true},
 		{"get", "/api/core/skills/tags", false, false, true},
+		{"get", "/api/core/skills/categories", false, false, true},
 		{"post", "/api/core/skills", true, false, true},
 		{"get", "/api/core/skills/{skill_id}", false, true, true},
 		{"patch", "/api/core/skills/{skill_id}", true, true, true},
