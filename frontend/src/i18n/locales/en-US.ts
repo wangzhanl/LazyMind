@@ -1749,6 +1749,7 @@ const enUS = {
     dataSourceParseDeleted: "Pending deletion",
     dataSourceParseDownloadFailed: "Download failed",
     dataSourceParseParseFailed: "Parse failed",
+    dataSourceParseCanceled: "Canceled",
     dataSourceParseFailed: "Sync failed",
     dataSourceFileUpdateNewDetail: "New file waiting for ingestion",
     dataSourceFileUpdateChangedDetailTitle: "Content changed",

@@ -290,6 +290,13 @@ function getParseStatusMeta(status: DocumentStatusRow["parseStatus"], t: TFuncti
       icon: <ExclamationCircleFilled />,
     };
   }
+  if (status === "canceled") {
+    return {
+      color: "#f79009",
+      text: t("admin.dataSourceParseCanceled"),
+      icon: <ClockCircleFilled />,
+    };
+  }
   return {
     color: "#f04438",
     text: t("admin.dataSourceParseFailed"),
@@ -1465,6 +1472,8 @@ export default function DataSourceDetail() {
                   : parseStatus === "pending"
                     ? "default"
                   : parseStatus === "duplicate"
+                    ? "warning"
+                  : parseStatus === "canceled"
                     ? "warning"
                     : "error"
             }

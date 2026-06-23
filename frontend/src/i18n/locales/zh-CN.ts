@@ -1671,6 +1671,7 @@ const zhCN = {
     dataSourceParseDeleted: "待删除",
     dataSourceParseDownloadFailed: "下载失败",
     dataSourceParseParseFailed: "解析失败",
+    dataSourceParseCanceled: "已取消",
     dataSourceParseFailed: "同步失败",
     dataSourceFileUpdateNewDetail: "新文件待入库",
     dataSourceFileUpdateChangedDetailTitle: "内容变更",

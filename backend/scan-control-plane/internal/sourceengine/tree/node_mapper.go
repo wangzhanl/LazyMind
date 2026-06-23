@@ -16,6 +16,7 @@ const (
 	effectiveParseStatusParsing        = "PARSING"
 	effectiveParseStatusFailed         = "FAILED"
 	effectiveParseStatusParseFailed    = "PARSE_FAILED"
+	effectiveParseStatusCanceled       = "CANCELED"
 	effectiveParseStatusDownloading    = "DOWNLOADING"
 	effectiveParseStatusDownloadFailed = "DOWNLOAD_FAILED"
 )
@@ -173,7 +174,13 @@ func documentItem(item DocumentWithState, binding store.Binding) SourceDocumentI
 }
 
 func documentEffectiveParseState(queueState, documentStatus string) string {
-	if activeParseState(queueState) || strings.ToUpper(strings.TrimSpace(queueState)) == store.ParseTaskStatusFailed {
+	if activeParseState(queueState) {
+		return queueState
+	}
+	if documentCanceledState(documentStatus) {
+		return effectiveParseStatusCanceled
+	}
+	if strings.ToUpper(strings.TrimSpace(queueState)) == store.ParseTaskStatusFailed {
 		return queueState
 	}
 	if strings.TrimSpace(documentStatus) != "" {
@@ -195,6 +202,9 @@ func documentEffectiveParseStatus(item SourceDocumentItem, binding store.Binding
 	parseState := strings.ToUpper(strings.TrimSpace(firstNonEmptyString(item.ParseState, item.ParseQueueState, item.ParseStatus)))
 	if parseState == "" {
 		return ""
+	}
+	if documentCanceledState(parseState) || documentCanceledState(item.ParseStatus) || documentCanceledError(item.LastError) {
+		return effectiveParseStatusCanceled
 	}
 	supportsDownloadStatus := supportsDocumentDownloadStatus(binding)
 	if documentFailureState(parseState) {
@@ -238,6 +248,19 @@ func documentParsingState(parseState string) bool {
 
 func documentFailureState(parseState string) bool {
 	return strings.Contains(parseState, "FAIL") || strings.Contains(parseState, "ERROR")
+}
+
+func documentCanceledState(value string) bool {
+	return statusTextHasAny(value, "canceled", "cancelled")
+}
+
+func documentCanceledError(lastError map[string]any) bool {
+	for _, key := range []string{"code", "reason", "status", "task_state"} {
+		if documentCanceledState(documentLastErrorField(lastError, key)) {
+			return true
+		}
+	}
+	return false
 }
 
 func documentDownloadFailure(parseState string, lastError map[string]any) bool {

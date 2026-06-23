@@ -20,6 +20,7 @@ export type DetailParseStatus =
   | "deleted"
   | "download_failed"
   | "parse_failed"
+  | "canceled"
   | "failed";
 export type DataSourceKind = "local" | "feishu" | "notion";
 export type DataSourceFileType =
@@ -633,6 +634,9 @@ export function normalizeDataSourceParseStatus(
   lastError?: unknown,
   options?: DataSourceParseStatusOptions,
 ): DetailParseStatus {
+  if (hasStatusToken(parseState, ["cancel", "canceled", "cancelled"])) {
+    return "canceled";
+  }
   const failureStatus = normalizeDataSourceFailureStatus(
     parseState,
     lastError,

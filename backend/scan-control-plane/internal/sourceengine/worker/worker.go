@@ -327,8 +327,11 @@ func (w *DefaultParseWorker) finalize(ctx context.Context, task store.ParseTask,
 		task.Status = TaskStatusSubmitted
 		return w.store.SaveParseTask(ctx, task)
 	}
-	if response.Status == coreclient.ResultStatusFailed {
-		const reason = "CORE_TASK_FAILED"
+	if response.Status == coreclient.ResultStatusFailed || response.Status == coreclient.ResultStatusCanceled {
+		reason := "CORE_TASK_FAILED"
+		if response.Status == coreclient.ResultStatusCanceled {
+			reason = "CANCELED"
+		}
 		task.Status = TaskStatusFailed
 		task.LastError = store.JSON{"reason": reason}
 		if err := w.store.SaveParseTask(ctx, task); err != nil {
