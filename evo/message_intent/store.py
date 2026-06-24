@@ -81,20 +81,18 @@ class MessageSessionStore:
 
     def _configure_journal_mode(self) -> None:
         try:
-            self._connection.execute('PRAGMA journal_mode=WAL')
+            self._connection.execute('PRAGMA journal_mode=DELETE')
             self._connection.execute('CREATE TABLE IF NOT EXISTS __journal_probe(id INTEGER PRIMARY KEY)')
             self._connection.execute('DROP TABLE IF EXISTS __journal_probe')
-        except sqlite3.OperationalError:
+        except sqlite3.DatabaseError:
             self._connection.close()
-            self._cleanup_failed_wal_init()
+            self._cleanup_failed_init()
             self._connection = self._connect()
             self._connection.execute('PRAGMA journal_mode=DELETE')
 
-    def _cleanup_failed_wal_init(self) -> None:
-        for suffix in ('-shm', '-wal'):
+    def _cleanup_failed_init(self) -> None:
+        for suffix in ('', '-shm', '-wal', '-journal'):
             self.path.with_name(f'{self.path.name}{suffix}').unlink(missing_ok=True)
-        if self.path.exists() and self.path.stat().st_size <= 4096:
-            self.path.unlink()
 
     def close(self) -> None:
         self._connection.close()
