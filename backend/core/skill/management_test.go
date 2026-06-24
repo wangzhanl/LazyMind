@@ -2889,7 +2889,7 @@ func TestUpdateParentSkillRejectsParentSkillName(t *testing.T) {
 	}
 }
 
-func TestUpdateParentSkillRejectsParentSkillID(t *testing.T) {
+func TestUpdateParentSkillIgnoresParentSkillID(t *testing.T) {
 	db := newSkillTestDB(t)
 	store.Init(db.DB, nil, nil)
 	t.Cleanup(func() { store.Init(nil, nil, nil) })
@@ -2926,7 +2926,7 @@ func TestUpdateParentSkillRejectsParentSkillID(t *testing.T) {
 		httptest.NewRequest(
 			http.MethodPatch,
 			"/api/core/skills/"+parent.ID,
-			strings.NewReader(fmt.Sprintf(`{"parent_skill_id":%q}`, other.ID)),
+			strings.NewReader(fmt.Sprintf(`{"name":"svn-usage","content":"Manual update content.","is_locked":false,"description":"Updated parent description","parent_skill_id":%q,"tags":[],"file_ext":"md"}`, other.ID)),
 		),
 		map[string]string{"skill_id": parent.ID},
 	)
@@ -2937,29 +2937,49 @@ func TestUpdateParentSkillRejectsParentSkillID(t *testing.T) {
 
 	UpdateManaged(rec, req)
 
-	if rec.Code != http.StatusBadRequest {
-		t.Fatalf("expected status 400, got %d body=%s", rec.Code, rec.Body.String())
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected status 200, got %d body=%s", rec.Code, rec.Body.String())
 	}
-	var resp struct {
-		Code    int    `json:"code"`
-		Message string `json:"message"`
-	}
+	var resp getSkillDetailAPITestResponse
 	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
 		t.Fatalf("decode response: %v", err)
 	}
-	if !strings.Contains(resp.Message, "parent_skill_id cannot be updated") {
-		t.Fatalf("expected parent_skill_id update error, got code=%d message=%q", resp.Code, resp.Message)
+	if resp.Code != 0 {
+		t.Fatalf("expected code 0, got %d message=%q", resp.Code, resp.Message)
+	}
+	if resp.Data.Description != "Updated parent description" {
+		t.Fatalf("expected description to update, got %q", resp.Data.Description)
 	}
 
-	var unchanged orm.SkillResource
-	if err := db.Where("id = ?", parent.ID).Take(&unchanged).Error; err != nil {
-		t.Fatalf("query unchanged parent skill: %v", err)
+	var updated orm.SkillResource
+	if err := db.Where("id = ?", parent.ID).Take(&updated).Error; err != nil {
+		t.Fatalf("query updated parent skill: %v", err)
 	}
-	if unchanged.NodeType != evolution.SkillNodeTypeParent {
-		t.Fatalf("expected skill to remain parent, got %q", unchanged.NodeType)
+	if updated.NodeType != evolution.SkillNodeTypeParent {
+		t.Fatalf("expected skill to remain parent, got %q", updated.NodeType)
 	}
-	if unchanged.ParentSkillName != "" {
-		t.Fatalf("expected parent_skill_name to remain empty, got %q", unchanged.ParentSkillName)
+	if updated.SkillName != "svn-usage" {
+		t.Fatalf("expected name to update, got %q", updated.SkillName)
+	}
+	if updated.ParentSkillName != "" {
+		t.Fatalf("expected parent_skill_name to remain empty, got %q", updated.ParentSkillName)
+	}
+	if updated.Description != "Updated parent description" {
+		t.Fatalf("expected description to update, got %q", updated.Description)
+	}
+	if !strings.Contains(updated.Content, "Manual update content.") {
+		t.Fatalf("expected content to update, got %q", updated.Content)
+	}
+
+	var otherUnchanged orm.SkillResource
+	if err := db.Where("id = ?", other.ID).Take(&otherUnchanged).Error; err != nil {
+		t.Fatalf("query other parent skill: %v", err)
+	}
+	if otherUnchanged.NodeType != evolution.SkillNodeTypeParent {
+		t.Fatalf("expected other skill to remain parent, got %q", otherUnchanged.NodeType)
+	}
+	if otherUnchanged.SkillName != "release-check" {
+		t.Fatalf("expected other skill name to stay release-check, got %q", otherUnchanged.SkillName)
 	}
 }
 

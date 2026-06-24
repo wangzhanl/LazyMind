@@ -1819,6 +1819,8 @@ const enUS = {
     dataSourceLocalScanChatNoSourceHint:
       "No local directories are connected yet. Create a local directory knowledge source first.",
     dataSourceUseCurrentInput: "Use current input: {{value}}",
+    dataSourceUseCurrentFeishuWikiInput: "Wiki: {{value}}",
+    dataSourceUseCurrentFeishuDriveInput: "Drive: {{value}}",
     dataSourceNoLocalDirectories: "No selectable directories found",
     dataSourceLocalDirectoryListFailedManual:
       "Failed to load directory list. You can enter the path manually first.",
