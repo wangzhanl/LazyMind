@@ -63,6 +63,15 @@ class AutoPolicy:
         if approval is None:
             return AutoAction(kind='noop', reason='no active approval')
         auto_owned = approval.approval_token in state.auto_pending_approvals
+        if approval.status == 'resolving':
+            if auto_owned:
+                return AutoAction(
+                    kind='approve_pending',
+                    reason='auto-owned pending approval is resolving; probe command result',
+                    approval_token=approval.approval_token,
+                    target=approval.intent_kind,
+                )
+            return AutoAction(kind='noop', reason='pending approval is already resolving')
         allowed = config.auto_approve == 'all_mutations' or (
             config.auto_approve == 'evidence_backed'
             and auto_owned

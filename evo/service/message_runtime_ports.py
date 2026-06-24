@@ -183,6 +183,8 @@ class EvoMessageRuntimePorts:
     ) -> dict[str, Any]:
         request = intent_request_from_payload(command_id, prepared_payload, expected_fingerprint=expected_fingerprint)
         result = self.flow_getter(thread_id).runtime.execute_intent(request)
+        if result.status == 'failed' and result.reason == 'command_in_progress':
+            return {'status': 'in_progress', 'reason': result.reason}
         return {'status': result.status, 'reason': result.reason}
 
     def _views(self, thread_id: str) -> ArtifactViewService:

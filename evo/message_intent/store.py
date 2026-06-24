@@ -15,7 +15,7 @@ from typing import Any, Iterator, Literal
 from evo.artifact_runtime import prepared_intent_payload_fingerprint
 from evo.artifact_runtime.utils import canonical_json, normalize_json_value, validate_nonempty
 
-PendingApprovalStatus = Literal['active', 'approved', 'rejected', 'cancelled', 'superseded', 'expired']
+PendingApprovalStatus = Literal['active', 'resolving', 'approved', 'rejected', 'cancelled', 'superseded', 'expired']
 
 
 @dataclass(frozen=True)
@@ -359,7 +359,7 @@ class MessageSessionStore:
             row = self._connection.execute(
                 """
                 SELECT * FROM pending_approval
-                WHERE thread_id = ? AND status = 'active'
+                WHERE thread_id = ? AND status IN ('active', 'resolving')
                 ORDER BY created_at DESC
                 LIMIT 1
                 """,
@@ -406,7 +406,7 @@ class MessageSessionStore:
         with self._transaction() as conn:
             self._require_lease(conn, lease)
             existing = conn.execute(
-                "SELECT approval_token FROM pending_approval WHERE thread_id = ? AND status = 'active' LIMIT 1",
+                "SELECT approval_token FROM pending_approval WHERE thread_id = ? AND status IN ('active', 'resolving') LIMIT 1",
                 (lease.thread_id,),
             ).fetchone()
             if existing is not None and not supersede_existing:
@@ -416,7 +416,7 @@ class MessageSessionStore:
                 conn.execute(
                     'UPDATE pending_approval '
                     "SET status = 'superseded', superseded_by = ? "
-                    "WHERE thread_id = ? AND status = 'active'",
+                    "WHERE thread_id = ? AND status IN ('active', 'resolving')",
                     (approval_token, lease.thread_id),
                 )
                 conn.execute(
@@ -474,6 +474,45 @@ class MessageSessionStore:
             '',
         )
 
+    def begin_approval_resolution(
+        self,
+        lease: MessageLease,
+        approval_token: str,
+        *,
+        turn_id: str = '',
+        message_id: str = '',
+    ) -> PendingApproval:
+        return self._set_approval_status(
+            lease,
+            approval_token,
+            from_statuses=('active',),
+            status='resolving',
+            event_type='approval_resolving',
+            event_payload={},
+            turn_id=turn_id,
+            message_id=message_id,
+        )
+
+    def reopen_approval(
+        self,
+        lease: MessageLease,
+        approval_token: str,
+        *,
+        event_payload: Mapping[str, Any],
+        turn_id: str = '',
+        message_id: str = '',
+    ) -> PendingApproval:
+        return self._set_approval_status(
+            lease,
+            approval_token,
+            from_statuses=('resolving',),
+            status='active',
+            event_type='approval_reopened',
+            event_payload=event_payload,
+            turn_id=turn_id,
+            message_id=message_id,
+        )
+
     def resolve_approval(
         self,
         lease: MessageLease,
@@ -486,6 +525,29 @@ class MessageSessionStore:
     ) -> PendingApproval:
         if status not in {'approved', 'rejected', 'cancelled', 'superseded', 'expired'}:
             raise ValueError('approval resolution status must be terminal')
+        return self._set_approval_status(
+            lease,
+            approval_token,
+            from_statuses=('active', 'resolving'),
+            status=status,
+            event_type='approval_resolved',
+            event_payload=event_payload,
+            turn_id=turn_id,
+            message_id=message_id,
+        )
+
+    def _set_approval_status(
+        self,
+        lease: MessageLease,
+        approval_token: str,
+        *,
+        from_statuses: tuple[PendingApprovalStatus, ...],
+        status: PendingApprovalStatus,
+        event_type: str,
+        event_payload: Mapping[str, Any],
+        turn_id: str = '',
+        message_id: str = '',
+    ) -> PendingApproval:
         now = time.time()
         payload = _json_object(event_payload)
         with self._transaction() as conn:
@@ -496,8 +558,8 @@ class MessageSessionStore:
             ).fetchone()
             if row is None:
                 raise MessageStoreConflict('pending approval not found')
-            if str(row['status']) != 'active':
-                raise MessageStoreConflict('pending approval is not active')
+            if str(row['status']) not in from_statuses:
+                raise MessageStoreConflict(f'pending approval is not one of {from_statuses}')
             conn.execute(
                 'UPDATE pending_approval SET status = ? WHERE thread_id = ? AND approval_token = ?',
                 (status, lease.thread_id, approval_token),
@@ -505,9 +567,9 @@ class MessageSessionStore:
             conn.execute(
                 """
                 INSERT INTO message_events(thread_id, event_type, turn_id, message_id, payload_json, created_at)
-                VALUES (?, 'approval_resolved', ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?)
                 """,
-                (lease.thread_id, turn_id, message_id, canonical_json(
+                (lease.thread_id, event_type, turn_id, message_id, canonical_json(
                     {'approval_token': approval_token, 'status': status, **payload}), now),
             )
         resolved = _approval_from_row(row)
@@ -591,9 +653,10 @@ class MessageSessionStore:
                 expires_at REAL NOT NULL,
                 superseded_by TEXT NOT NULL
             );
-            CREATE UNIQUE INDEX IF NOT EXISTS uq_pending_approval_active
+            DROP INDEX IF EXISTS uq_pending_approval_active;
+            CREATE UNIQUE INDEX IF NOT EXISTS uq_pending_approval_open
                 ON pending_approval(thread_id)
-                WHERE status = 'active';
+                WHERE status IN ('active', 'resolving');
 
             CREATE TABLE IF NOT EXISTS working_set (
                 thread_id TEXT PRIMARY KEY,

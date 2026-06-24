@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping
+from contextlib import contextmanager
 from dataclasses import dataclass
+from threading import Event, Thread
 import time
 import uuid
-from typing import Any
+from typing import Any, Iterator
 
 from evo.artifact_runtime.utils import canonical_json, normalize_json_value
 
@@ -143,6 +145,40 @@ class MessageIntentService:
             command_id=command_id,
         )
 
+    def probe_resolving_approval(self, thread_id: str, *, approval_token: str) -> dict[str, Any]:
+        with self.store.lease(thread_id, owner_id=f'message-intent-probe:{approval_token}') as lease:
+            approval = self._active_approval(lease)
+            if approval is None:
+                return {'status': 'done', 'reason': 'no_active_approval'}
+            if approval.approval_token != approval_token:
+                return {'status': 'conflict', 'reason': 'approval_token mismatch'}
+            if approval.status != 'resolving':
+                return {'status': approval.status, 'reason': 'approval_not_resolving'}
+            result = self.commands.execute_approval(
+                thread_id,
+                command_id=approval.command_id,
+                prepared_payload=approval.prepared_payload,
+                expected_fingerprint=approval.request_fingerprint,
+            )
+            status = str(result.get('status') or '')
+            if status == 'in_progress':
+                return {'status': 'in_progress', 'reason': str(result.get('reason') or '')}
+            if status == 'conflict':
+                self.store.reopen_approval(
+                    lease,
+                    approval.approval_token,
+                    event_payload={'reason': str(result.get('reason') or 'conflict')},
+                )
+                return {'status': 'conflict', 'reason': str(result.get('reason') or 'conflict')}
+            final = 'approved' if status == 'applied' else 'cancelled'
+            self.store.resolve_approval(
+                lease,
+                approval.approval_token,
+                status=final,
+                event_payload={'reason': str(result.get('reason') or status)},
+            )
+            return {'status': status or final, 'reason': str(result.get('reason') or status or final)}
+
     def _handle_message_turn(
         self,
         lease: MessageLease,
@@ -156,10 +192,11 @@ class MessageIntentService:
         for loop_index in range(MAX_INTENT_LOOP_STEPS):
             prior_agenda = self.store.active_agenda(lease.thread_id)
             try:
+                planner_context = self._planner_context(lease, turn_id, message_id, payload)
                 plan = self.planner.plan(
                     next_text,
                     message_id=message_id,
-                    working_set=self._planner_context(lease, turn_id, message_id, payload),
+                    working_set=planner_context,
                     active_agenda=prior_agenda,
                 )
             except ValueError as exc:
@@ -228,9 +265,12 @@ class MessageIntentService:
             frame,
             has_active_approval=approval is not None,
             active_approval_token='' if approval is None else approval.approval_token,
+            flow_status=self.flow_status(lease.thread_id),
             resolved=resolved,
         )
         if gate:
+            if update_agenda is not None:
+                self.store.set_active_agenda(lease, update_agenda)
             self._set_blocked_intent(lease, frame.source.text, frame, gate)
             return self._clarify(lease, turn_id, message_id, gate)
         result = self._execute(lease, turn_id, message_id, resolved, intent_index=intent_index)
@@ -254,12 +294,14 @@ class MessageIntentService:
         approval = self._active_approval(lease, turn_id, message_id)
         return {
             'active_agenda': self.store.active_agenda(lease.thread_id),
+            'blocked_current_intent': working_set.get('blocked_current_intent'),
             'conversation_working_set': working_set,
             'flow_status': self.flow_status(lease.thread_id),
             'active_approval': None if approval is None else {
                 'approval_token': approval.approval_token,
                 'intent_kind': approval.intent_kind,
                 'risk_level': approval.risk_level,
+                'status': approval.status,
                 'expires_at': approval.expires_at,
             },
             'recent_actions': self.store.recent_events(
@@ -436,36 +478,56 @@ class MessageIntentService:
         if approval_token and approval.approval_token != approval_token:
             return self._clarify(lease, turn_id, message_id, 'approval_token mismatch')
         if kind in {'reject_pending', 'cancel_pending'}:
+            if approval.status == 'resolving':
+                return self._clarify(lease, turn_id, message_id, '该待确认操作已经开始执行，无法取消。')
             status = 'rejected' if kind == 'reject_pending' else 'cancelled'
             self.store.resolve_approval(lease, approval.approval_token, status=status, event_payload={}, turn_id=turn_id, message_id=message_id)
             return self._assistant(lease, turn_id, message_id, '已取消待确认操作。')
-        try:
-            stale = self.commands.stale_expected_refs(lease.thread_id, approval.expected_refs)
-        except RuntimeError as exc:
-            return self._command_response(
-                lease,
-                turn_id,
-                message_id,
-                'approve_pending',
-                {'status': 'conflict', 'reason': str(exc) or 'flow operation is busy'},
+        with self._lease_keepalive(lease):
+            if approval.status == 'active':
+                try:
+                    stale = self.commands.stale_expected_refs(lease.thread_id, approval.expected_refs)
+                except RuntimeError as exc:
+                    return self._command_response(
+                        lease,
+                        turn_id,
+                        message_id,
+                        'approve_pending',
+                        {'status': 'conflict', 'reason': str(exc) or 'flow operation is busy'},
+                    )
+                if stale:
+                    self.store.resolve_approval(
+                        lease,
+                        approval.approval_token,
+                        status='cancelled',
+                        event_payload={'reason': 'stale_expected_ref', 'stale_refs': stale},
+                        turn_id=turn_id,
+                        message_id=message_id,
+                    )
+                    return self._clarify(lease, turn_id, message_id, '待修改产物已变化，请重新发起修改。')
+                approval = self.store.begin_approval_resolution(
+                    lease,
+                    approval.approval_token,
+                    turn_id=turn_id,
+                    message_id=message_id,
+                )
+            result = self.commands.execute_approval(
+                lease.thread_id,
+                command_id=approval.command_id,
+                prepared_payload=approval.prepared_payload,
+                expected_fingerprint=approval.request_fingerprint,
             )
-        if stale:
-            self.store.resolve_approval(
-                lease,
-                approval.approval_token,
-                status='cancelled',
-                event_payload={'reason': 'stale_expected_ref', 'stale_refs': stale},
-                turn_id=turn_id,
-                message_id=message_id,
-            )
-            return self._clarify(lease, turn_id, message_id, '待修改产物已变化，请重新发起修改。')
-        result = self.commands.execute_approval(
-            lease.thread_id,
-            command_id=approval.command_id,
-            prepared_payload=approval.prepared_payload,
-            expected_fingerprint=approval.request_fingerprint,
-        )
         if str(result.get('status') or '') == 'conflict':
+            if approval.status == 'resolving':
+                self.store.reopen_approval(
+                    lease,
+                    approval.approval_token,
+                    event_payload={'reason': str(result.get('reason') or 'conflict')},
+                    turn_id=turn_id,
+                    message_id=message_id,
+                )
+            return self._command_response(lease, turn_id, message_id, 'approve_pending', result)
+        if str(result.get('status') or '') == 'in_progress':
             return self._command_response(lease, turn_id, message_id, 'approve_pending', result)
         status = 'approved' if result.get('status') == 'applied' else 'cancelled'
         self.store.resolve_approval(
@@ -545,7 +607,7 @@ class MessageIntentService:
         )
         assistant = self._assistant_event(lease, turn_id, message_id, text)
         payload_status = str(payload.get('status') or '')
-        if payload_status in {'accepted', 'accepted_existing'}:
+        if payload_status in {'accepted', 'accepted_existing', 'in_progress'}:
             status = 'accepted'
         elif payload_status == 'failed':
             status = 'error'
@@ -618,10 +680,30 @@ class MessageIntentService:
         approval = self.store.active_approval(lease.thread_id)
         if approval is None:
             return None
+        if approval.status == 'resolving':
+            return approval
         if approval.expires_at > time.time():
             return approval
         self.store.expire_approval(lease, approval.approval_token, turn_id=turn_id, message_id=message_id)
         return None
+
+    @contextmanager
+    def _lease_keepalive(self, lease: MessageLease) -> Iterator[None]:
+        self.store.heartbeat(lease)
+        stop = Event()
+
+        def beat() -> None:
+            while not stop.wait(max(1.0, min(30.0, self.store.lease_seconds / 3.0))):
+                self.store.heartbeat(lease)
+
+        thread = Thread(target=beat, daemon=True)
+        thread.start()
+        try:
+            yield
+        finally:
+            stop.set()
+            thread.join(timeout=1.0)
+            self.store.heartbeat(lease)
 
     def _set_blocked_intent(
         self,
@@ -692,6 +774,8 @@ def _response_prompt(thread_id: str, turn_id: str, message_id: str, kind: str, t
         'The operation has already been parsed, gated, and executed or prepared. '
         'Write concise Chinese for the user. Do not output raw JSON. '
         'Use only the tool result; do not invent facts. '
+        'A flow stage_gate checkpoint is flow control, not an approval; do not call checkpoint_id an approval token. '
+        'For stage_gate status, say the flow is waiting for confirmation to continue; do not expose internal checkpoint_id unless asked. '
         'For pending approvals, clearly mention the approval token and exact previewed change.\n\n'
         f'Thread id: {thread_id}\nTurn id: {turn_id}\nMessage id: {message_id}\nOperation: {kind}\n'
         f'Tool result JSON:\n{canonical_json(normalize_json_value(dict(tool_result), allow_tuple=True))}'
@@ -719,6 +803,8 @@ def _natural_fallback(kind: str, payload: Mapping[str, Any]) -> str:
         more = ' 内容已截断，可以继续读取后续部分。' if payload.get('truncated') or payload.get('next_cursor') else ''
         return f'{source} 的读取结果：{excerpt or "暂无可展示内容。"}{more}'
     if kind == 'approve_pending':
+        if str(payload.get('status') or '') == 'in_progress':
+            return '待确认操作已经开始执行，当前仍在处理中；可以稍后再查看或再次确认以补写结果。'
         return f'待确认操作处理结果：{payload.get("status") or "unknown"}。{payload.get("reason") or ""}'.strip()
     status = str(payload.get('status') or 'done')
     current = str(payload.get('current_step') or '')

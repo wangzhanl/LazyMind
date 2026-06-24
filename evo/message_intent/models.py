@@ -195,19 +195,3 @@ class ResolvedIntent(StrictModel):
     approval_token: str = ''
     reason: str = ''
     raw_args: dict[str, Any] = Field(default_factory=dict)
-
-
-READ_ONLY_KINDS = frozenset({
-    'no_action_ack',
-    'chat',
-    'status_query',
-    'read_case_result',
-    'read_report_section',
-    'explain_current_gate',
-})
-MUTATING_KINDS = frozenset({'continue_flow', 'pause_flow', 'cancel_flow', 'retry_failed', 'rerun_case', 'patch_artifact'})
-PENDING_RESOLUTION_KINDS = frozenset({'approve_pending', 'reject_pending', 'cancel_pending'})
-UNSUPPORTED_RUNTIME_KINDS = {
-    'bounded_continue_flow': '当前 evo runtime 还不支持带步骤边界的继续执行；为避免误执行，未执行任何流程控制。',
-    'explain_current_gate': '当前 evo runtime 还不支持解释指定 gate/checkpoint；可以先读取报告或查看流程状态。',
-}

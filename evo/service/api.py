@@ -460,6 +460,17 @@ class EvoMessageHub:
             'pending_approval': result.pending_approval,
         }
 
+    def probe_resolving_approval(self, thread_id: str, *, approval_token: str) -> dict:
+        self._meta(thread_id)
+        try:
+            result = self._message_service(thread_id).probe_resolving_approval(
+                thread_id,
+                approval_token=approval_token,
+            )
+        except (MessageLeaseError, MessageStoreConflict, RuntimeError) as exc:
+            raise HTTPException(409, str(exc)) from exc
+        return {'thread_id': thread_id, **result}
+
     def post_message(self, thread_id: str, payload: dict[str, Any]) -> dict:
         with self._message_service_lock:
             self._update_llm_config(thread_id, payload)

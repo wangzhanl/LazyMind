@@ -7,7 +7,7 @@ from fastapi import HTTPException
 from evo.auto_agent import ActiveApproval, AutoIntervention, CommandStatus, PortCommandResult
 
 _OK_STATUSES = {'accepted', 'accepted_existing'}
-_RUNNING_STATUSES = {'conflict', 'running'}
+_RUNNING_STATUSES = {'conflict', 'in_progress', 'running'}
 _ERROR_STATUSES = {'error', 'failed'}
 
 
@@ -72,6 +72,9 @@ class HubAutoAgentPorts:
         approval_token: str,
         command_id: str,
     ) -> PortCommandResult:
+        approval = self.active_approval(thread_id)
+        if action == 'approve' and approval is not None and approval.status == 'resolving':
+            return _result(lambda: self.hub.probe_resolving_approval(thread_id, approval_token=approval_token))
         return _result(
             lambda: self.hub.resolve_approval(
                 thread_id,

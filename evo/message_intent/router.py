@@ -7,16 +7,26 @@ from .models import (
     ApprovalIntent,
     BoundedRunIntent,
     IntentFrame,
-    MUTATING_KINDS,
     MessageIntentPayload,
-    PENDING_RESOLUTION_KINDS,
-    READ_ONLY_KINDS,
     RunControlIntentFrame,
-    UNSUPPORTED_RUNTIME_KINDS,
     ResolvedIntent,
 )
 
 MIN_PLANNER_CONFIDENCE = 0.65
+READ_ONLY_KINDS = frozenset({
+    'no_action_ack',
+    'chat',
+    'status_query',
+    'read_case_result',
+    'read_report_section',
+    'explain_current_gate',
+})
+MUTATING_KINDS = frozenset({'continue_flow', 'pause_flow', 'cancel_flow', 'retry_failed', 'rerun_case', 'patch_artifact'})
+PENDING_RESOLUTION_KINDS = frozenset({'approve_pending', 'reject_pending', 'cancel_pending'})
+UNSUPPORTED_RUNTIME_KINDS = {
+    'bounded_continue_flow': '当前 evo runtime 还不支持带步骤边界的继续执行；为避免误执行，未执行任何流程控制。',
+    'explain_current_gate': '当前 evo runtime 还不支持解释指定 gate/checkpoint；可以先读取报告或查看流程状态。',
+}
 
 
 class MessageIntentRouter:
@@ -74,6 +84,7 @@ class MessageIntentRouter:
         *,
         has_active_approval: bool,
         active_approval_token: str = '',
+        flow_status: dict[str, Any] | None = None,
         resolved: ResolvedIntent | None = None,
     ) -> str:
         if frame.confidence < MIN_PLANNER_CONFIDENCE:
@@ -90,7 +101,11 @@ class MessageIntentRouter:
                 return '请提供待确认操作的 approval token。'
             if token and active_approval_token and token != active_approval_token:
                 return 'approval_token mismatch'
+            if _has_stage_gate(flow_status) and active_approval_token and not token:
+                return '当前同时存在流程 checkpoint 和待确认修改，请明确是继续流程，还是确认待修改操作。'
         if has_active_approval and kind not in READ_ONLY_KINDS and kind not in PENDING_RESOLUTION_KINDS:
+            if kind == 'continue_flow' and _has_stage_gate(flow_status):
+                return ''
             return '已有待确认操作，请先确认或取消后再发起新的修改或流程控制。'
         if kind in MUTATING_KINDS and not self.has_flow(thread_id):
             return '当前还没有可控制的 evo 流程；请先启动流程，或先查看当前状态。'
@@ -130,6 +145,17 @@ def _string_tuple(value: Any) -> tuple[str, ...]:
     if isinstance(value, (list, tuple, set)):
         return tuple(str(item) for item in value if str(item).strip())
     return (str(value),)
+
+
+def _has_stage_gate(flow_status: dict[str, Any] | None) -> bool:
+    if not isinstance(flow_status, dict):
+        return False
+    checkpoint = flow_status.get('pending_checkpoint')
+    return (
+        str(flow_status.get('status') or '') == 'waiting_checkpoint'
+        and isinstance(checkpoint, dict)
+        and str(checkpoint.get('checkpoint_kind') or '') == 'stage_gate'
+    )
 
 
 def runtime_kind(payload: MessageIntentPayload) -> str:

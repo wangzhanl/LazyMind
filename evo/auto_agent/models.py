@@ -60,6 +60,7 @@ class ActiveApproval(StrictModel):
     approval_token: str
     intent_kind: str
     risk_level: str
+    status: str = 'active'
     expected_refs: tuple[str, ...] = ()
     expires_at: float = 0.0
 
