@@ -19,6 +19,7 @@ from sse_starlette.sse import EventSourceResponse
 
 from evo import normalize_chat_stream_url, normalize_http_origin, validate_id
 from evo.artifact_flow import EvoFlowRuntime, FlowStepState
+from evo.artifact_flow.runtime import FOLLOW_UP_STEP_RUN_PREFIX, STEPS
 from evo.artifact_runtime import ArtifactKey, ArtifactRef
 from evo.auto_agent import ActiveApproval, AutoAgentRunner
 from evo.message_intent import MessageSessionStore
@@ -533,14 +534,19 @@ class EvoMessageHub:
             return
         cursor, idle_ticks = max(0, since), 0
         flow = self._artifact_flow(thread_id)
+        seen_step_event = False
         while True:
             events = flow.runtime.controller.event_log.scan_since(cursor, limit=100)
             for event in events:
                 cursor = max(cursor, event.seq)
                 if step_run_id and str((event.payload or {}).get('step_run_id') or '') != step_run_id:
                     continue
+                seen_step_event = bool(step_run_id) or seen_step_event
                 yield _sse('message', _frontend_event_payload(event), str(event.seq))
             status = self.flow_status(thread_id)['status']
+            if step_run_id and _step_run_stream_done(flow, step_run_id, status, seen_step_event):
+                yield _sse('done', _step_run_done_payload(thread_id, status, flow, step_run_id), str(cursor + 1))
+                return
             if status in {'ended', 'failed', 'cancelled'} and not events:
                 yield _sse('done', {'thread_id': thread_id, 'status': status}, str(cursor + 1))
                 return
@@ -944,6 +950,38 @@ def _sse(event: str, payload: dict[str, Any], event_id: str | None = None) -> di
     if event_id:
         row['id'] = event_id
     return row
+
+
+def _step_run_done_payload(thread_id: str, status: str, flow: EvoFlowRuntime, step_run_id: str) -> dict[str, Any]:
+    return {
+        'thread_id': thread_id,
+        'status': status,
+        'step_run_id': step_run_id,
+        'next_step_run_id': flow.step_store.next_step_run_id_for(RUN_ID, step_run_id),
+    }
+
+
+def _step_run_stream_done(
+    flow: EvoFlowRuntime,
+    step_run_id: str,
+    status: str,
+    seen_step_event: bool,
+) -> bool:
+    step = flow.step_store.step_for_step_run_id(RUN_ID, step_run_id)
+    if not step:
+        return False
+    if step.startswith(FOLLOW_UP_STEP_RUN_PREFIX):
+        return seen_step_event and status not in {'running', 'idle'}
+    state = flow.step_store.get(RUN_ID)
+    if state is None or step not in STEPS:
+        return False
+    if step in state.completed_steps:
+        return True
+    if state.current_step == step and state.gate_status in {'paused', 'completed', 'cancelled', 'stale'}:
+        return True
+    if state.current_step in STEPS and STEPS.index(state.current_step) > STEPS.index(step):
+        return True
+    return status in {'failed', 'cancelled'} and seen_step_event
 
 
 def _set_accepted_status(response: Response, result: Mapping[str, Any]) -> None:

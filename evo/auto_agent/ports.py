@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import Any, Protocol
 
 from .intervention import AutoIntervention
-from .models import ActiveApproval
+from .models import ActiveApproval, PortCommandResult
 
 
 class AutoAgentPorts(Protocol):
@@ -19,28 +19,29 @@ class AutoAgentPorts(Protocol):
     def active_approval(self, thread_id: str) -> ActiveApproval | None:
         ...
 
-    def start_flow(self, thread_id: str, *, command_id: str) -> dict[str, Any]:
+    def start_flow(self, thread_id: str, *, command_id: str) -> PortCommandResult:
         ...
 
-    def continue_flow(self, thread_id: str, *, command_id: str) -> dict[str, Any]:
+    def continue_flow(self, thread_id: str, *, command_id: str) -> PortCommandResult:
         ...
 
-    def pause_flow(self, thread_id: str, *, command_id: str) -> dict[str, Any]:
+    def pause_flow(self, thread_id: str, *, command_id: str) -> PortCommandResult:
         ...
 
-    def cancel_flow(self, thread_id: str, *, command_id: str) -> dict[str, Any]:
+    def cancel_flow(self, thread_id: str, *, command_id: str) -> PortCommandResult:
         ...
 
-    def retry_failed(self, thread_id: str, *, command_id: str) -> dict[str, Any]:
+    def retry_failed(self, thread_id: str, *, command_id: str) -> PortCommandResult:
         ...
 
-    def execute_intervention(
+    def submit_intervention(
         self,
         thread_id: str,
         *,
-        command_id: str,
+        message_id: str,
+        metadata: dict[str, Any],
         intervention: AutoIntervention,
-    ) -> dict[str, Any]:
+    ) -> PortCommandResult:
         ...
 
     def resolve_approval(
@@ -50,5 +51,5 @@ class AutoAgentPorts(Protocol):
         action: str,
         approval_token: str,
         command_id: str,
-    ) -> dict[str, Any]:
+    ) -> PortCommandResult:
         ...

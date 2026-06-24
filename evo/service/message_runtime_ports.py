@@ -15,14 +15,7 @@ from evo.artifact_runtime import (
 from evo.artifact_runtime.patching import parse_ref_parts, prepare_json_pointer_patch
 from evo.artifact_runtime.views import ArtifactViewService
 from evo.auto_agent import AutoIntervention
-from evo.message_intent.models import (
-    IntentFrame,
-    PatchArtifactArgs,
-    PatchArtifactIntent,
-    RerunCaseArgs,
-    RerunCaseIntent,
-    SourceSpan,
-)
+from evo.message_intent.models import IntentFrame
 from evo.message_intent.runtime_adapter import MessageCommandContext
 
 
@@ -258,32 +251,16 @@ def _message_command_id(context: MessageCommandContext, intent_kind: str, finger
 
 def auto_intervention_frame(intervention: Mapping[str, Any]) -> dict[str, Any]:
     typed = AutoIntervention.model_validate(intervention)
-    if typed.kind == 'rerun_case':
-        frame = IntentFrame(
-            intent=RerunCaseIntent(kind='rerun_case', args=RerunCaseArgs(case_ref=typed.case_id)),
-            source=SourceSpan(text=f'auto_agent rerun_case {typed.case_id}'),
-            confidence=1.0,
-            reason='typed auto-agent rerun_case intervention',
-        )
-        return frame.model_dump(mode='json')
-    if typed.kind == 'patch_judge_score':
-        if not typed.case_id.strip() or not typed.field.strip():
-            raise ValueError('patch_judge_score requires case_id and field')
-        frame = IntentFrame(
-            intent=PatchArtifactIntent(
-                kind='patch_artifact',
-                args=PatchArtifactArgs(
-                    artifact_ref=f'eval.judge_result[{typed.case_id}]',
-                    json_pointer='/' + _escape_pointer(typed.field),
-                    value=typed.value,
-                ),
-            ),
-            source=SourceSpan(text=f'auto_agent patch_judge_score {typed.case_id}/{typed.field}'),
-            confidence=1.0,
-            reason='typed auto-agent patch_judge_score intervention',
-        )
-        return frame.model_dump(mode='json')
-    raise ValueError(f'unsupported typed intervention: {typed.kind}')
+    payload = typed.intent_frame_payload()
+    intent = payload.get('intent')
+    if isinstance(intent, dict) and intent.get('kind') == 'patch_artifact':
+        args = intent.get('args') if isinstance(intent.get('args'), dict) else {}
+        intent['args'] = {
+            'artifact_ref': f'eval.judge_result[{args.get("case_ref") or typed.case_id}]',
+            'json_pointer': '/' + _escape_pointer(str(args.get('field') or typed.field)),
+            'value': args.get('value', typed.value),
+        }
+    return IntentFrame.model_validate(payload).model_dump(mode='json')
 
 
 def _view_payload(view: Mapping[str, Any]) -> dict[str, Any]:

@@ -34,6 +34,8 @@ from .graph import build_evo_graph
 GateStatus = Literal['idle', 'active', 'paused', 'completed', 'cancelled', 'stale']
 STEPS: tuple[StepName, ...] = ('dataset', 'eval', 'analysis', 'repair', 'abtest')
 DEFAULT_DATASET_STEP_RUN_ID = str(uuid.UUID(int=1))
+FOLLOW_UP_STEP_RUN_KEY = '__follow_up__'
+FOLLOW_UP_STEP_RUN_PREFIX = '__follow_up__:'
 
 
 @dataclass(frozen=True)
@@ -80,10 +82,19 @@ class SQLiteFlowStepStore:
                 run_id TEXT NOT NULL,
                 step TEXT NOT NULL,
                 step_run_id TEXT NOT NULL,
+                next_step_run_id TEXT NOT NULL DEFAULT '',
                 PRIMARY KEY (run_id, step)
             )
             """
         )
+        columns = {
+            str(row['name'])
+            for row in self._connection.execute('PRAGMA table_info(flow_step_run_ids)').fetchall()
+        }
+        if 'next_step_run_id' not in columns:
+            self._connection.execute(
+                "ALTER TABLE flow_step_run_ids ADD COLUMN next_step_run_id TEXT NOT NULL DEFAULT ''"
+            )
         self._connection.commit()
 
     def get(self, run_id: str) -> FlowStepState | None:
@@ -127,7 +138,7 @@ class SQLiteFlowStepStore:
     def close(self) -> None:
         self._connection.close()
 
-    def ensure_step_run_id(self, run_id: str, step: StepName, step_run_id: str) -> str:
+    def ensure_step_run_id(self, run_id: str, step: str, step_run_id: str) -> str:
         self._connection.execute(
             """
             INSERT OR IGNORE INTO flow_step_run_ids(run_id, step, step_run_id)
@@ -143,6 +154,56 @@ class SQLiteFlowStepStore:
         if row is None:
             raise ValueError(f'step_run_id missing for {run_id}:{step}')
         return str(row['step_run_id'])
+
+    def set_next_step_run_id(self, run_id: str, step: str, next_step_run_id: str) -> str:
+        self._connection.execute(
+            """
+            UPDATE flow_step_run_ids
+            SET next_step_run_id = ?
+            WHERE run_id = ? AND step = ?
+            """,
+            (next_step_run_id, run_id, step),
+        )
+        self._connection.commit()
+        return next_step_run_id
+
+    def replace_step_run_id(self, run_id: str, step: str, step_run_id: str) -> str:
+        self._connection.execute(
+            """
+            UPDATE flow_step_run_ids
+            SET step_run_id = ?, next_step_run_id = ''
+            WHERE run_id = ? AND step = ?
+            """,
+            (step_run_id, run_id, step),
+        )
+        self._connection.commit()
+        return step_run_id
+
+    def next_step_run_id_for(self, run_id: str, step_run_id: str) -> str:
+        row = self._connection.execute(
+            """
+            SELECT next_step_run_id
+            FROM flow_step_run_ids
+            WHERE run_id = ? AND step_run_id = ?
+            ORDER BY CASE WHEN step LIKE ? THEN 0 ELSE 1 END
+            LIMIT 1
+            """,
+            (run_id, step_run_id, f'{FOLLOW_UP_STEP_RUN_PREFIX}%'),
+        ).fetchone()
+        return '' if row is None else str(row['next_step_run_id'])
+
+    def step_for_step_run_id(self, run_id: str, step_run_id: str) -> str:
+        row = self._connection.execute(
+            """
+            SELECT step
+            FROM flow_step_run_ids
+            WHERE run_id = ? AND step_run_id = ?
+            ORDER BY CASE WHEN step LIKE ? THEN 0 ELSE 1 END
+            LIMIT 1
+            """,
+            (run_id, step_run_id, f'{FOLLOW_UP_STEP_RUN_PREFIX}%'),
+        ).fetchone()
+        return '' if row is None else str(row['step'])
 
 
 class StepRunEventLog:
@@ -252,7 +313,7 @@ class EvoFlowRuntime:
         self._complete_active_step_if_ready(run_id)
 
     def retry_failed_flow(self, *, command_id: str, run_id: str) -> FlowStepState:
-        with self._current_step_event_scope(run_id):
+        with self._operation_event_scope(run_id):
             self.runtime.execute_intent(IntentCommandRequest(
                 command_id, run_id, RetryFailedIntent(), advance_until_idle=True))
         state = self._complete_active_step_if_ready(run_id)
@@ -261,7 +322,7 @@ class EvoFlowRuntime:
         return state
 
     def materialize_flow(self, *, command_id: str, run_id: str, artifacts: tuple[ArtifactKey, ...]) -> FlowStepState:
-        with self._current_step_event_scope(run_id):
+        with self._operation_event_scope(run_id):
             self.runtime.execute_intent(
                 IntentCommandRequest(command_id, run_id, MaterializeIntent(artifacts), advance_until_idle=True)
             )
@@ -391,9 +452,40 @@ class EvoFlowRuntime:
             DEFAULT_DATASET_STEP_RUN_ID if step == 'dataset' else str(uuid.uuid4()),
         )
         next_step = _next_step(step)
-        next_step_run_id = '' if next_step is None else self.step_store.ensure_step_run_id(
-            run_id, next_step, str(uuid.uuid4()))
+        next_step_run_id = self.step_store.ensure_step_run_id(
+            run_id,
+            next_step or FOLLOW_UP_STEP_RUN_KEY,
+            str(uuid.uuid4()),
+        )
+        self.step_store.set_next_step_run_id(run_id, step, next_step_run_id)
         return step_run_id, next_step_run_id
+
+    def _prepare_follow_up_step_run_ids(self, run_id: str) -> tuple[str, str]:
+        step_run_id = self.step_store.ensure_step_run_id(run_id, FOLLOW_UP_STEP_RUN_KEY, str(uuid.uuid4()))
+        next_step_run_id = str(uuid.uuid4())
+        self.step_store.ensure_step_run_id(
+            run_id,
+            f'{FOLLOW_UP_STEP_RUN_PREFIX}{step_run_id}',
+            step_run_id,
+        )
+        self.step_store.set_next_step_run_id(
+            run_id,
+            f'{FOLLOW_UP_STEP_RUN_PREFIX}{step_run_id}',
+            next_step_run_id,
+        )
+        self.step_store.replace_step_run_id(run_id, FOLLOW_UP_STEP_RUN_KEY, next_step_run_id)
+        return step_run_id, next_step_run_id
+
+    @contextmanager
+    def _operation_event_scope(self, run_id: str):
+        state = self.step_store.get(run_id)
+        if state is not None and state.current_step == 'abtest' and state.gate_status == 'completed':
+            step_run_id, next_step_run_id = self._prepare_follow_up_step_run_ids(run_id)
+            with self.event_log.bind(run_id=run_id, step_run_id=step_run_id, next_step_run_id=next_step_run_id):
+                yield
+            return
+        with self._current_step_event_scope(run_id):
+            yield
 
     @contextmanager
     def _current_step_event_scope(self, run_id: str):
@@ -406,7 +498,8 @@ class EvoFlowRuntime:
             state.current_step,
             DEFAULT_DATASET_STEP_RUN_ID if state.current_step == 'dataset' else str(uuid.uuid4()),
         )
-        with self.event_log.bind(run_id=run_id, step_run_id=step_run_id):
+        next_step_run_id = self.step_store.next_step_run_id_for(run_id, step_run_id)
+        with self.event_log.bind(run_id=run_id, step_run_id=step_run_id, next_step_run_id=next_step_run_id):
             yield
 
     def _mark_status(self, run_id: str, status: GateStatus) -> FlowStepState:
