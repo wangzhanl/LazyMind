@@ -230,7 +230,7 @@ class StepRunEventLog:
             return self.inner.append(event)
         payload = dict(event.payload)
         payload.setdefault('step_run_id', context['step_run_id'])
-        if event.event_type == 'plan.submitted' and context.get('next_step_run_id'):
+        if context.get('next_step_run_id'):
             payload.setdefault('next_step_run_id', context['next_step_run_id'])
         return self.inner.append(ControllerEvent(event.event_type, event.run_id, payload, event.seq))
 

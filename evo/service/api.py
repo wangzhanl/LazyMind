@@ -431,6 +431,7 @@ class EvoMessageHub:
             approval_token=approval.approval_token,
             intent_kind=approval.intent_kind,
             risk_level=approval.risk_level,
+            status=approval.status,
             expected_refs=approval.expected_refs,
             expires_at=approval.expires_at,
         )
@@ -542,7 +543,7 @@ class EvoMessageHub:
                 if step_run_id and str((event.payload or {}).get('step_run_id') or '') != step_run_id:
                     continue
                 seen_step_event = bool(step_run_id) or seen_step_event
-                yield _sse('message', _frontend_event_payload(event), str(event.seq))
+                yield _sse('message', _frontend_event_payload(event, flow), str(event.seq))
             status = self.flow_status(thread_id)['status']
             if step_run_id and _step_run_stream_done(flow, step_run_id, status, seen_step_event):
                 yield _sse('done', _step_run_done_payload(thread_id, status, flow, step_run_id), str(cursor + 1))
@@ -1035,11 +1036,11 @@ def _flow_status_row(
     }
 
 
-def _frontend_event_payload(event: Any) -> dict:
+def _frontend_event_payload(event: Any, flow: EvoFlowRuntime | None = None) -> dict:
     payload = dict(event.payload or {})
     derived = _derive_frontend_event(event.event_type, payload)
     display_payload = _compact_event_payload(event.event_type, payload)
-    step_run = {key: payload.get(key) for key in ('step_run_id', 'next_step_run_id') if payload.get(key)}
+    step_run = _event_step_run_fields(event, flow)
     raw_event = {
         'event_type': event.event_type,
         'run_id': event.run_id,
@@ -1057,6 +1058,17 @@ def _frontend_event_payload(event: Any) -> dict:
         **step_run,
         **{key: value for key, value in derived.items() if value not in (None, '')},
     }
+
+
+def _event_step_run_fields(event: Any, flow: EvoFlowRuntime | None = None) -> dict[str, str]:
+    payload = dict(event.payload or {})
+    step_run_id = str(payload.get('step_run_id') or '')
+    if not step_run_id:
+        return {}
+    next_step_run_id = str(payload.get('next_step_run_id') or '')
+    if not next_step_run_id and flow is not None:
+        next_step_run_id = flow.step_store.next_step_run_id_for(str(event.run_id), step_run_id)
+    return {'step_run_id': step_run_id, 'next_step_run_id': next_step_run_id}
 
 
 def _compact_event_payload(event_type: str, payload: dict) -> dict:
