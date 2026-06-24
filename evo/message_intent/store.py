@@ -68,15 +68,37 @@ class MessageSessionStore:
         self.path = Path(path)
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self.lease_seconds = lease_seconds
-        self._connection = sqlite3.connect(str(self.path), check_same_thread=False, isolation_level=None)
-        self._connection.row_factory = sqlite3.Row
+        self._connection = self._connect()
         self._lock = RLock()
-        self._connection.execute('PRAGMA journal_mode=WAL')
+        self._configure_journal_mode()
         self._connection.execute('PRAGMA foreign_keys=ON')
         self._init_schema()
 
+    def _connect(self) -> sqlite3.Connection:
+        connection = sqlite3.connect(str(self.path), check_same_thread=False, isolation_level=None)
+        connection.row_factory = sqlite3.Row
+        return connection
+
+    def _configure_journal_mode(self) -> None:
+        try:
+            self._connection.execute('PRAGMA journal_mode=WAL')
+            self._connection.execute('CREATE TABLE IF NOT EXISTS __journal_probe(id INTEGER PRIMARY KEY)')
+            self._connection.execute('DROP TABLE IF EXISTS __journal_probe')
+        except sqlite3.OperationalError:
+            self._connection.close()
+            self._cleanup_failed_wal_init()
+            self._connection = self._connect()
+            self._connection.execute('PRAGMA journal_mode=DELETE')
+
+    def _cleanup_failed_wal_init(self) -> None:
+        for suffix in ('-shm', '-wal'):
+            self.path.with_name(f'{self.path.name}{suffix}').unlink(missing_ok=True)
+        if self.path.exists() and self.path.stat().st_size <= 4096:
+            self.path.unlink()
+
     def close(self) -> None:
         self._connection.close()
+
 
     @contextmanager
     def lease(self, thread_id: str, *, owner_id: str | None = None) -> Iterator[MessageLease]:
