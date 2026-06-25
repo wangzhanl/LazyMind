@@ -1473,24 +1473,27 @@ func TestStreamUpstreamThreadEventsTracksUpstreamIDWithoutForwarding(t *testing.
 	}
 }
 
-func TestStreamUpstreamThreadEventsStopsAfterRunCompleted(t *testing.T) {
+func TestStreamUpstreamThreadEventsStopsAfterDoneType(t *testing.T) {
 	db := newAgentTestDB(t)
 	rec := httptest.NewRecorder()
-	completed := `{"type":"artifact.run.completed","event_type":"run.completed","payload":{"event_type":"run.completed","raw_event":{"event_type":"run.completed"}}}`
+	runCompleted := `{"type":"artifact.run.completed","event_type":"run.completed","payload":{"event_type":"run.completed","raw_event":{"event_type":"run.completed"}}}`
+	done := `{"type":"done","status":"success"}`
 	body := strings.NewReader(strings.Join([]string{
 		"id: 41\nevent: message\ndata: {\"kind\":\"task.running\",\"task_id\":\"task_1\"}\n\n",
-		"id: 43\nevent: message\ndata: " + completed + "\n\n",
+		"id: 42\nevent: message\ndata: " + runCompleted + "\n\n",
+		"id: 43\nevent: message\ndata: " + done + "\n\n",
 		"id: 44\nevent: message\ndata: {\"kind\":\"task.after\",\"task_id\":\"task_1\"}\n\n",
 	}, ""))
 
 	var lastUpstreamEventID string
 	err := streamUpstreamThreadEvents(context.Background(), rec, rec, db.DB, "thr_1", "step_1", body, &lastUpstreamEventID, nil)
-	if !errors.Is(err, errThreadEventsRunCompleted) {
-		t.Fatalf("expected run completed stop error, got %v", err)
+	if !errors.Is(err, errThreadEventsDone) {
+		t.Fatalf("expected done stop error, got %v", err)
 	}
 
 	want := "data: {\"kind\":\"task.running\",\"task_id\":\"task_1\"}\n\n" +
-		"data: " + completed + "\n\n"
+		"data: " + runCompleted + "\n\n" +
+		"data: " + done + "\n\n"
 	if got := rec.Body.String(); got != want {
 		t.Fatalf("unexpected forwarded stream:\nwant: %q\ngot:  %q", want, got)
 	}
