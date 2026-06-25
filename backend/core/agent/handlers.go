@@ -480,9 +480,6 @@ func streamThreadEvents(w http.ResponseWriter, r *http.Request, stepID string) {
 	upstreamURL := threadEventsURL(threadID)
 	if stepID != "" {
 		upstreamURL = threadStepEventsURL(threadID, stepID)
-		if err := markThreadStepActive(db, threadID, stepID); err != nil {
-			log.Logger.Warn().Err(err).Str("thread_id", threadID).Str("step_id", stepID).Msg("mark thread step active failed")
-		}
 	}
 	lastUpstreamEventID := strings.TrimSpace(r.URL.Query().Get("since"))
 	for {
@@ -1041,6 +1038,21 @@ func writeThreadEventStreamChunk(
 	if chunk.UpstreamEventID != "" && lastUpstreamEventID != nil {
 		*lastUpstreamEventID = chunk.UpstreamEventID
 	}
+	eventStepID := threadEventStepID(chunk.Event)
+	if strings.TrimSpace(stepID) != "" {
+		if eventStepID != strings.TrimSpace(stepID) {
+			log.Logger.Info().
+				Str("thread_id", threadID).
+				Str("step_id", stepID).
+				Str("event_step_id", eventStepID).
+				Str("event_name", chunk.Event.EventName).
+				Str("upstream_event_id", chunk.UpstreamEventID).
+				Int("frame_index", chunk.FrameIndex).
+				Msg("agent thread step event skipped")
+			return nil
+		}
+		eventStepID = strings.TrimSpace(stepID)
+	}
 	downstreamFrame := buildThreadEventFrame(chunk.Event.RawFrame)
 	writeStarted := time.Now()
 	bytesWritten, writeErr := io.WriteString(w, downstreamFrame)
@@ -1072,8 +1084,8 @@ func writeThreadEventStreamChunk(
 
 	saveStarted := time.Now()
 	recordKey := ""
-	if strings.TrimSpace(stepID) != "" && strings.TrimSpace(chunk.UpstreamEventID) != "" {
-		recordKey = sha256Hex(stepID + "\x00" + chunk.UpstreamEventID)
+	if strings.TrimSpace(eventStepID) != "" && strings.TrimSpace(chunk.UpstreamEventID) != "" {
+		recordKey = sha256Hex(eventStepID + "\x00" + chunk.UpstreamEventID)
 	}
 	_, saveCreated, saveErr := saveThreadRecordWithOptions(
 		db,
@@ -1085,7 +1097,7 @@ func writeThreadEventStreamChunk(
 		chunk.Event.RawFrame,
 		chunk.Event.RawFrame,
 		saveThreadRecordOptions{
-			StepID:    stepID,
+			StepID:    eventStepID,
 			RecordKey: recordKey,
 		},
 	)
@@ -1093,9 +1105,9 @@ func writeThreadEventStreamChunk(
 	if saveErr != nil {
 		log.Logger.Warn().Err(saveErr).Str("thread_id", threadID).Msg("save thread event record failed")
 	}
-	if stepID != "" {
-		if stepErr := updateThreadStepFromEvent(db, threadID, stepID, chunk.Event); stepErr != nil {
-			log.Logger.Warn().Err(stepErr).Str("thread_id", threadID).Str("step_id", stepID).Msg("update thread step from event failed")
+	if eventStepID != "" {
+		if stepErr := updateThreadStepFromEvent(db, threadID, eventStepID, chunk.Event); stepErr != nil {
+			log.Logger.Warn().Err(stepErr).Str("thread_id", threadID).Str("step_id", eventStepID).Msg("update thread step from event failed")
 		}
 	}
 
@@ -1343,6 +1355,11 @@ func isDoneThreadEvent(event fetchedThreadEvent) bool {
 	}
 	rawType, ok := payload["type"].(string)
 	return ok && strings.EqualFold(strings.TrimSpace(rawType), "done")
+}
+
+func threadEventStepID(event fetchedThreadEvent) string {
+	payload := parseJSONValue(event.RawFrame)
+	return extractStringByExactKeys(payload, "step_run_id")
 }
 
 func firstNonNil(errs ...error) error {

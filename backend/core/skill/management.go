@@ -1265,7 +1265,7 @@ func updateParentSkill(ctx context.Context, db *gorm.DB, userID, userName string
 	if pendingDraft {
 		return errors.New("parent skill has pending_confirm draft")
 	}
-	if req.ParentSkillName != nil {
+	if req.ParentSkillName != nil && (req.ParentSkillID == nil || strings.TrimSpace(*req.ParentSkillID) == "") {
 		return errors.New("parent_skill_name cannot be updated")
 	}
 	currentContent, err := storedSkillContent(*row)
@@ -1415,11 +1415,14 @@ func updateParentSkill(ctx context.Context, db *gorm.DB, userID, userName string
 }
 
 func updateChildSkill(ctx context.Context, db *gorm.DB, userID string, row *orm.SkillResource, req updateSkillRequest) error {
-	if req.Category != nil && strings.TrimSpace(*req.Category) != strings.TrimSpace(row.Category) {
-		return errors.New("child skill category is immutable")
-	}
-	if req.Category != nil || req.IsEnabled != nil {
-		return errors.New("child skill only supports name/description/tags/content/file_ext/auto_evo/parent_skill_id updates")
+	hasParentReference := req.ParentSkillID != nil || req.ParentSkillName != nil
+	if !hasParentReference {
+		if req.Category != nil && strings.TrimSpace(*req.Category) != strings.TrimSpace(row.Category) {
+			return errors.New("child skill category is immutable")
+		}
+		if req.Category != nil || req.IsEnabled != nil {
+			return errors.New("child skill only supports name/description/tags/content/file_ext/auto_evo/parent_skill_id updates")
+		}
 	}
 	currentContent, err := storedSkillContent(*row)
 	if err != nil {
