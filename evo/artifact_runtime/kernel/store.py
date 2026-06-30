@@ -96,7 +96,7 @@ class SQLiteArtifactStore:
                 self._remember(run_id, idempotency_key, request_hash, result)
                 return result
 
-            ref = self._next_ref(key)
+            ref = self._next_ref(run_id, key)
             payload_path = self._payload_path(run_id, ref)
             _write_payload(payload_path, payload)
             self._insert_record(run_id, ref, 'external', '', {}, payload_path, metadata)
@@ -153,7 +153,7 @@ class SQLiteArtifactStore:
                 self._remember(run_id, idempotency_key, request_hash, result)
                 return result
 
-            refs = tuple(self._next_ref(key) for key in output_keys)
+            refs = tuple(self._next_ref(run_id, key) for key in output_keys)
             for ref in refs:
                 payload_path = self._payload_path(run_id, ref)
                 _write_payload(payload_path, payloads[ref.key])
@@ -255,9 +255,10 @@ class SQLiteArtifactStore:
                     changed = True
         return candidate
 
-    def get(self, ref: ArtifactRef) -> ArtifactRecord | None:
+    def get(self, run_id: str, ref: ArtifactRef) -> ArtifactRecord | None:
+        _require_text(run_id, 'run_id')
         _require_ref(ref)
-        row = self._record_row(ref)
+        row = self._record_row(run_id, ref)
         if row is None:
             return None
         path = self._root / row['payload_path']
@@ -265,12 +266,12 @@ class SQLiteArtifactStore:
             with path.open('rb') as file:
                 value = pickle.load(file)
         except FileNotFoundError as exc:
-            if self._record_row(ref) is None:
+            if self._record_row(run_id, ref) is None:
                 return None
             raise ArtifactStoreCorruptionError(f'payload file is missing for {ref}: {path}') from exc
         except Exception as exc:
             raise ArtifactStoreCorruptionError(f'payload file is unreadable for {ref}: {path}') from exc
-        if self._record_row(ref) is None:
+        if self._record_row(run_id, ref) is None:
             return None
         return ArtifactRecord(
             ref=ref,
@@ -294,7 +295,7 @@ class SQLiteArtifactStore:
             """,
             (run_id, key.artifact_id, key.partition),
         ).fetchall()
-        records = (self.get(ArtifactRef(key, row['version'])) for row in rows)
+        records = (self.get(run_id, ArtifactRef(key, row['version'])) for row in rows)
         return tuple(record for record in records if record is not None)
 
     def run_ids(self, key: ArtifactKey | None = None) -> tuple[str, ...]:
@@ -406,6 +407,7 @@ class SQLiteArtifactStore:
             refs = tuple(_row_ref(row) for row in rows)
             payloads = tuple(self._root / row['payload_path'] for row in rows)
             self._conn.execute('DELETE FROM artifact_records WHERE run_id = ?', (run_id,))
+            self._conn.execute('DELETE FROM artifact_versions WHERE run_id = ?', (run_id,))
             self._conn.execute('DELETE FROM artifact_events WHERE run_id = ?', (run_id,))
             self._conn.execute('DELETE FROM artifact_idempotency WHERE run_id = ?', (run_id,))
             self._conn.execute('DELETE FROM materialization_claims WHERE run_id = ?', (run_id,))
@@ -441,10 +443,11 @@ class SQLiteArtifactStore:
         self._conn.executescript(
             """
             CREATE TABLE IF NOT EXISTS artifact_versions(
+              run_id TEXT NOT NULL,
               artifact_id TEXT NOT NULL,
               partition TEXT NOT NULL,
               next_version INTEGER NOT NULL CHECK(next_version >= 1),
-              PRIMARY KEY (artifact_id, partition)
+              PRIMARY KEY (run_id, artifact_id, partition)
             );
 
             CREATE TABLE IF NOT EXISTS artifact_records(
@@ -457,8 +460,7 @@ class SQLiteArtifactStore:
               input_refs_json TEXT NOT NULL,
               payload_path TEXT NOT NULL,
               metadata_json TEXT NOT NULL,
-              PRIMARY KEY (artifact_id, partition, version),
-              UNIQUE (run_id, artifact_id, partition, version)
+              PRIMARY KEY (run_id, artifact_id, partition, version)
             );
 
             CREATE TABLE IF NOT EXISTS artifact_heads(
@@ -516,16 +518,16 @@ class SQLiteArtifactStore:
                     self._conn.rollback()
                 raise
 
-    def _next_ref(self, key: ArtifactKey) -> ArtifactRef:
+    def _next_ref(self, run_id: str, key: ArtifactKey) -> ArtifactRef:
         row = self._conn.execute(
             """
-            INSERT INTO artifact_versions(artifact_id, partition, next_version)
-            VALUES (?, ?, 2)
-            ON CONFLICT(artifact_id, partition)
+            INSERT INTO artifact_versions(run_id, artifact_id, partition, next_version)
+            VALUES (?, ?, ?, 2)
+            ON CONFLICT(run_id, artifact_id, partition)
             DO UPDATE SET next_version = next_version + 1
             RETURNING next_version - 1 AS version
             """,
-            (key.artifact_id, key.partition),
+            (run_id, key.artifact_id, key.partition),
         ).fetchone()
         return ArtifactRef(key, row['version'])
 
@@ -564,14 +566,14 @@ class SQLiteArtifactStore:
             (run_id, ref.key.artifact_id, ref.key.partition, ref.version),
         )
 
-    def _record_row(self, ref: ArtifactRef) -> sqlite3.Row | None:
+    def _record_row(self, run_id: str, ref: ArtifactRef) -> sqlite3.Row | None:
         return self._conn.execute(
             """
             SELECT *
             FROM artifact_records
-            WHERE artifact_id = ? AND partition = ? AND version = ?
+            WHERE run_id = ? AND artifact_id = ? AND partition = ? AND version = ?
             """,
-            (ref.key.artifact_id, ref.key.partition, ref.version),
+            (run_id, ref.key.artifact_id, ref.key.partition, ref.version),
         ).fetchone()
 
     def _head_refs(self, run_id: str, keys: Sequence[ArtifactKey],

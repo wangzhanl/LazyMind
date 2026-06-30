@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import math
+import os
 import re
 import time
 from collections.abc import Mapping
@@ -20,6 +21,8 @@ HEX = re.compile(r'^[0-9a-fA-F]+$')
 DELTA_KEYS = ('delta', 'answer_delta', 'content_delta')
 FINAL_ANSWER_KEYS = ('answer', 'message', 'text', 'result', 'content')
 SOURCE_KEYS = ('sources', 'source_documents', 'retrieved_contexts', 'contexts', 'documents')
+DEFAULT_CASE_DEADLINE_SECONDS = 300.0
+DEFAULT_FIRST_FRAME_TIMEOUT_SECONDS = 60.0
 
 
 def call_chat_answer(case: Mapping[str, Any], target_config: Mapping[str, Any], kb_id: str) -> dict[str, Any]:
@@ -41,35 +44,49 @@ def call_chat_answer(case: Mapping[str, Any], target_config: Mapping[str, Any], 
             return failed_rag_answer(case, {}, target, 'dataset_contract_error',
                                      'case routing metadata missing kb_id')
         payload = {
-            'query': str(case.get('question') or ''),
-            'history': [],
-            'session_id': session_id,
-            'filters': {'kb_id': kb_ids},
-            'reasoning': False,
-            'mode': 'manual',
-            'has_subagents': False,
-            'enable_plugin': False,
-            'enable_subagent': False,
-            'use_memory': False,
-            'disabled_tools': list(DISABLED_TOOLS),
-            'trace': True,
+            'message': {'query': str(case.get('question') or ''), 'history': []},
+            'conversation': {'session_id': session_id, 'mode': 'manual'},
+            'retrieval': {'filters': {'kb_id': kb_ids}, 'dataset': kb_ids[0]},
+            'runtime': {'reasoning': False, 'trace': True},
+            'personalization': {'use_memory': False},
+            'agent': {
+                'disabled_tools': list(DISABLED_TOOLS),
+                'has_subagents': False,
+                'enable_subagent': False,
+            },
+            'plugin': {'enable_plugin': False},
         }
         if target_config.get('algorithm_id'):
             payload['algorithm_id'] = str(target_config['algorithm_id'])
         if isinstance(target_config.get('llm_config'), Mapping):
-            payload['llm_config'] = dict(target_config['llm_config'])
+            payload['runtime']['llm_config'] = dict(target_config['llm_config'])
         timeout = httpx.Timeout(
             connect=_number(target_config.get('connect_timeout_seconds'), 5.0),
             write=_number(target_config.get('write_timeout_seconds'), 60.0),
             read=None,
             pool=_number(target_config.get('pool_timeout_seconds'), 5.0),
         )
-        deadline = time.monotonic() + _number(target_config.get('case_deadline_seconds'), 60.0)
+        deadline_seconds = _number(
+            target_config.get('case_deadline_seconds') or os.getenv('LAZYMIND_EVO_CHAT_CASE_DEADLINE_SECONDS'),
+            DEFAULT_CASE_DEADLINE_SECONDS,
+        )
+        first_frame_timeout_seconds = _number(
+            target_config.get('first_frame_timeout_seconds')
+            or os.getenv('LAZYMIND_EVO_CHAT_FIRST_FRAME_TIMEOUT_SECONDS'),
+            DEFAULT_FIRST_FRAME_TIMEOUT_SECONDS,
+        )
+        deadline = time.monotonic() + deadline_seconds
     except (TypeError, ValueError) as exc:
         target = {'target_chat_url': str(target_config.get('target_chat_url') or ''), 'kb_id': str(kb_id or '')}
         return failed_rag_answer(case, {}, target, 'chat_config_error', str(exc))
     try:
-        return asyncio.run(_run_chat(case, target, payload, timeout, deadline))
+        return asyncio.run(asyncio.wait_for(
+            _run_chat(case, target, payload, timeout, deadline, first_frame_timeout_seconds),
+            timeout=deadline_seconds,
+        ))
+    except asyncio.TimeoutError:
+        return failed_rag_answer(case, {}, target, 'chat_timeout',
+                                 'chat stream exceeded case deadline after 0 frame(s)')
     except httpx.HTTPError as exc:
         return failed_rag_answer(case, {}, target, 'chat_transport_error', str(exc))
     except Exception as exc:
@@ -96,6 +113,7 @@ async def _run_chat(
     payload: Mapping[str, Any],
     timeout: httpx.Timeout,
     deadline: float,
+    first_frame_timeout_seconds: float,
 ) -> dict[str, Any]:
     stream: dict[str, Any] = {'frames': [], 'answer': '', 'finished': False, 'natural_end': False}
     line_task: asyncio.Task[str] | None = None
@@ -113,13 +131,25 @@ async def _run_chat(
             if routed_instance:
                 target = dict(target) | {'routed_instance_host': routed_instance}
             lines = response.aiter_lines()
+            first_frame_deadline = time.monotonic() + first_frame_timeout_seconds
             try:
                 while True:
-                    remaining = deadline - time.monotonic()
+                    now = time.monotonic()
+                    remaining = deadline - now
+                    if not stream['frames']:
+                        remaining = min(remaining, first_frame_deadline - now)
                     if remaining <= 0:
                         await response.aclose()
+                        if not stream['frames']:
+                            return failed_rag_answer(
+                                case,
+                                stream,
+                                target,
+                                'chat_timeout',
+                                'chat stream exceeded first-frame deadline after 0 frame(s)',
+                            )
                         return failed_rag_answer(case, stream, target, 'chat_timeout',
-                                                 'chat stream exceeded case deadline')
+                                                 _timeout_message(stream))
                     if line_task is None:
                         line_task = asyncio.create_task(anext(lines))
                     done, _ = await asyncio.wait({line_task}, timeout=min(1.0, remaining))
@@ -207,6 +237,26 @@ def _normalize(case: Mapping[str, Any], target: Mapping[str, Any], stream: Mappi
         'trace_id': str(_last(data_frames, ('trace_id',)) or target.get('trace_id') or ''),
         'evidence_status': 'found' if contexts or doc_ids or chunk_ids else 'empty',
     }
+
+
+def _timeout_message(stream: Mapping[str, Any]) -> str:
+    frames = [
+        frame.get('data') if isinstance(frame.get('data'), Mapping) else frame
+        for frame in stream.get('frames', [])
+        if isinstance(frame, Mapping)
+    ]
+    last = frames[-1] if frames else {}
+    status = str(last.get('status') or '').strip()
+    code = last.get('code')
+    answer_len = len(str(stream.get('answer') or ''))
+    parts = [f'chat stream exceeded case deadline after {len(frames)} frame(s)']
+    if status:
+        parts.append(f'last_status={status}')
+    if code is not None:
+        parts.append(f'last_code={code}')
+    if answer_len:
+        parts.append(f'answer_chars={answer_len}')
+    return '; '.join(parts)
 
 
 def _answer_base(case: Mapping[str, Any], stream: Mapping[str, Any], target: Mapping[str, Any]) -> dict[str, Any]:

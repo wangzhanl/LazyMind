@@ -1,15 +1,19 @@
 from __future__ import annotations
 
 import os
+import json
 import sqlite3
 from pathlib import Path
 from typing import Annotated, Any
 
-from fastapi import BackgroundTasks, Body, FastAPI, HTTPException, Query, Response
+from fastapi import BackgroundTasks, Body, FastAPI, HTTPException, Query, Request, Response
 from pydantic import BaseModel, ConfigDict, Field
+from sse_starlette.sse import EventSourceResponse
 from starlette.responses import FileResponse
 
-from evo.message_intent import MessageRequest, MessageTurnHandler
+from evo.message_intent import MessageRequest
+from evo.message_intent.handler import MessageTurnHandler
+from evo.message_intent.schemas import MessageContentRef
 from evo.message_intent.storage import MessageConflictError, MessageInProgressError
 
 from .projections import ProjectionService
@@ -25,7 +29,7 @@ class ThreadInputs(StrictModel):
     csv_data: list[dict[str, str]] = Field(default_factory=list)
     target_chat_url: str
     num_case: int = Field(gt=0)
-    case_deadline_seconds: float = Field(default=60.0, gt=0)
+    case_deadline_seconds: float = Field(default=300.0, gt=0)
 
 
 class ThreadCreate(StrictModel):
@@ -48,7 +52,9 @@ class MessageBody(StrictModel):
     message_id: str = Field(default='', max_length=160)
     text: str = Field(default='', max_length=20000)
     content: str = Field(default='', max_length=20000)
+    attachments: list[MessageContentRef] = Field(default_factory=list, max_length=4)
     client_context: dict[str, Any] = Field(default_factory=dict)
+    ignored_llm_config: dict[str, Any] = Field(default_factory=dict, alias='llm_config')
 
 
 CommandBody = Annotated[CommandRequest, Body()]
@@ -162,12 +168,15 @@ def create_app() -> FastAPI:
         return service.projections.events(thread_id, step, after, limit)
 
     @app.post('/threads/{thread_id}/messages')
-    def messages(thread_id: str, payload: MessageRequestBody) -> dict[str, Any]:
+    def messages(thread_id: str, payload: MessageRequestBody, request: Request) -> Any:
         text = payload.text or payload.content
         if not text.strip():
             raise HTTPException(422, 'text or content is required')
-        msg = MessageRequest(message_id=payload.message_id, text=text, client_context=payload.client_context)
+        msg = MessageRequest(message_id=payload.message_id, text=text, attachments=payload.attachments,
+                             client_context=payload.client_context)
         result = _message_result(service, thread_id, msg)
+        if 'text/event-stream' in request.headers.get('accept', ''):
+            return _message_stream(result)
         return result.model_dump()
 
     @app.patch('/threads/{thread_id}/artifacts/{artifact_ref:path}')
@@ -220,3 +229,29 @@ def _message_result(service: EvoService, thread_id: str, request: MessageRequest
         if message.startswith('thread not found'):
             raise HTTPException(404, message) from exc
         raise HTTPException(422, message) from exc
+
+
+def _message_stream(result) -> EventSourceResponse:
+    async def events():
+        payload = {
+            'type': 'assistant_response',
+            'thread_id': result.thread_id,
+            'turn_id': result.turn_id,
+            'message_id': result.message_id,
+            'turn_decision': result.turn_decision,
+            'content': result.assistant_text,
+            'text': result.assistant_text,
+        }
+        yield {'event': 'assistant_response', 'data': json.dumps(payload, ensure_ascii=False)}
+        for event, ref in (
+            ('observation', result.observation_ref),
+            ('action_receipt', result.action_receipt_ref),
+            ('pending_approval', result.pending_approval_ref),
+            ('pending_input', result.pending_input_ref),
+        ):
+            if ref is not None:
+                yield {'event': event, 'data': ref.model_dump_json()}
+        yield {'event': 'message_result', 'data': result.model_dump_json()}
+        yield {'data': '[DONE]'}
+
+    return EventSourceResponse(events())

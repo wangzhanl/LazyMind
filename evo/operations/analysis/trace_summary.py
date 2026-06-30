@@ -1,11 +1,15 @@
 from __future__ import annotations
 
 import re
+import time
 from collections import Counter
 from collections.abc import Mapping
 from typing import Any
 
 import networkx as nx
+
+TRACE_READ_ATTEMPTS = 3
+TRACE_RETRY_SECONDS = 3.0
 
 STAGE_RULES = (
     ('query_rewrite', ('rewrite', 'rephrase', 'query_transform', '改写')),
@@ -39,7 +43,19 @@ def build_trace_summary(case: Mapping[str, Any], answer: Mapping[str, Any]) -> d
         raise ValueError(f'analysis trace_id is required for case {case_id}')
     from lazyllm.tracing.consume import get_single_trace
 
-    trace = get_single_trace(trace_id)
+    last_error: Exception | None = None
+    for attempt in range(TRACE_READ_ATTEMPTS):
+        try:
+            trace = get_single_trace(trace_id)
+            break
+        except Exception as exc:
+            last_error = exc
+            if attempt + 1 < TRACE_READ_ATTEMPTS:
+                time.sleep(TRACE_RETRY_SECONDS)
+    else:
+        raise ValueError(
+            f'trace {trace_id} not available after 3 attempts: {last_error}'
+        ) from last_error
     root = getattr(trace, 'execution_tree', None)
     if root is None:
         raise ValueError(f'trace {trace_id} has no execution_tree')

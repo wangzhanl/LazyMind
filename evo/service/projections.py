@@ -91,7 +91,7 @@ class ProjectionService:
                 items.append(item)
                 if step == 'repair':
                     for ref in refs:
-                        record = store.get(ref)
+                        record = store.get(thread_id, ref)
                         value = record.value if record is not None and isinstance(record.value, Mapping) else {}
                         items.extend(_repair_events(event.seq, ref, value))
                 if len(items) >= limit:
@@ -141,10 +141,9 @@ class ProjectionService:
             raise HTTPException(422, f'step must be one of: {", ".join(C.STEPS)}')
         if version < 1:
             raise HTTPException(422, 'version must be positive')
-        ref = ArtifactRef(ArtifactKey.of(C.ROOTS[step]), version)
         store = self.runtime.store()
         try:
-            record = store.get(ref)
+            record = store.get(thread_id, ArtifactRef(ArtifactKey.of(C.ROOTS[step]), version))
             if record is None or record.run_id != thread_id:
                 raise HTTPException(404, 'gate artifact version not found')
             return record.value

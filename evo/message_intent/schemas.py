@@ -25,6 +25,46 @@ class MessageRequest(StrictModel):
     client_context: dict[str, Any] = Field(default_factory=dict)
 
 
+class TurnAgendaItem(StrictModel):
+    agenda_item_id: str = Field(default='', max_length=80)
+    summary: str = Field(default='', max_length=500)
+    intent_kind: str = Field(default='', max_length=40)
+    source_message_id: str = Field(default='', max_length=160)
+
+
+class ConfigValidationIssue(StrictModel):
+    path: str = Field(max_length=240)
+    code: Literal[
+        'missing_required',
+        'invalid_type',
+        'invalid_url',
+        'out_of_range',
+        'unknown_field',
+        'immutable_field',
+        'unsafe_secret',
+        'cross_thread_reference',
+    ]
+    message: str = Field(max_length=500)
+    observed_value_summary: str = Field(default='', max_length=240)
+
+
+class PendingInput(StrictModel):
+    prompt: str = Field(max_length=1000)
+    plan_ref: MessageContentRef | None = None
+
+
+class PendingApproval(StrictModel):
+    approval_token: str = Field(max_length=80)
+    expires_at: float
+    origin_message_id: str = Field(max_length=160)
+    action_hash: str = Field(min_length=64, max_length=64)
+    intent_ref: MessageContentRef
+    compiled_ref: MessageContentRef
+    compiled_hash: str = Field(min_length=64, max_length=64)
+    preview_ref: MessageContentRef
+    base_observation_hash: str = Field(min_length=64, max_length=64)
+
+
 class FlowAction(StrictModel):
     kind: Literal['flow']
     command: Literal['continue', 'pause', 'resume', 'cancel', 'retry']
@@ -79,7 +119,7 @@ class ConfigPatchAction(StrictModel):
 
 class ApprovalAction(StrictModel):
     kind: Literal['approval']
-    decision: Literal['approve', 'reject']
+    decision: Literal['approve', 'reject', 'amend', 'replace', 'unclear']
     message: str = ''
 
 
@@ -102,7 +142,7 @@ PlannedAction: TypeAlias = Annotated[
 class TurnPlan(StrictModel):
     schema_version: Literal['message_intent.v1'] = 'message_intent.v1'
     turn_decision: Literal['next_action', 'needs_input', 'needs_approval', 'final']
-    active_agenda: list[dict[str, Any]] = Field(default_factory=list)
+    active_agenda: list[TurnAgendaItem] = Field(default_factory=list)
     next_action: PlannedAction | None = None
     user_message_effect: Literal['append', 'amend', 'replace', 'cancel', 'none'] = 'none'
     response_hint: str = ''

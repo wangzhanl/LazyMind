@@ -21,7 +21,8 @@ from .runtime_port import RuntimePort
 
 THREAD_ID = re.compile(r'[A-Za-z0-9][A-Za-z0-9_.-]{0,127}')
 STEPS = ('dataset', 'eval', 'analysis', 'repair', 'abtest')
-CHAT_CASE_DEADLINE_SECONDS = 60.0
+CHAT_CASE_DEADLINE_SECONDS = 300.0
+CHAT_FIRST_FRAME_TIMEOUT_SECONDS = 60.0
 
 
 class ThreadService:
@@ -303,6 +304,7 @@ def _seed(thread_id: str, mode: str, title: str, inputs: Mapping[str, Any], llm_
         'target_chat_url': inputs['target_chat_url'],
         'llm_config': dict(llm_config),
         'case_deadline_seconds': inputs['case_deadline_seconds'],
+        'first_frame_timeout_seconds': CHAT_FIRST_FRAME_TIMEOUT_SECONDS,
     }
     return {
         'run_config': {'thread_id': thread_id, 'mode': mode, 'title': title, 'inputs': dict(inputs),

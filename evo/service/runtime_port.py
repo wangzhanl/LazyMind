@@ -19,6 +19,15 @@ from evo.operations.dataset import dataset_materializers
 from evo.operations.eval import eval_materializers
 from evo.operations.repair import repair_materializers
 
+CONFIG_ARTIFACTS = {
+    'run_config': C.RUN_CONFIG,
+    'source_config': C.CORPUS_SOURCE_CONFIG,
+    'target_config': C.EVAL_TARGET_CONFIG,
+    'eval_policy': C.EVAL_POLICY,
+    'repair_policy': C.REPAIR_POLICY,
+    'candidate_config': C.ABTEST_CANDIDATE_CONFIG,
+}
+
 
 class RuntimePort:
     def __init__(self, root: Path) -> None:
@@ -89,7 +98,7 @@ class RuntimePort:
         store = self.store()
         try:
             ref = store.effective_artifacts(run_id).get(ArtifactKey.of(C.RUN_CONFIG))
-            record = store.get(ref) if ref is not None else None
+            record = store.get(run_id, ref) if ref is not None else None
             return record.value if record is not None and isinstance(record.value, Mapping) else None
         finally:
             store.close()
@@ -98,6 +107,16 @@ class RuntimePort:
         store = self.store()
         try:
             return store.effective_artifacts(run_id).get(ArtifactKey.of(artifact_id))
+        finally:
+            store.close()
+
+    def config_artifact(self, run_id: str, target: str) -> tuple[ArtifactRef, object] | None:
+        artifact_id = CONFIG_ARTIFACTS[target]
+        store = self.store()
+        try:
+            ref = store.effective_artifacts(run_id).get(ArtifactKey.of(artifact_id))
+            record = store.get(run_id, ref) if ref is not None else None
+            return (ref, record.value) if ref is not None and record is not None else None
         finally:
             store.close()
 

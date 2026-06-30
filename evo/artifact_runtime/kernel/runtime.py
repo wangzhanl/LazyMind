@@ -64,7 +64,7 @@ class ArtifactRuntime:
         output_key_by_name = dict(op.output_key_by_name)
         execution_key = _execution_key(op.op_id, output_key_by_name)
         try:
-            input_values = _input_values(self._store, op.input_refs)
+            input_values = _input_values(self._store, run_id, op.input_refs)
         except ArtifactStoreCorruptionError as exc:
             return OpResult(op.op_id, 'failed', error=str(exc))
         if input_values is None:
@@ -121,17 +121,18 @@ class ArtifactRuntime:
 
 def _input_values(
     store: SQLiteArtifactStore,
+    run_id: str,
     input_refs: Mapping[str, ArtifactRef | tuple[ArtifactRef, ...]],
 ) -> MaterializerInput | None:
     values: dict[str, object | tuple[object, ...]] = {}
     for name, refs in input_refs.items():
         if isinstance(refs, tuple):
-            records = tuple(store.get(ref) for ref in refs)
+            records = tuple(store.get(run_id, ref) for ref in refs)
             if any(record is None for record in records):
                 return None
             values[name] = tuple(record.value for record in records)
         else:
-            record = store.get(refs)
+            record = store.get(run_id, refs)
             if record is None:
                 return None
             values[name] = record.value

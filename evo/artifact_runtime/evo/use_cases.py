@@ -13,7 +13,7 @@ class EvoArtifactReader(Protocol):
     def effective_artifacts(self, run_id: str) -> dict[ArtifactKey, ArtifactRef]:
         ...
 
-    def get(self, ref: ArtifactRef):
+    def get(self, run_id: str, ref: ArtifactRef):
         ...
 
 
@@ -39,7 +39,7 @@ def read_case_artifact(adapter: EvoArtifactReader, spec: EvoFlowSpec, run_id: st
 def edit_artifact(adapter: EvoArtifactAccess, spec: EvoFlowSpec, run_id: str, ref: ArtifactRef,
                   pointer: str, value: object, *, idempotency_key: str):
     target_ref, target_pointer = spec.edit_target(ref, pointer)
-    record = adapter.get(target_ref)
+    record = adapter.get(run_id, target_ref)
     if record is None:
         raise ValueError('artifact ref is not readable')
     return adapter.commit_external(
@@ -66,7 +66,7 @@ def jump_to_step(adapter: EvoArtifactAccess, spec: EvoFlowSpec, run_id: str, ste
 
 def _read_effective(adapter: EvoArtifactReader, run_id: str, key: ArtifactKey):
     ref = adapter.effective_artifacts(run_id).get(key)
-    return None if ref is None else adapter.get(ref)
+    return None if ref is None else adapter.get(run_id, ref)
 
 
 def _replace_json_pointer(value: object, pointer: str, replacement: object) -> object:

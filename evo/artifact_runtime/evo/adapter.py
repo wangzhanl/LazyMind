@@ -43,9 +43,9 @@ class EvoArtifactAdapter:
         self._require_owner_thread()
         return self._store.effective_artifacts(run_id)
 
-    def get(self, ref: ArtifactRef) -> ArtifactRecord | None:
+    def get(self, run_id: str, ref: ArtifactRef) -> ArtifactRecord | None:
         self._require_owner_thread()
-        return self._store.get(ref)
+        return self._store.get(run_id, ref)
 
     def tick(self, run_id: str) -> TickResult:
         self._require_owner_thread()
