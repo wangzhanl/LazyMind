@@ -9,7 +9,7 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Iterator, Literal
 
-from artifact_runtime.kernel.artifact import ArtifactKey, ArtifactRef
+from evo.artifact_runtime.kernel.artifact import ArtifactKey, ArtifactRef
 
 from .state import Checkpoint, FlowRunState
 
@@ -51,16 +51,9 @@ class SQLiteFlowGate:
             replay = self._receipt_replay(conn, run_id, command_id, request_hash, state)
             return replay or CommandReceipt('new', state)
 
-    def record_command(
-        self,
-        run_id: str,
-        command_id: str,
-        request_hash: str,
-        outcome: Mapping[str, object],
-        *,
-        next_state: FlowRunState | None = None,
-        expected_version: int | None = None,
-    ) -> CommandReceipt:
+    def record_command(self, run_id: str, command_id: str, request_hash: str,
+                       outcome: Mapping[str, object], *, next_state: FlowRunState | None = None,
+                       expected_version: int | None = None) -> CommandReceipt:
         _require_command(run_id, command_id, request_hash)
         if next_state is not None:
             if next_state.run_id != run_id:
@@ -82,13 +75,8 @@ class SQLiteFlowGate:
             self._insert_receipt(conn, run_id, command_id, request_hash, stored_outcome)
             return CommandReceipt('done', state, stored_outcome)
 
-    def apply_gate_command(
-        self,
-        run_id: str,
-        command_id: str,
-        request_hash: str,
-        command_kind: str,
-    ) -> CommandReceipt:
+    def apply_gate_command(self, run_id: str, command_id: str,
+                           request_hash: str, command_kind: str) -> CommandReceipt:
         _require_command(run_id, command_id, request_hash)
         if command_kind not in {'pause', 'resume', 'cancel', 'retry'}:
             raise ValueError('command_kind must be pause, resume, cancel, or retry')
@@ -109,7 +97,7 @@ class SQLiteFlowGate:
     def _create_schema(self) -> None:
         with closing(self._connect()) as conn:
             conn.executescript(
-                '''
+                """
                 CREATE TABLE IF NOT EXISTS flow_gates(
                   run_id TEXT PRIMARY KEY NOT NULL,
                   status TEXT NOT NULL CHECK(status IN ('idle', 'paused', 'cancelled', 'failed')),
@@ -128,7 +116,7 @@ class SQLiteFlowGate:
                   updated_at REAL NOT NULL,
                   PRIMARY KEY (run_id, command_id)
                 );
-                '''
+                """
             )
 
     def _connect(self) -> sqlite3.Connection:
@@ -158,14 +146,14 @@ class SQLiteFlowGate:
     def _state(self, conn: sqlite3.Connection, run_id: str, *, create: bool = False) -> FlowRunState:
         if create:
             conn.execute(
-                '''
+                """
                 INSERT INTO flow_gates(
                   run_id, status, status_version,
                   pending_checkpoint_json, released_checkpoints_json, last_error, updated_at
                 )
                 VALUES (?, 'idle', 0, NULL, '{}', '', ?)
                 ON CONFLICT(run_id) DO NOTHING
-                ''',
+                """,
                 (run_id, time.time()),
             )
         row = conn.execute('SELECT * FROM flow_gates WHERE run_id = ?', (run_id,)).fetchone()
@@ -175,22 +163,16 @@ class SQLiteFlowGate:
 
     def _receipt(self, conn: sqlite3.Connection, run_id: str, command_id: str) -> sqlite3.Row | None:
         return conn.execute(
-            '''
+            """
             SELECT request_hash, outcome_json
             FROM flow_command_receipts
             WHERE run_id = ? AND command_id = ?
-            ''',
+            """,
             (run_id, command_id),
         ).fetchone()
 
-    def _receipt_replay(
-        self,
-        conn: sqlite3.Connection,
-        run_id: str,
-        command_id: str,
-        request_hash: str,
-        state: FlowRunState,
-    ) -> CommandReceipt | None:
+    def _receipt_replay(self, conn: sqlite3.Connection, run_id: str, command_id: str,
+                        request_hash: str, state: FlowRunState) -> CommandReceipt | None:
         receipt = self._receipt(conn, run_id, command_id)
         if receipt is None:
             return None
@@ -198,27 +180,21 @@ class SQLiteFlowGate:
             return CommandReceipt('conflict', state)
         return CommandReceipt('done', state, _outcome_from_json(receipt['outcome_json']))
 
-    def _insert_receipt(
-        self,
-        conn: sqlite3.Connection,
-        run_id: str,
-        command_id: str,
-        request_hash: str,
-        outcome: Mapping[str, object],
-    ) -> None:
+    def _insert_receipt(self, conn: sqlite3.Connection, run_id: str, command_id: str,
+                        request_hash: str, outcome: Mapping[str, object]) -> None:
         conn.execute(
-            '''
+            """
             INSERT INTO flow_command_receipts(
               run_id, command_id, request_hash, outcome_json, updated_at
             )
             VALUES (?, ?, ?, ?, ?)
-            ''',
+            """,
             (run_id, command_id, request_hash, _json(dict(outcome)), time.time()),
         )
 
     def _write_state(self, conn: sqlite3.Connection, state: FlowRunState, version: int) -> None:
         changed = conn.execute(
-            '''
+            """
             UPDATE flow_gates
             SET status = ?,
                 status_version = ?,
@@ -227,7 +203,7 @@ class SQLiteFlowGate:
                 last_error = ?,
                 updated_at = ?
             WHERE run_id = ?
-            ''',
+            """,
             (
                 state.status,
                 version,

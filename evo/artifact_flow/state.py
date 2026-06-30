@@ -5,7 +5,7 @@ from dataclasses import dataclass, field
 from types import MappingProxyType
 from typing import Literal, TypeAlias
 
-from artifact_runtime.kernel.artifact import ArtifactKey, ArtifactRef
+from evo.artifact_runtime.kernel.artifact import ArtifactKey, ArtifactRef
 
 
 FlowStatus: TypeAlias = Literal['idle', 'paused', 'cancelled', 'failed']

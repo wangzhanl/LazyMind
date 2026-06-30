@@ -18,6 +18,7 @@ from .store import SQLiteArtifactStore
 TickStatus = Literal['idle', 'ok', 'stale', 'failed', 'conflict']
 OpStatus = Literal['ok', 'stale', 'failed', 'conflict']
 
+
 @dataclass(frozen=True)
 class OpResult:
     op_id: str

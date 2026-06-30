@@ -133,7 +133,8 @@ def _blocked_by_dirty_required_inputs(graph: nx.DiGraph, dirty_nodes: set[Instan
     return blocked
 
 
-def _next_op(instance_id: InstanceId, data: Mapping[str, object], effective: Mapping[ArtifactKey, ArtifactRef]) -> NextOp:
+def _next_op(instance_id: InstanceId, data: Mapping[str, object],
+             effective: Mapping[ArtifactKey, ArtifactRef]) -> NextOp:
     input_refs: dict[str, ArtifactRef | tuple[ArtifactRef, ...]] = {}
     for name, keys in data['input_keys_by_name'].items():
         refs = tuple(effective[key] for key in keys if key in effective)
@@ -147,10 +148,7 @@ def _next_op(instance_id: InstanceId, data: Mapping[str, object], effective: Map
     )
 
 
-def _input_key_groups(
-    op_cls: type[FixedOp],
-    output_key_by_name: Mapping[str, ArtifactKey],
-) -> dict[str, tuple[ArtifactKey, ...]]:
+def _input_key_groups(op_cls: type[FixedOp], output_key_by_name: Mapping[str, ArtifactKey]) -> dict[str, tuple[ArtifactKey, ...]]:
     output_ref_key = next(iter(output_key_by_name.values()))
     output_spec = _output_spec_for_key(op_cls, output_ref_key)
     return {

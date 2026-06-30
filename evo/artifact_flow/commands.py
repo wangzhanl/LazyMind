@@ -1,7 +1,7 @@
 from dataclasses import dataclass
 from typing import TypeAlias
 
-from artifact_runtime.evo.actions import EvoMutation
+from evo.artifact_runtime.evo.actions import EvoMutation
 
 
 @dataclass(frozen=True)

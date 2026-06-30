@@ -2,18 +2,8 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 
-from ..kernel import (
-    ArtifactKey,
-    ArtifactRef,
-    ArtifactRecord,
-    ArtifactRuntime,
-    DAGGraph,
-    FixedOp,
-    Materializer,
-    SQLiteArtifactStore,
-    StoreResult,
-    TickResult,
-)
+from ..kernel import (ArtifactKey, ArtifactRef, ArtifactRecord, ArtifactRuntime, DAGGraph,
+                      FixedOp, Materializer, SQLiteArtifactStore, StoreResult, TickResult)
 
 
 class EvoArtifactAdapter:
@@ -34,25 +24,14 @@ class EvoArtifactAdapter:
             metadata=metadata,
         )
 
-    def invalidate(
-        self,
-        run_id: str,
-        keys: Sequence[ArtifactKey] = (),
-        refs: Sequence[ArtifactRef] = (),
-        *,
-        idempotency_key: str,
-    ) -> StoreResult:
+    def invalidate(self, run_id: str, keys: Sequence[ArtifactKey] = (), refs: Sequence[ArtifactRef] = (),
+                   *, idempotency_key: str) -> StoreResult:
         self._require_owner_thread()
         return self._store.invalidate(run_id, keys, refs, idempotency_key=idempotency_key)
 
-    def delete_artifacts(
-        self,
-        run_id: str,
-        keys: Sequence[ArtifactKey] = (),
-        refs: Sequence[ArtifactRef] = (),
-        *,
-        idempotency_key: str,
-    ) -> tuple[ArtifactRef, ...]:
+    def delete_artifacts(self, run_id: str, keys: Sequence[ArtifactKey] = (),
+                         refs: Sequence[ArtifactRef] = (), *, idempotency_key: str
+                        ) -> tuple[ArtifactRef, ...]:
         self._require_owner_thread()
         return self._store.delete_artifacts(run_id, keys, refs, idempotency_key=idempotency_key)
 
@@ -76,11 +55,9 @@ class EvoArtifactAdapter:
         return None
 
 
-def build_evo_artifact_adapter(
-    store: SQLiteArtifactStore,
-    ops: Sequence[type[FixedOp]],
-    materializers: Mapping[str, Materializer],
-) -> EvoArtifactAdapter:
+def build_evo_artifact_adapter(store: SQLiteArtifactStore, ops: Sequence[type[FixedOp]],
+                               materializers: Mapping[str, Materializer]
+                               ) -> EvoArtifactAdapter:
     graph = DAGGraph()
     for op in ops:
         graph.register(op)

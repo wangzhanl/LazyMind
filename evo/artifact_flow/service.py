@@ -6,17 +6,17 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from typing import Literal, Protocol
 
-from artifact_runtime.evo.actions import (
+from evo.artifact_runtime.evo.actions import (
     dispatch_evo_mutation,
     mutation_idempotency_key,
     mutation_receipt_outcome,
     mutation_request_fingerprint,
 )
-from artifact_runtime.evo.flow import EvoFlowSpec
-from artifact_runtime.evo.progress import StepProgress, progress_view
-from artifact_runtime.evo.use_cases import EvoArtifactAccess
-from artifact_runtime.kernel.artifact import ArtifactRef
-from artifact_runtime.kernel.errors import IdempotencyConflictError
+from evo.artifact_runtime.evo.flow import EvoFlowSpec
+from evo.artifact_runtime.evo.progress import StepProgress, progress_view
+from evo.artifact_runtime.evo.use_cases import EvoArtifactAccess
+from evo.artifact_runtime.kernel.artifact import ArtifactRef
+from evo.artifact_runtime.kernel.errors import IdempotencyConflictError
 
 from .commands import (
     ApplyArtifactMutation,
@@ -40,6 +40,7 @@ _OUTCOME_STATUS: Mapping[object, CommandStatus] = {
     'stale': 'stale',
     'tick_limit': 'tick_limit',
 }
+DEFAULT_CHECKPOINT_POLICY = CheckpointPolicy()
 
 
 class FlowGatePort(Protocol):
@@ -49,16 +50,9 @@ class FlowGatePort(Protocol):
     def read_command(self, run_id: str, command_id: str, request_hash: str) -> CommandReceipt:
         ...
 
-    def record_command(
-        self,
-        run_id: str,
-        command_id: str,
-        request_hash: str,
-        outcome: Mapping[str, object],
-        *,
-        next_state: FlowRunState | None = None,
-        expected_version: int | None = None,
-    ) -> CommandReceipt:
+    def record_command(self, run_id: str, command_id: str, request_hash: str,
+                       outcome: Mapping[str, object], *, next_state: FlowRunState | None = None,
+                       expected_version: int | None = None) -> CommandReceipt:
         ...
 
     def apply_gate_command(self, run_id: str, command_id: str, request_hash: str, command_kind: str) -> CommandReceipt:
@@ -79,14 +73,9 @@ class FlowCommandResult:
 
 
 class FlowService:
-    def __init__(
-        self,
-        gate: FlowGatePort,
-        adapter_factory: Callable[[], FlowAdapterPort],
-        spec: EvoFlowSpec,
-        checkpoint_policy: CheckpointPolicy = CheckpointPolicy(),
-        tick_limit: int = 100,
-    ) -> None:
+    def __init__(self, gate: FlowGatePort, adapter_factory: Callable[[], FlowAdapterPort],
+                 spec: EvoFlowSpec, checkpoint_policy: CheckpointPolicy = DEFAULT_CHECKPOINT_POLICY,
+                 tick_limit: int = 100) -> None:
         if not isinstance(spec, EvoFlowSpec):
             raise TypeError('spec must be EvoFlowSpec')
         if not isinstance(checkpoint_policy, CheckpointPolicy):
@@ -235,15 +224,9 @@ class FlowService:
                 error=error,
             )
 
-    def _record_if_boundary(
-        self,
-        run_id: str,
-        command: ContinueFlow,
-        request_hash: str,
-        state: FlowRunState,
-        progress: tuple[StepProgress, ...],
-        released: Mapping[str, ArtifactRef],
-    ) -> FlowCommandResult | None:
+    def _record_if_boundary(self, run_id: str, command: ContinueFlow, request_hash: str,
+                            state: FlowRunState, progress: tuple[StepProgress, ...],
+                            released: Mapping[str, ArtifactRef]) -> FlowCommandResult | None:
         target = command.until_step
         if target == self._spec.steps[-1]:
             if _progress_by_step(progress)[target].completed:
@@ -267,17 +250,10 @@ class FlowService:
             state.status_version,
         )
 
-    def _record(
-        self,
-        run_id: str,
-        command: ContinueFlow,
-        request_hash: str,
-        outcome: Mapping[str, object],
-        next_state: FlowRunState | None = None,
-        expected_version: int | None = None,
-        *,
-        error: str = '',
-    ) -> FlowCommandResult:
+    def _record(self, run_id: str, command: ContinueFlow, request_hash: str,
+                outcome: Mapping[str, object], next_state: FlowRunState | None = None,
+                expected_version: int | None = None, *, error: str = ''
+                ) -> FlowCommandResult:
         receipt = self._gate.record_command(
             run_id,
             command.command_id,
@@ -305,13 +281,9 @@ class FlowService:
             return self._result(run_id, 'conflict', receipt.outcome, error=error)
         return self._result(run_id, _outcome_status(receipt.outcome or {'status': 'ok'}), receipt.outcome, error=error)
 
-    def _result(
-        self,
-        run_id: str,
-        command_status: CommandStatus,
-        command_outcome: Mapping[str, object] | None = None,
-        error: str = '',
-    ) -> FlowCommandResult:
+    def _result(self, run_id: str, command_status: CommandStatus,
+                command_outcome: Mapping[str, object] | None = None, error: str = ''
+                ) -> FlowCommandResult:
         return FlowCommandResult(run_id, command_status, command_outcome, error)
 
 
@@ -346,18 +318,21 @@ def _released_before(target_step: str, progress: tuple[StepProgress, ...]) -> di
     return released
 
 
-def _checkpoint(
-    progress: tuple[StepProgress, ...],
-    policy: CheckpointPolicy,
-    released: Mapping[str, ArtifactRef],
-    target_step: str,
-) -> Checkpoint | None:
+def _checkpoint(progress: tuple[StepProgress, ...], policy: CheckpointPolicy,
+                released: Mapping[str, ArtifactRef], target_step: str
+                ) -> Checkpoint | None:
     for item in progress:
         if target_step and item.step != target_step:
             continue
-        if target_step and item.step == target_step and item.root_ref is not None and released.get(item.step) != item.root_ref:
+        if (
+            target_step and item.step == target_step and item.root_ref is not None
+            and released.get(item.step) != item.root_ref
+        ):
             return Checkpoint(item.step, item.root, item.root_ref)
-        if item.step in policy.pause_after_steps and item.root_ref is not None and released.get(item.step) != item.root_ref:
+        if (
+            item.step in policy.pause_after_steps and item.root_ref is not None
+            and released.get(item.step) != item.root_ref
+        ):
             return Checkpoint(item.step, item.root, item.root_ref)
         if target_step and item.step == target_step:
             return None
@@ -376,7 +351,11 @@ def _tick_error(tick: object) -> str:
 
 
 def _checkpoint_json(checkpoint: Checkpoint) -> dict[str, object]:
-    return {'ref': [checkpoint.ref.key.artifact_id, checkpoint.ref.key.partition, checkpoint.ref.version], 'root': [checkpoint.root.artifact_id, checkpoint.root.partition], 'step': checkpoint.step}
+    return {
+        'ref': [checkpoint.ref.key.artifact_id, checkpoint.ref.key.partition, checkpoint.ref.version],
+        'root': [checkpoint.root.artifact_id, checkpoint.root.partition],
+        'step': checkpoint.step,
+    }
 
 
 def _short_error(exc: Exception) -> str:

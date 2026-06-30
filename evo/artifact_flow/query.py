@@ -3,10 +3,10 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Protocol
-from artifact_runtime.evo.actions import EvoQuery, dispatch_evo_query
-from artifact_runtime.evo.flow import EvoFlowSpec
-from artifact_runtime.evo.progress import StepProgress, progress_view
-from artifact_runtime.evo.use_cases import EvoArtifactReader
+from evo.artifact_runtime.evo.actions import EvoQuery, dispatch_evo_query
+from evo.artifact_runtime.evo.flow import EvoFlowSpec
+from evo.artifact_runtime.evo.progress import StepProgress, progress_view
+from evo.artifact_runtime.evo.use_cases import EvoArtifactReader
 
 from .state import Checkpoint, FlowRunState, FlowStatus
 
@@ -25,12 +25,8 @@ class FlowSnapshot:
 
 
 class FlowQueryService:
-    def __init__(
-        self,
-        gate: QueryGatePort,
-        adapter_factory: Callable[[], EvoArtifactReader],
-        spec: EvoFlowSpec,
-    ) -> None:
+    def __init__(self, gate: QueryGatePort, adapter_factory: Callable[[], EvoArtifactReader],
+                 spec: EvoFlowSpec) -> None:
         if not isinstance(spec, EvoFlowSpec):
             raise TypeError('spec must be EvoFlowSpec')
         self._gate = gate

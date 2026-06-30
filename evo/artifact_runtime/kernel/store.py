@@ -70,16 +70,9 @@ class SQLiteArtifactStore:
     def close(self) -> None:
         self._conn.close()
 
-    def commit_external(
-        self,
-        run_id: str,
-        key: ArtifactKey,
-        value: object,
-        *,
-        idempotency_key: str,
-        expected_ref: ArtifactRef | None = None,
-        metadata: Mapping[str, str] | None = None,
-    ) -> StoreResult:
+    def commit_external(self, run_id: str, key: ArtifactKey, value: object, *,
+                        idempotency_key: str, expected_ref: ArtifactRef | None = None,
+                        metadata: Mapping[str, str] | None = None) -> StoreResult:
         _require_text(run_id, 'run_id')
         _require_text(idempotency_key, 'idempotency_key')
         _require_key(key)
@@ -172,16 +165,9 @@ class SQLiteArtifactStore:
             self._event(run_id, 'committed', result.refs)
             return result
 
-    def claim_materialization(
-        self,
-        run_id: str,
-        materialization_key: str,
-        output_keys: Sequence[ArtifactKey],
-        input_refs: Mapping[ArtifactKey, ArtifactRef],
-        *,
-        claim_token: str,
-        claim_ttl_seconds: float = MATERIALIZATION_CLAIM_TTL_SECONDS,
-    ) -> StoreResult:
+    def claim_materialization(self, run_id: str, materialization_key: str, output_keys: Sequence[ArtifactKey],
+                              input_refs: Mapping[ArtifactKey, ArtifactRef], *, claim_token: str,
+                              claim_ttl_seconds: float = MATERIALIZATION_CLAIM_TTL_SECONDS) -> StoreResult:
         _require_text(run_id, 'run_id')
         _require_text(materialization_key, 'materialization_key')
         _require_text(claim_token, 'claim_token')
@@ -208,13 +194,13 @@ class SQLiteArtifactStore:
             now = time.time()
             expires_at = now + claim_ttl_seconds
             changed = self._conn.execute(
-                '''
+                """
                 INSERT INTO materialization_claims(run_id, materialization_key, claim_token, expires_at)
                 VALUES (?, ?, ?, ?)
                 ON CONFLICT(run_id, materialization_key)
                 DO UPDATE SET claim_token = excluded.claim_token, expires_at = excluded.expires_at
                 WHERE materialization_claims.expires_at <= ?
-                ''',
+                """,
                 (run_id, materialization_key, claim_token, expires_at, now),
             ).rowcount
             if changed != 1:
@@ -227,17 +213,17 @@ class SQLiteArtifactStore:
         _require_text(claim_token, 'claim_token')
         with self._transaction():
             self._conn.execute(
-                '''
+                """
                 DELETE FROM materialization_claims
                 WHERE run_id = ? AND materialization_key = ? AND claim_token = ?
-                ''',
+                """,
                 (run_id, materialization_key, claim_token),
             )
 
     def effective_artifacts(self, run_id: str) -> dict[ArtifactKey, ArtifactRef]:
         _require_text(run_id, 'run_id')
         rows = self._conn.execute(
-            '''
+            """
             SELECT h.artifact_id, h.partition, h.version, r.kind, r.input_refs_json
             FROM artifact_heads h
             JOIN artifact_records r
@@ -246,7 +232,7 @@ class SQLiteArtifactStore:
              AND r.partition = h.partition
              AND r.version = h.version
             WHERE h.run_id = ?
-            ''',
+            """,
             (run_id,),
         ).fetchall()
         candidate = {
@@ -300,12 +286,12 @@ class SQLiteArtifactStore:
         _require_text(run_id, 'run_id')
         _require_key(key)
         rows = self._conn.execute(
-            '''
+            """
             SELECT version
             FROM artifact_records
             WHERE run_id = ? AND artifact_id = ? AND partition = ?
             ORDER BY version
-            ''',
+            """,
             (run_id, key.artifact_id, key.partition),
         ).fetchall()
         records = (self.get(ArtifactRef(key, row['version'])) for row in rows)
@@ -319,12 +305,12 @@ class SQLiteArtifactStore:
             ).fetchall()
         else:
             rows = self._conn.execute(
-                '''
+                """
                 SELECT seq, run_id, kind, refs_json
                 FROM artifact_events
                 WHERE seq > ? AND run_id = ?
                 ORDER BY seq
-                ''',
+                """,
                 (seq, run_id),
             ).fetchall()
         return tuple(
@@ -332,14 +318,8 @@ class SQLiteArtifactStore:
             for row in rows
         )
 
-    def invalidate(
-        self,
-        run_id: str,
-        keys: Sequence[ArtifactKey] = (),
-        refs: Sequence[ArtifactRef] = (),
-        *,
-        idempotency_key: str,
-    ) -> StoreResult:
+    def invalidate(self, run_id: str, keys: Sequence[ArtifactKey] = (), refs: Sequence[ArtifactRef] = (),
+                   *, idempotency_key: str) -> StoreResult:
         _require_text(run_id, 'run_id')
         _require_text(idempotency_key, 'idempotency_key')
         keys, refs = _validated_targets(keys, refs)
@@ -352,10 +332,10 @@ class SQLiteArtifactStore:
             affected = self._head_refs(run_id, keys, refs)
             for ref in affected:
                 self._conn.execute(
-                    '''
+                    """
                     DELETE FROM artifact_heads
                     WHERE run_id = ? AND artifact_id = ? AND partition = ? AND version = ?
-                    ''',
+                    """,
                     (run_id, ref.key.artifact_id, ref.key.partition, ref.version),
                 )
             result = StoreResult('ok', affected)
@@ -364,14 +344,9 @@ class SQLiteArtifactStore:
                 self._event(run_id, 'invalidated', affected)
             return result
 
-    def delete_artifacts(
-        self,
-        run_id: str,
-        keys: Sequence[ArtifactKey] = (),
-        refs: Sequence[ArtifactRef] = (),
-        *,
-        idempotency_key: str,
-    ) -> tuple[ArtifactRef, ...]:
+    def delete_artifacts(self, run_id: str, keys: Sequence[ArtifactKey] = (),
+                         refs: Sequence[ArtifactRef] = (), *, idempotency_key: str
+                        ) -> tuple[ArtifactRef, ...]:
         _require_text(run_id, 'run_id')
         _require_text(idempotency_key, 'idempotency_key')
         keys, refs = _validated_targets(keys, refs)
@@ -386,10 +361,10 @@ class SQLiteArtifactStore:
             payloads = tuple(self._root / row['payload_path'] for row in rows)
             for ref in deleted_refs:
                 self._conn.execute(
-                    '''
+                    """
                     DELETE FROM artifact_records
                     WHERE run_id = ? AND artifact_id = ? AND partition = ? AND version = ?
-                    ''',
+                    """,
                     (run_id, ref.key.artifact_id, ref.key.partition, ref.version),
                 )
             self._remember(run_id, idempotency_key, request_hash, StoreResult('ok', deleted_refs))
@@ -402,12 +377,12 @@ class SQLiteArtifactStore:
         _require_text(run_id, 'run_id')
         with self._transaction():
             rows = self._conn.execute(
-                '''
+                """
                 SELECT artifact_id, partition, version, payload_path
                 FROM artifact_records
                 WHERE run_id = ?
                 ORDER BY artifact_id, partition, version
-                ''',
+                """,
                 (run_id,),
             ).fetchall()
             refs = tuple(_row_ref(row) for row in rows)
@@ -446,7 +421,7 @@ class SQLiteArtifactStore:
 
     def _create_schema(self) -> None:
         self._conn.executescript(
-            '''
+            """
             CREATE TABLE IF NOT EXISTS artifact_versions(
               artifact_id TEXT NOT NULL,
               partition TEXT NOT NULL,
@@ -504,7 +479,7 @@ class SQLiteArtifactStore:
 
             CREATE INDEX IF NOT EXISTS idx_events_run_seq
               ON artifact_events(run_id, seq);
-            '''
+            """
         )
 
     @contextmanager
@@ -525,35 +500,28 @@ class SQLiteArtifactStore:
 
     def _next_ref(self, key: ArtifactKey) -> ArtifactRef:
         row = self._conn.execute(
-            '''
+            """
             INSERT INTO artifact_versions(artifact_id, partition, next_version)
             VALUES (?, ?, 2)
             ON CONFLICT(artifact_id, partition)
             DO UPDATE SET next_version = next_version + 1
             RETURNING next_version - 1 AS version
-            ''',
+            """,
             (key.artifact_id, key.partition),
         ).fetchone()
         return ArtifactRef(key, row['version'])
 
-    def _insert_record(
-        self,
-        run_id: str,
-        ref: ArtifactRef,
-        kind: str,
-        producer_op_id: str,
-        input_refs: Mapping[ArtifactKey, ArtifactRef],
-        payload_path: Path,
-        metadata: Mapping[str, str],
-    ) -> None:
+    def _insert_record(self, run_id: str, ref: ArtifactRef, kind: str, producer_op_id: str,
+                       input_refs: Mapping[ArtifactKey, ArtifactRef], payload_path: Path,
+                       metadata: Mapping[str, str]) -> None:
         self._conn.execute(
-            '''
+            """
             INSERT INTO artifact_records(
               artifact_id, partition, version, run_id, kind, producer_op_id,
               input_refs_json, payload_path, metadata_json
             )
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-            ''',
+            """,
             (
                 ref.key.artifact_id,
                 ref.key.partition,
@@ -569,81 +537,72 @@ class SQLiteArtifactStore:
 
     def _upsert_head(self, run_id: str, ref: ArtifactRef) -> None:
         self._conn.execute(
-            '''
+            """
             INSERT INTO artifact_heads(run_id, artifact_id, partition, version)
             VALUES (?, ?, ?, ?)
             ON CONFLICT(run_id, artifact_id, partition)
             DO UPDATE SET version = excluded.version
-            ''',
+            """,
             (run_id, ref.key.artifact_id, ref.key.partition, ref.version),
         )
 
     def _record_row(self, ref: ArtifactRef) -> sqlite3.Row | None:
         return self._conn.execute(
-            '''
+            """
             SELECT *
             FROM artifact_records
             WHERE artifact_id = ? AND partition = ? AND version = ?
-            ''',
+            """,
             (ref.key.artifact_id, ref.key.partition, ref.version),
         ).fetchone()
 
-    def _head_refs(
-        self,
-        run_id: str,
-        keys: Sequence[ArtifactKey],
-        refs: Sequence[ArtifactRef],
-    ) -> tuple[ArtifactRef, ...]:
+    def _head_refs(self, run_id: str, keys: Sequence[ArtifactKey], refs: Sequence[ArtifactRef]) -> tuple[ArtifactRef, ...]:
         found: dict[ArtifactKey, ArtifactRef] = {}
         for key in keys:
             row = self._conn.execute(
-                '''
+                """
                 SELECT artifact_id, partition, version
                 FROM artifact_heads
                 WHERE run_id = ? AND artifact_id = ? AND partition = ?
-                ''',
+                """,
                 (run_id, key.artifact_id, key.partition),
             ).fetchone()
             if row is not None:
                 found[key] = _row_ref(row)
         for ref in refs:
             row = self._conn.execute(
-                '''
+                """
                 SELECT artifact_id, partition, version
                 FROM artifact_heads
                 WHERE run_id = ? AND artifact_id = ? AND partition = ? AND version = ?
-                ''',
+                """,
                 (run_id, ref.key.artifact_id, ref.key.partition, ref.version),
             ).fetchone()
             if row is not None:
                 found[ref.key] = ref
         return tuple(found[key] for key in sorted(found))
 
-    def _record_rows(
-        self,
-        run_id: str,
-        keys: Sequence[ArtifactKey],
-        refs: Sequence[ArtifactRef],
-    ) -> tuple[sqlite3.Row, ...]:
+    def _record_rows(self, run_id: str, keys: Sequence[ArtifactKey],
+                     refs: Sequence[ArtifactRef]) -> tuple[sqlite3.Row, ...]:
         rows: dict[ArtifactRef, sqlite3.Row] = {}
         for key in keys:
             for row in self._conn.execute(
-                '''
+                """
                 SELECT artifact_id, partition, version, payload_path
                 FROM artifact_records
                 WHERE run_id = ? AND artifact_id = ? AND partition = ?
                 ORDER BY version
-                ''',
+                """,
                 (run_id, key.artifact_id, key.partition),
             ).fetchall():
                 rows[_row_ref(row)] = row
         for ref in refs:
             row = self._conn.execute(
-                '''
+                """
                 SELECT artifact_id, partition, version, payload_path
                 FROM artifact_records
                 WHERE run_id = ? AND artifact_id = ? AND partition = ? AND version = ?
-                ''',
+                """,
                 (run_id, ref.key.artifact_id, ref.key.partition, ref.version),
             ).fetchone()
             if row is not None:
@@ -668,11 +627,11 @@ class SQLiteArtifactStore:
 
     def _replay(self, run_id: str, idempotency_key: str, request_hash: str) -> StoreResult | None:
         row = self._conn.execute(
-            '''
+            """
             SELECT request_hash, result_json
             FROM artifact_idempotency
             WHERE run_id = ? AND idempotency_key = ?
-            ''',
+            """,
             (run_id, idempotency_key),
         ).fetchone()
         if row is None:
@@ -683,10 +642,10 @@ class SQLiteArtifactStore:
 
     def _remember(self, run_id: str, idempotency_key: str, request_hash: str, result: StoreResult) -> None:
         self._conn.execute(
-            '''
+            """
             INSERT INTO artifact_idempotency(run_id, idempotency_key, request_hash, result_json)
             VALUES (?, ?, ?, ?)
-            ''',
+            """,
             (run_id, idempotency_key, request_hash, _result_json(result)),
         )
 
@@ -755,7 +714,8 @@ def _unlink_files(paths: Sequence[Path]) -> None:
 def _remove_empty_dirs(root: Path) -> None:
     if not root.exists():
         return
-    for path in sorted((item for item in root.rglob('*') if item.is_dir()), key=lambda item: len(item.parts), reverse=True):
+    dirs = (item for item in root.rglob('*') if item.is_dir())
+    for path in sorted(dirs, key=lambda item: len(item.parts), reverse=True):
         try:
             path.rmdir()
         except OSError:
@@ -773,7 +733,10 @@ def _sha256(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
 
-def _targets_json(keys: Sequence[ArtifactKey], refs: Sequence[ArtifactRef]) -> tuple[list[list[str]], list[list[object] | None]]:
+def _targets_json(
+    keys: Sequence[ArtifactKey],
+    refs: Sequence[ArtifactRef],
+) -> tuple[list[list[str]], list[list[object] | None]]:
     return [_key_json(key) for key in keys], [_ref_json(ref) for ref in refs]
 
 

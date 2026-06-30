@@ -45,12 +45,8 @@ class ArtifactPartitionSpec:
 class PartitionMapping:
     kind: PartitionMappingKind = 'same_partition'
 
-    def upstream_keys(
-        self,
-        downstream_key: ArtifactKey,
-        upstream_spec: ArtifactPartitionSpec,
-        downstream_spec: ArtifactPartitionSpec,
-    ) -> tuple[ArtifactKey, ...]:
+    def upstream_keys(self, downstream_key: ArtifactKey, upstream_spec: ArtifactPartitionSpec,
+                      downstream_spec: ArtifactPartitionSpec) -> tuple[ArtifactKey, ...]:
         from .artifact import ArtifactKey
 
         if self.kind == 'same_partition':
@@ -122,5 +118,9 @@ def _require_partition_key(key: object) -> None:
 
 
 def _require_same_partition_specs(upstream: PartitionSpec, downstream: PartitionSpec) -> None:
-    if isinstance(upstream, StaticPartitions) and isinstance(downstream, StaticPartitions) and upstream.keys != downstream.keys:
+    if (
+        isinstance(upstream, StaticPartitions)
+        and isinstance(downstream, StaticPartitions)
+        and upstream.keys != downstream.keys
+    ):
         raise ValueError('same_partition requires identical static partition sets')

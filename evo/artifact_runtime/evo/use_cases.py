@@ -51,7 +51,8 @@ def edit_artifact(adapter: EvoArtifactAccess, spec: EvoFlowSpec, run_id: str, re
     )
 
 
-def rerun_case_stage(adapter: EvoArtifactAccess, spec: EvoFlowSpec, run_id: str, case_id: str, stage: str, *, idempotency_key: str):
+def rerun_case_stage(adapter: EvoArtifactAccess, spec: EvoFlowSpec, run_id: str,
+                     case_id: str, stage: str, *, idempotency_key: str):
     return adapter.invalidate(run_id, keys=spec.rerun_case_stage(case_id, stage), idempotency_key=idempotency_key)
 
 

@@ -129,7 +129,10 @@ def default_evo_ops(cases: tuple[str, ...]) -> tuple[type[FixedOp], ...]:
 
     class PrepareWorkspace(FixedOp):
         op_id = 'repair.candidate_workspace'
-        inputs = {'plan': ArtifactInput(C.REPAIR_PLAN)}
+        inputs = {
+            'plan': ArtifactInput(C.REPAIR_PLAN),
+            'policy': ArtifactInput(C.REPAIR_POLICY),
+        }
         outputs = {'workspace': ArtifactOutput(C.REPAIR_CANDIDATE_WORKSPACE)}
 
     class RepairLoop(FixedOp):
@@ -148,6 +151,7 @@ def default_evo_ops(cases: tuple[str, ...]) -> tuple[type[FixedOp], ...]:
             ),
             'eval_policy': ArtifactInput(C.EVAL_POLICY),
             'candidate_config': ArtifactInput(C.ABTEST_CANDIDATE_CONFIG),
+            'policy': ArtifactInput(C.REPAIR_POLICY),
         }
         outputs = {'result': ArtifactOutput(C.REPAIR_LOOP_RESULT)}
 
@@ -175,6 +179,7 @@ def default_evo_ops(cases: tuple[str, ...]) -> tuple[type[FixedOp], ...]:
     class CandidateJudge(FixedOp):
         op_id = 'abtest.candidate_judge'
         inputs = {
+            'case': ArtifactInput(C.EVAL_CASE, partition_spec=partitions),
             'answer': ArtifactInput(C.ABTEST_CANDIDATE_RAG_ANSWER, partition_spec=partitions),
             'policy': ArtifactInput(C.EVAL_POLICY, partition_mapping=unpartitioned_to_all()),
         }
@@ -231,4 +236,53 @@ def eval_evo_ops(cases: tuple[str, ...]) -> tuple[type[FixedOp], ...]:
     return default_evo_ops(cases)[:7]
 
 
-__all__ = ['dataset_evo_ops', 'default_evo_ops', 'eval_evo_ops']
+def analysis_evo_ops(cases: tuple[str, ...]) -> tuple[type[FixedOp], ...]:
+    op_ids = (
+        'dataset.load_corpus',
+        'dataset.build_corpus_snapshot',
+        'dataset.generate_case',
+        'dataset.assemble',
+        'eval.answer',
+        'eval.judge',
+        'eval.summary',
+        'analysis.trace_summary',
+        'analysis.classify_case',
+        'analysis.trace_clusters',
+        'analysis.summary',
+    )
+    ops = {op.op_id: op for op in default_evo_ops(cases)}
+    return tuple(ops[op_id] for op_id in op_ids)
+
+
+def repair_evo_ops(cases: tuple[str, ...]) -> tuple[type[FixedOp], ...]:
+    op_ids = (
+        *[op.op_id for op in analysis_evo_ops(cases)],
+        'repair.plan',
+        'repair.candidate_workspace',
+        'repair.loop_result',
+        'repair.verified_patch',
+    )
+    ops = {op.op_id: op for op in default_evo_ops(cases)}
+    return tuple(ops[op_id] for op_id in op_ids)
+
+
+def abtest_evo_ops(cases: tuple[str, ...]) -> tuple[type[FixedOp], ...]:
+    op_ids = (
+        'abtest.candidate_service',
+        'abtest.candidate_rag_answer',
+        'abtest.candidate_judge',
+        'abtest.candidate_eval_summary',
+        'abtest.compare',
+    )
+    ops = {op.op_id: op for op in default_evo_ops(cases)}
+    return tuple(ops[op_id] for op_id in op_ids)
+
+
+__all__ = [
+    'abtest_evo_ops',
+    'analysis_evo_ops',
+    'dataset_evo_ops',
+    'default_evo_ops',
+    'eval_evo_ops',
+    'repair_evo_ops',
+]
