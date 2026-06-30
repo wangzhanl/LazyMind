@@ -1,0 +1,64 @@
+# Runtime model config for local Docker dev (via SSH tunnel → host.docker.internal)
+# yaml key = AutoModel(model=...) lookup name; name field = actual model name sent to the API.
+
+llm:
+  - source: openai
+    type: llm
+    name: minimax-m27
+    url: http://host.docker.internal:49090/v1/
+    api_key: ${LAZYLLM_MINIMAX_API_KEY}
+
+evo_llm:
+  - source: openai
+    type: llm
+    name: lazyllm
+    url: http://host.docker.internal:48000/v1/
+    skip_auth: true
+
+reranker:
+  - source: openai
+    type: rerank
+    name: Qwen3-Reranker-8B
+    url: http://host.docker.internal:48331/v1
+    skip_auth: true
+
+embed_main:
+  - source: openai
+    type: embed
+    name: lazyllm
+    url: http://host.docker.internal:49801/v1/embeddings
+    skip_auth: true
+
+# Cross-modal (image) embed shared by image nodes and image-only retrieval branch.
+embed_image:
+  - source: openai
+    type: cross_modal_embed
+    name: siglip
+    url: http://host.docker.internal:43435/embeddings
+    skip_auth: true
+
+# Vision-language model for image-aware query rewriting and vision_extractor tool.
+vlm:
+  - source: openai
+    type: vlm
+    name: lazyllm
+    url: http://host.docker.internal:46517/v1/
+    skip_auth: true
+
+speech_to_text:
+  - source: siliconflow
+    type: stt
+    name: FunAudioLLM/SenseVoiceSmall
+    api_key: ${LAZYLLM_SILICONFLOW_API_KEY}
+
+image_generator:
+  - source: siliconflow
+    type: text2image
+    name: Kwai-Kolors/Kolors
+    api_key: ${LAZYLLM_SILICONFLOW_API_KEY}
+
+image_editor:
+  - source: siliconflow
+    type: image_editing
+    name: Kwai-Kolors/Kolors
+    api_key: ${LAZYLLM_SILICONFLOW_API_KEY}

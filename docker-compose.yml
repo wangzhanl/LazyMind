@@ -408,6 +408,8 @@ services:
     volumes:
       - ./data/core/uploads:/var/lib/lazymind/uploads
       - ./data/traces:/var/lib/lazymind/traces
+      - *algorithm-src-mount
+      - *lazyllm-src-mount
     environment:
       <<: [*db-conn, *upload-paths, *llm-api-keys, *trace-config]
       LAZYMIND_DOCUMENT_SERVICE_PORT: "8000"
@@ -541,6 +543,8 @@ services:
       - ./data/core/uploads:/var/lib/lazymind/uploads
       - ./data/traces:/var/lib/lazymind/traces
       - sqlite-data:/data/sqlite
+      - *algorithm-src-mount
+      - *lazyllm-src-mount
     environment:
       LAZYMIND_DOCUMENT_PROCESSOR_PORT: "8000"
       <<: [*runtime-home, *db-conn, *upload-paths, *llm-api-keys, *ocr-env, *trace-config]
@@ -578,6 +582,8 @@ services:
       - ./data/core/uploads:/var/lib/lazymind/uploads
       - ./data/traces:/var/lib/lazymind/traces
       - sqlite-data:/data/sqlite
+      - *algorithm-src-mount
+      - *lazyllm-src-mount
     environment:
       LAZYMIND_DOCUMENT_WORKER_PORT: "8001"
       LAZYMIND_DOCUMENT_WORKER_NUM_WORKERS: "1"
@@ -624,6 +630,8 @@ services:
       - ./data/core/uploads:/var/lib/lazymind/uploads
       - ./data/traces:/var/lib/lazymind/traces
       - sqlite-data:/data/sqlite
+      - *algorithm-src-mount
+      - *lazyllm-src-mount
     healthcheck:
       test: ['CMD-SHELL', 'python -m lazymind.parsing.service.healthcheck']
       interval: 15s
