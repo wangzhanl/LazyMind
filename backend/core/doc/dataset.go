@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/url"
 	"sort"
 	"strconv"
 	"strings"
@@ -62,8 +63,6 @@ type Dataset struct {
 	Type           string         `json:"type"`
 	Tags           []string       `json:"tags"`
 	DefaultDataset bool           `json:"default_dataset"`
-	ScanManaged    bool           `json:"scan_managed,omitempty"`
-	ScanSourceType string         `json:"scan_source_type,omitempty"`
 }
 
 type ListAlgosResponse struct {
@@ -101,12 +100,10 @@ type algoListResp struct {
 }
 
 type extTags struct {
-	Tags           []string       `json:"tags"`
-	AlgoID         string         `json:"algo_id"`
-	AlgoName       string         `json:"algo_name"`
-	Parsers        []ParserConfig `json:"parsers"`
-	ScanManaged    bool           `json:"scan_managed,omitempty"`
-	ScanSourceType string         `json:"scan_source_type,omitempty"`
+	Tags     []string       `json:"tags"`
+	AlgoID   string         `json:"algo_id"`
+	AlgoName string         `json:"algo_name"`
+	Parsers  []ParserConfig `json:"parsers"`
 }
 
 type algoGroupInfoResp struct {
@@ -121,9 +118,40 @@ type algoGroupInfoResp struct {
 }
 
 const (
-	maxDatasetTags     = 10
-	maxDatasetTagRunes = 20
+	maxDatasetTags             = 10
+	maxDatasetTagRunes         = 20
+	maxDatasetDisplayNameRunes = 100
+	datasetDisplayNameRule     = "dataset name supports Chinese/English, numbers, -, _, ., up to 100 characters"
 )
+
+func validateDatasetDisplayName(name string) error {
+	trimmed := strings.TrimSpace(name)
+	if trimmed == "" {
+		return fmt.Errorf("dataset name is required")
+	}
+	if trimmed != name || utf8.RuneCountInString(trimmed) > maxDatasetDisplayNameRunes {
+		return fmt.Errorf(datasetDisplayNameRule)
+	}
+	for _, r := range trimmed {
+		if r >= '\u4e00' && r <= '\u9fa5' {
+			continue
+		}
+		if r >= 'A' && r <= 'Z' {
+			continue
+		}
+		if r >= 'a' && r <= 'z' {
+			continue
+		}
+		if r >= '0' && r <= '9' {
+			continue
+		}
+		if r == '_' || r == '.' || r == '-' {
+			continue
+		}
+		return fmt.Errorf(datasetDisplayNameRule)
+	}
+	return nil
+}
 
 func normalizeAndValidateDatasetTags(tags []string) ([]string, error) {
 	if len(tags) == 0 {
@@ -206,36 +234,6 @@ func parseDatasetParsers(ext json.RawMessage) []ParserConfig {
 		})
 	}
 	return out
-}
-
-func parseDatasetScanManaged(ext json.RawMessage) bool {
-	if len(ext) == 0 {
-		return false
-	}
-	var v extTags
-	if err := json.Unmarshal(ext, &v); err != nil {
-		return false
-	}
-	if v.ScanManaged {
-		return true
-	}
-	for _, tag := range v.Tags {
-		if strings.EqualFold(strings.TrimSpace(tag), "scan") {
-			return true
-		}
-	}
-	return false
-}
-
-func parseDatasetScanSourceType(ext json.RawMessage) string {
-	if len(ext) == 0 {
-		return ""
-	}
-	var v extTags
-	if err := json.Unmarshal(ext, &v); err != nil {
-		return ""
-	}
-	return strings.TrimSpace(v.ScanSourceType)
 }
 
 func fetchParsersByAlgoID(ctx context.Context, algoID string) []ParserConfig {
@@ -621,8 +619,6 @@ func ListDatasets(w http.ResponseWriter, r *http.Request) {
 			Type:           datasetTypeToPB(ds.Type),
 			Tags:           parseDatasetTags(ds.Ext),
 			DefaultDataset: isDefaultDatasetForUser(r.Context(), userID, ds.ID),
-			ScanManaged:    parseDatasetScanManaged(ds.Ext),
-			ScanSourceType: parseDatasetScanSourceType(ds.Ext),
 		})
 	}
 
@@ -837,12 +833,13 @@ func CreateDataset(w http.ResponseWriter, r *http.Request) {
 		common.ReplyErr(w, fmt.Sprintf("%s: %v", "invalid body", err), http.StatusBadRequest)
 		return
 	}
+	if err := validateDatasetDisplayName(body.DisplayName); err != nil {
+		common.ReplyErr(w, err.Error(), http.StatusBadRequest)
+		return
+	}
 	displayName := strings.TrimSpace(body.DisplayName)
 	desc := strings.TrimSpace(body.Desc)
 	cover := strings.TrimSpace(body.CoverImage)
-	if displayName == "" {
-		displayName = datasetID
-	}
 	if hasReservedDatasetDisplayNamePrefix(displayName) {
 		common.ReplyErr(w, "dataset name uses reserved prefix", http.StatusBadRequest)
 		return
@@ -933,12 +930,10 @@ func CreateDataset(w http.ResponseWriter, r *http.Request) {
 	now := time.Now().UTC()
 	parsers := fetchParsersByAlgoID(r.Context(), algoID)
 	extBytes, _ := json.Marshal(map[string]any{
-		"tags":             body.Tags,
-		"algo_id":          algoID,
-		"algo_name":        body.Algo.DisplayName,
-		"parsers":          parsers,
-		"scan_managed":     body.ScanManaged,
-		"scan_source_type": strings.TrimSpace(body.ScanSourceType),
+		"tags":      body.Tags,
+		"algo_id":   algoID,
+		"algo_name": body.Algo.DisplayName,
+		"parsers":   parsers,
 	})
 
 	ds := orm.Dataset{
@@ -1001,8 +996,6 @@ func CreateDataset(w http.ResponseWriter, r *http.Request) {
 		Type:           datasetTypeToPB(ds.Type),
 		Tags:           body.Tags,
 		DefaultDataset: false,
-		ScanManaged:    body.ScanManaged,
-		ScanSourceType: strings.TrimSpace(body.ScanSourceType),
 	})
 }
 func GetDataset(w http.ResponseWriter, r *http.Request) {
@@ -1059,8 +1052,6 @@ func GetDataset(w http.ResponseWriter, r *http.Request) {
 		Type:           datasetTypeToPB(ds.Type),
 		Tags:           parseDatasetTags(ds.Ext),
 		DefaultDataset: isDefaultDatasetForUser(r.Context(), userID, ds.ID),
-		ScanManaged:    parseDatasetScanManaged(ds.Ext),
-		ScanSourceType: parseDatasetScanSourceType(ds.Ext),
 	})
 }
 func DeleteDataset(w http.ResponseWriter, r *http.Request) {
@@ -1086,6 +1077,16 @@ func DeleteDataset(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusForbidden)
 		_, _ = w.Write([]byte(common.ForbiddenBody))
+		return
+	}
+
+	if err := deleteScanSourceForDataset(r.Context(), datasetID); err != nil {
+		log.Logger.Error().
+			Err(err).
+			Str("dataset_id", datasetID).
+			Str("user_id", userID).
+			Msg("scan source delete failed")
+		common.ReplyErr(w, "delete scan source failed", http.StatusBadGateway)
 		return
 	}
 
@@ -1138,6 +1139,22 @@ func DeleteDataset(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.WriteHeader(http.StatusOK)
+}
+
+func deleteScanSourceForDataset(ctx context.Context, datasetID string) error {
+	datasetID = strings.TrimSpace(datasetID)
+	if datasetID == "" {
+		return nil
+	}
+	scanURL := common.JoinURL(common.ScanControlPlaneEndpoint(), "/api/scan/internal/sources/by-dataset/"+url.PathEscape(datasetID))
+	if err := common.ApiDelete(ctx, scanURL, nil, nil, 10*time.Second); err != nil {
+		var httpErr *common.HTTPError
+		if errors.As(err, &httpErr) && httpErr.StatusCode == http.StatusNotFound {
+			return nil
+		}
+		return err
+	}
+	return nil
 }
 
 func cleanupEvalSetDatasetReferences(ctx context.Context, tx *gorm.DB, datasetID string, now time.Time) error {
@@ -1242,6 +1259,9 @@ func UpdateDataset(w http.ResponseWriter, r *http.Request) {
 	newCover := strings.TrimSpace(body.CoverImage)
 	if newDisplay == "" {
 		newDisplay = ds.DisplayName
+	} else if err := validateDatasetDisplayName(body.DisplayName); err != nil {
+		common.ReplyErr(w, err.Error(), http.StatusBadRequest)
+		return
 	}
 	if hasReservedDatasetDisplayNamePrefix(newDisplay) {
 		common.ReplyErr(w, "dataset name uses reserved prefix", http.StatusBadRequest)
@@ -1273,15 +1293,11 @@ func UpdateDataset(w http.ResponseWriter, r *http.Request) {
 	if len(parsers) == 0 {
 		parsers = fetchParsersByAlgoID(r.Context(), algoID)
 	}
-	scanManaged := parseDatasetScanManaged(ds.Ext)
-	scanSourceType := parseDatasetScanSourceType(ds.Ext)
 	extBytes, _ := json.Marshal(map[string]any{
-		"tags":             body.Tags,
-		"algo_id":          algoID,
-		"algo_name":        algoName,
-		"parsers":          parsers,
-		"scan_managed":     scanManaged,
-		"scan_source_type": scanSourceType,
+		"tags":      body.Tags,
+		"algo_id":   algoID,
+		"algo_name": algoName,
+		"parsers":   parsers,
 	})
 
 	// 1) text POST /v1/kbs/{kb_id}/update
@@ -1365,8 +1381,6 @@ func UpdateDataset(w http.ResponseWriter, r *http.Request) {
 		Type:           datasetTypeToPB(ds.Type),
 		Tags:           parseDatasetTags(ds.Ext),
 		DefaultDataset: isDefaultDatasetForUser(r.Context(), userID, ds.ID),
-		ScanManaged:    parseDatasetScanManaged(ds.Ext),
-		ScanSourceType: parseDatasetScanSourceType(ds.Ext),
 	})
 }
 func SetDefault(w http.ResponseWriter, r *http.Request) {
