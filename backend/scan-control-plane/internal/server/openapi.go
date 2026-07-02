@@ -268,6 +268,7 @@ func openAPISchemas() map[string]any {
 		"AppendSourceRequest":           appendSourceRequestSchema(),
 		"AppendSourceResponse":          appendSourceResponseSchema(),
 		"JobError":                      jobErrorSchema(),
+		"SourceAppendBindingRequest":    sourceAppendBindingRequestSchema(),
 		"SourceBindingResponse":         sourceBindingResponseSchema(),
 		"SchedulePolicy":                schedulePolicySchema(),
 		"ScheduleRule":                  scheduleRuleSchema(),
@@ -316,7 +317,7 @@ func openAPISchemas() map[string]any {
 
 func appendSourceRequestSchema() map[string]any {
 	return object([]string{"bindings"}, props(
-		"bindings", arrayOf("SourceBindingRequest"),
+		"bindings", arrayOf("SourceAppendBindingRequest"),
 	))
 }
 
@@ -325,6 +326,13 @@ func jobErrorSchema() map[string]any {
 		"code", stringSchema(),
 		"message", stringSchema(),
 		"details", objectSchema(),
+	))
+}
+
+func sourceAppendBindingRequestSchema() map[string]any {
+	return object([]string{}, props(
+		"target_ref", stringSchema(),
+		"display_name", stringSchema(),
 	))
 }
 
