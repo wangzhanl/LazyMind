@@ -6,8 +6,8 @@ from typing import Any, Callable
 
 from evo.operations.public_contracts import build_eval_summary_root
 
-from .answer import call_chat_answer, failed_rag_answer
-from .judge import judge_answer, judge_contract_error, validate_judge_result
+from .answer import answer_case
+from .judge import judge_case
 
 UNSCORED = {'infra_failure', 'judge_contract_error', 'dataset_contract_error'}
 SCORES = (
@@ -24,37 +24,13 @@ SCORES = (
 
 def eval_materializers() -> dict[str, Callable[[Any, Mapping[str, object]], Mapping[str, object]]]:
     def answer(ctx: Any, inputs: Mapping[str, object]) -> Mapping[str, object]:
-        case = _mapping(inputs['case'], 'case')
-        target_config = _mapping(inputs.get('target_config') or {}, 'target_config')
-        case_id = str(case.get('id') or '')
-        by_case = target_config.get('case_metadata_by_id')
-        metadata = case.get('case_metadata') if isinstance(case.get('case_metadata'), Mapping) else {}
-        preparation = case.get('source_preparation') if isinstance(case.get('source_preparation'), Mapping) else {}
-        case_source = preparation.get('case_source') if isinstance(preparation.get('case_source'), Mapping) else {}
-        kb_id = ''
-        if isinstance(by_case, Mapping) and isinstance(by_case.get(case_id), Mapping):
-            kb_id = str(by_case[case_id].get('kb_id') or '').strip()
-        kb_id = kb_id or str(metadata.get('kb_id') or case_source.get('kb_id') or '').strip()
-        target = {'target_chat_url': str(target_config.get('target_chat_url') or ''), 'kb_id': kb_id}
-        if not kb_id:
-            value = failed_rag_answer(case, {}, target, 'dataset_contract_error', 'case routing metadata missing kb_id')
-        elif not _has_role(target_config.get('llm_config'), 'llm'):
-            value = failed_rag_answer(case, {}, target, 'chat_config_error',
-                                      'eval.target_config.llm_config.llm missing; '
-                                      'eval must be launched through core model-config injection')
-        else:
-            value = call_chat_answer(case, target_config, kb_id)
-        return {'answer': value}
+        return {'answer': answer_case(_mapping(inputs['case'], 'case'),
+                                      _mapping(inputs.get('target_config') or {}, 'target_config'))}
 
     def judge(ctx: Any, inputs: Mapping[str, object]) -> Mapping[str, object]:
-        case = _mapping(inputs['case'], 'case')
-        rag_answer = _mapping(inputs['answer'], 'answer')
-        policy = _mapping(inputs.get('policy') or {}, 'policy')
-        try:
-            value = validate_judge_result(judge_answer(case, rag_answer, policy))
-        except Exception as exc:
-            value = validate_judge_result(judge_contract_error(case, rag_answer, policy, str(exc)))
-        return {'judge': value}
+        return {'judge': judge_case(_mapping(inputs['case'], 'case'),
+                                    _mapping(inputs['answer'], 'answer'),
+                                    _mapping(inputs.get('policy') or {}, 'policy'))}
 
     def summary(ctx: Any, inputs: Mapping[str, object]) -> Mapping[str, object]:
         judges = inputs.get('judges')
@@ -95,6 +71,7 @@ def build_eval_detail_summary(judges: tuple[Mapping[str, Any], ...] | list[Mappi
         case = judge.get('case') if isinstance(judge.get('case'), Mapping) else {}
         answer = judge.get('rag_answer') if isinstance(judge.get('rag_answer'), Mapping) else {}
         target = judge.get('target') if isinstance(judge.get('target'), Mapping) else {}
+        chat_error = answer.get('chat_error') if isinstance(answer.get('chat_error'), Mapping) else {}
         rows.append({
             'case_id': str(judge.get('case_id') or case.get('id') or ''),
             'kb_id': str(target.get('kb_id') or ''),
@@ -110,6 +87,8 @@ def build_eval_detail_summary(judges: tuple[Mapping[str, Any], ...] | list[Mappi
             'retrieval_failure_type': str(judge.get('retrieval_failure_type') or ''),
             'reason': str(judge.get('reason') or ''),
             'defect': str(judge.get('defect') or ''),
+            'chat_error_type': str(chat_error.get('type') or ''),
+            'chat_error_message': str(chat_error.get('message') or ''),
             'reference_chunk_ids': case.get('reference_chunk_ids') or [],
             'reference_doc_ids': case.get('reference_doc_ids') or [],
             'retrieve_chunk_ids': answer.get('chunk_ids') or [],
@@ -126,6 +105,8 @@ def build_eval_detail_summary(judges: tuple[Mapping[str, Any], ...] | list[Mappi
             'kb_id': str(row.get('kb_id') or ''),
             'failure_type': str(row.get('failure_type') or ''),
             'reason': str(row.get('reason') or ''),
+            'chat_error_type': str(row.get('chat_error_type') or ''),
+            'chat_error_message': str(row.get('chat_error_message') or ''),
         }
         for row in rows
         if row['failure_type'] in {'infra_failure', 'judge_contract_error', 'dataset_contract_error'}
@@ -166,10 +147,6 @@ def _mapping(value: object, name: str) -> Mapping[str, Any]:
     if not isinstance(value, Mapping):
         raise ValueError(f'{name} must be a mapping')
     return value
-
-
-def _has_role(value: object, role_name: str) -> bool:
-    return isinstance(value, Mapping) and isinstance(value.get(role_name), Mapping) and bool(value[role_name])
 
 
 def _avg(rows: list[Mapping[str, Any]], key: str) -> float:

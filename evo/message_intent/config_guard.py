@@ -17,12 +17,14 @@ SPEC = {
     'run_config': (['thread_id', 'mode', 'num_case', 'inputs', 'llm_config'],
                    {'thread_id', 'mode', 'title', 'num_case', 'inputs', 'llm_config'}),
     'source_config': ([], {'kb_id', 'csv_data', 'target_case_count', 'min_case_count'}),
-    'target_config': (['target_chat_url', 'llm_config'],
-                      {'target_chat_url', 'llm_config', 'case_deadline_seconds',
-                       'first_frame_timeout_seconds'}),
-    'candidate_config': (['target_chat_url', 'llm_config'],
-                         {'target_chat_url', 'llm_config', 'case_deadline_seconds',
-                          'first_frame_timeout_seconds'}),
+    'target_config': (['target_chat_url', 'router_admin_url', 'algorithm_id', 'llm_config'],
+                      {'target_chat_url', 'router_admin_url', 'algorithm_id', 'llm_config',
+                       'case_deadline_seconds', 'first_frame_timeout_seconds',
+                       'connect_timeout_seconds', 'write_timeout_seconds', 'pool_timeout_seconds'}),
+    'candidate_config': (['target_chat_url', 'router_admin_url', 'llm_config'],
+                         {'target_chat_url', 'router_admin_url', 'algorithm_id', 'llm_config',
+                          'case_deadline_seconds', 'first_frame_timeout_seconds',
+                          'connect_timeout_seconds', 'write_timeout_seconds', 'pool_timeout_seconds'}),
     'eval_policy': (['judge_llm_config'], {'judge_llm_config'}),
     'repair_policy': (['llm_config'], {'llm_config', 'thread_id', 'workspace_namespace'}),
 }
@@ -99,8 +101,24 @@ def _semantic_issues(thread_id: str, target: str, value: object) -> list[ConfigV
                 code = 'out_of_range' if isinstance(count, int) else 'invalid_type'
                 issues.append(_issue('/min_case_count', code, 'CSV source min_case_count must be integer >= 100'))
     if target in {'target_config', 'candidate_config'}:
-        issues += _url_issue(value.get('target_chat_url')) + _role_issue('/llm_config/llm', value.get('llm_config'))
-        for key in ('case_deadline_seconds', 'first_frame_timeout_seconds'):
+        issues += (
+            _url_issue('/target_chat_url', value.get('target_chat_url'))
+            + _url_issue('/router_admin_url', value.get('router_admin_url'))
+            + _role_issue('/llm_config/llm', value.get('llm_config'))
+        )
+        algorithm_id = str(value.get('algorithm_id') or '').strip()
+        if target == 'target_config' and not algorithm_id:
+            issues.append(_issue('/algorithm_id', 'missing_required', '/algorithm_id is required'))
+        if target == 'candidate_config' and algorithm_id and not algorithm_id.startswith('evo_'):
+            issues.append(_issue('/algorithm_id', 'invalid_value',
+                                 'candidate_config.algorithm_id must start with evo_'))
+        for key in (
+            'case_deadline_seconds',
+            'first_frame_timeout_seconds',
+            'connect_timeout_seconds',
+            'write_timeout_seconds',
+            'pool_timeout_seconds',
+        ):
             if key in value and (not isinstance(value.get(key), (int, float)) or value.get(key) <= 0):
                 issues.append(_issue(f'/{key}', 'out_of_range', f'{key} must be positive'))
     if target == 'eval_policy':
@@ -113,12 +131,12 @@ def _semantic_issues(thread_id: str, target: str, value: object) -> list[ConfigV
     return issues
 
 
-def _url_issue(value: object) -> list[ConfigValidationIssue]:
+def _url_issue(path: str, value: object) -> list[ConfigValidationIssue]:
     try:
         HTTP_URL.validate_python(value)
         return []
     except ValidationError:
-        return [_issue('/target_chat_url', 'invalid_url', '/target_chat_url must be an http(s) URL')]
+        return [_issue(path, 'invalid_url', f'{path} must be an http(s) URL')]
 
 
 def _role_issue(path: str, value: object) -> list[ConfigValidationIssue]:

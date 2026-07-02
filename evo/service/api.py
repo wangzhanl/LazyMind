@@ -24,6 +24,7 @@ from evo.message_intent.storage import MessageConflictError, MessageInProgressEr
 from evo.message_intent.turn import run_turn
 
 from .projections import ProjectionService
+from .router_api import build_router_api
 from .threads import ThreadService
 
 
@@ -35,6 +36,8 @@ class ThreadInputs(StrictModel):
     kb_id: list[str] = Field(default_factory=list)
     csv_data: list[dict[str, str]] = Field(default_factory=list)
     target_chat_url: str
+    router_admin_url: str
+    algorithm_id: str
     num_case: int = Field(gt=0)
     case_deadline_seconds: float = Field(default=300.0, gt=0)
 
@@ -193,6 +196,8 @@ def create_app() -> FastAPI:
     @app.get('/candidates/{candidate_id:path}')
     def candidate(candidate_id: str) -> dict[str, Any]:
         return service.projections.candidate(candidate_id)
+
+    app.include_router(build_router_api(service))
 
     return app
 

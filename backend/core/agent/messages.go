@@ -238,7 +238,8 @@ func ensureMessageStream(
 }
 
 func openMessageStream(threadID string, requestBody []byte, headers map[string]string) (*http.Response, error) {
-	req, err := http.NewRequestWithContext(context.Background(), http.MethodPost, threadMessagesURL(threadID), bytes.NewReader(requestBody))
+	client := newEvoClient(headers)
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodPost, client.MessagesURL(threadID), bytes.NewReader(requestBody))
 	if err != nil {
 		return nil, err
 	}
@@ -251,8 +252,8 @@ func openMessageStream(threadID string, requestBody []byte, headers map[string]s
 		req.Header.Set(key, value)
 	}
 
-	client := &http.Client{Timeout: 10 * time.Minute}
-	resp, err := client.Do(req)
+	httpClient := &http.Client{Timeout: 10 * time.Minute}
+	resp, err := httpClient.Do(req)
 	if err != nil {
 		return nil, err
 	}
@@ -307,8 +308,8 @@ func consumeMessageStream(db *gorm.DB, session *activeMessageStream, threadID st
 		}
 
 		taskID := ""
-		if payload != nil {
-			taskID = extractStringByKeys(payload, "task_id", "current_task_id")
+		if row, ok := payload.(map[string]any); ok {
+			taskID = firstNonEmptyScalar(row["task_id"], row["current_task_id"])
 		}
 		logUpstreamSSEData(":messages", threadID, session.roundID, taskID, frame.Event, rawData)
 		if delta := extractAssistantTextFromFrameData(rawData); delta != "" {

@@ -16,6 +16,8 @@ from fastapi import HTTPException
 
 from evo.artifact_flow.commands import CancelFlow, ContinueFlow, PauseFlow, ResumeFlow, RetryFlow
 from evo.artifact_flow.commands import FlowCommand
+from evo.operations.router_ledger import RouterAlgorithmLedger
+from evo.operations.router_manager import RouterManager, RouterManagerError
 from .runtime_port import RuntimePort
 
 THREAD_ID = re.compile(r'[A-Za-z0-9][A-Za-z0-9_.-]{0,127}')
@@ -89,6 +91,7 @@ class ThreadService:
             self._config(thread_id)
             if thread_id in self._active:
                 raise HTTPException(409, 'thread has an active command; cancel before delete')
+            self._stop_owned_router_algorithms(thread_id)
             self.runtime.delete_run(thread_id)
             shutil.rmtree(self.download_root / thread_id, ignore_errors=True)
             shutil.rmtree(self.repair_work_root / thread_id, ignore_errors=True)
@@ -259,6 +262,26 @@ class ThreadService:
         current = next((item.step for item in progress if not item.completed), progress[-1].step if progress else '')
         return {'status': status, 'current_step': current, 'last_error': gate.last_error}
 
+    def _stop_owned_router_algorithms(self, thread_id: str) -> None:
+        ledger = RouterAlgorithmLedger(self.runtime.store_root)
+        rows = [
+            row for row in ledger.list_algorithms(thread_id=thread_id, expected_state='active')
+            if row.get('cleanup_policy') == 'thread_delete'
+        ]
+        for row in rows:
+            algorithm_id = str(row['algorithm_id'])
+            manager = RouterManager(str(row['router_admin_url']), str(row['service_url']))
+            try:
+                if algorithm_id in _strategy_weights(manager.get_ab_strategy()):
+                    raise HTTPException(
+                        409,
+                        f'router algorithm {algorithm_id} is referenced by active AB strategy',
+                    )
+                manager.stop_algorithm(algorithm_id)
+                ledger.mark_state(algorithm_id, 'stopped')
+            except RouterManagerError as exc:
+                raise HTTPException(503, f'failed to stop router algorithm {algorithm_id}: {exc}') from exc
+
 
 def _inputs(value: Mapping[str, Any]) -> dict[str, Any]:
     csv_data = []
@@ -276,6 +299,8 @@ def _inputs(value: Mapping[str, Any]) -> dict[str, Any]:
         'kb_id': [str(item).strip() for item in value.get('kb_id') or [] if str(item).strip()],
         'csv_data': csv_data,
         'target_chat_url': str(value.get('target_chat_url') or '').strip(),
+        'router_admin_url': str(value.get('router_admin_url') or '').strip(),
+        'algorithm_id': str(value.get('algorithm_id') or '').strip(),
         'num_case': int(value.get('num_case') or 0),
         'case_deadline_seconds': float(value.get('case_deadline_seconds') or CHAT_CASE_DEADLINE_SECONDS),
     }
@@ -283,6 +308,10 @@ def _inputs(value: Mapping[str, Any]) -> dict[str, Any]:
         raise HTTPException(422, 'inputs.kb_id or inputs.csv_data is required')
     if not inputs['target_chat_url']:
         raise HTTPException(422, 'inputs.target_chat_url is required')
+    if not inputs['router_admin_url']:
+        raise HTTPException(422, 'inputs.router_admin_url is required')
+    if not inputs['algorithm_id']:
+        raise HTTPException(422, 'inputs.algorithm_id is required')
     if inputs['num_case'] < 1:
         raise HTTPException(422, 'inputs.num_case must be positive')
     if inputs['case_deadline_seconds'] <= 0:
@@ -301,6 +330,15 @@ def _llm_config(value: Mapping[str, Any]) -> dict[str, Any]:
 def _seed(thread_id: str, mode: str, title: str, inputs: Mapping[str, Any], llm_config: Mapping[str, Any]):
     target_config = {
         'target_chat_url': inputs['target_chat_url'],
+        'router_admin_url': inputs['router_admin_url'],
+        'algorithm_id': inputs['algorithm_id'],
+        'llm_config': dict(llm_config),
+        'case_deadline_seconds': inputs['case_deadline_seconds'],
+        'first_frame_timeout_seconds': CHAT_FIRST_FRAME_TIMEOUT_SECONDS,
+    }
+    candidate_config = {
+        'target_chat_url': inputs['target_chat_url'],
+        'router_admin_url': inputs['router_admin_url'],
         'llm_config': dict(llm_config),
         'case_deadline_seconds': inputs['case_deadline_seconds'],
         'first_frame_timeout_seconds': CHAT_FIRST_FRAME_TIMEOUT_SECONDS,
@@ -315,7 +353,7 @@ def _seed(thread_id: str, mode: str, title: str, inputs: Mapping[str, Any], llm_
         'eval_policy': {'judge_llm_config': dict(llm_config)},
         'repair_policy': {'llm_config': dict(llm_config), 'thread_id': thread_id,
                           'workspace_namespace': thread_id},
-        'candidate_config': target_config,
+        'candidate_config': candidate_config,
     }
 
 
@@ -344,6 +382,11 @@ def _digest(value: object) -> str:
         ensure_ascii=False,
     ).encode()
     return hashlib.sha256(raw).hexdigest()
+
+
+def _strategy_weights(strategy: Mapping[str, Any]) -> dict[str, Any]:
+    raw = strategy.get('strategy') if isinstance(strategy.get('strategy'), Mapping) else None
+    return dict((raw or {}).get('weights') or {})
 
 
 __all__ = ['ThreadService']

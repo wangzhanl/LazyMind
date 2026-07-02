@@ -57,6 +57,17 @@ class JudgeResult(JudgeScores):
     is_correct: bool
 
 
+def judge_case(
+    case: Mapping[str, Any],
+    rag_answer: Mapping[str, Any],
+    policy: Mapping[str, Any],
+) -> dict[str, Any]:
+    try:
+        return validate_judge_result(judge_answer(case, rag_answer, policy))
+    except Exception as exc:
+        return validate_judge_result(judge_contract_error(case, rag_answer, policy, str(exc)))
+
+
 def judge_answer(case: Mapping[str, Any], rag_answer: Mapping[str, Any], policy: Mapping[str, Any]) -> dict[str, Any]:
     base = {
         'case_id': str(case.get('id') or rag_answer.get('case_id') or ''),
