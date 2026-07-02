@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"lazymind/core/common/orm"
+	appLog "lazymind/core/log"
 )
 
 func newTestDB(t *testing.T) *orm.DB {
@@ -23,6 +24,30 @@ func newTestDB(t *testing.T) *orm.DB {
 		t.Fatalf("auto migrate: %v", err)
 	}
 	return db
+}
+
+func TestDoRPCNon2xxHidesResponseBodyFromError(t *testing.T) {
+	appLog.InitNop()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusBadRequest)
+		_, _ = w.Write([]byte(`{"trace_id":"trace-1","error":{"code":"bad_request","message":"model is required"}}`))
+	}))
+	defer server.Close()
+
+	_, _, err := doRPC(context.Background(), server.Client(), server.URL, nil, jsonRPCRequest{
+		JSONRPC: "2.0",
+		ID:      1,
+		Method:  "initialize",
+	})
+	if err == nil {
+		t.Fatalf("expected rpc error")
+	}
+	if got, want := err.Error(), "mcp rpc returned 400"; got != want {
+		t.Fatalf("unexpected error: got %q want %q", got, want)
+	}
+	if strings.Contains(err.Error(), "model is required") || strings.Contains(err.Error(), "trace-1") {
+		t.Fatalf("error leaked response body: %q", err.Error())
+	}
 }
 
 func TestCreateServerMasksAndEncryptsAPIKey(t *testing.T) {
@@ -106,7 +131,7 @@ func TestCreateServerIgnoresEnabledAndStartsDisabled(t *testing.T) {
 	}
 }
 
-func TestListServersFiltersByKeywordAndPaginates(t *testing.T) {
+func TestListServersFiltersByKeywordAndReturnsAll(t *testing.T) {
 	db := newTestDB(t)
 	for _, item := range []struct {
 		name string
@@ -127,29 +152,90 @@ func TestListServersFiltersByKeywordAndPaginates(t *testing.T) {
 
 	resp, err := ListServers(context.Background(), db.DB, "u1", ListServersRequest{
 		Keyword:  "网站",
-		Page:     1,
+		Page:     2,
 		PageSize: 1,
 	})
 	if err != nil {
 		t.Fatalf("list servers: %v", err)
 	}
-	if resp.Total != 2 || resp.Page != 1 || resp.PageSize != 1 {
+	if resp.Total != 2 || resp.Page != 1 || resp.PageSize != 2 {
 		t.Fatalf("unexpected list metadata: %#v", resp)
 	}
-	if len(resp.MCPServers) != 1 || !strings.Contains(resp.MCPServers[0].Name, "网站") {
-		t.Fatalf("unexpected first page: %#v", resp.MCPServers)
+	if len(resp.MCPServers) != 2 {
+		t.Fatalf("expected all matching servers, got %#v", resp.MCPServers)
+	}
+	if !strings.Contains(resp.MCPServers[0].Name, "网站") || !strings.Contains(resp.MCPServers[1].Name, "网站") {
+		t.Fatalf("unexpected filtered servers: %#v", resp.MCPServers)
+	}
+}
+
+func TestListServersOrdersEnabledFirstThenCreatedDesc(t *testing.T) {
+	db := newTestDB(t)
+	base := time.Date(2026, 7, 1, 12, 0, 0, 0, time.UTC)
+	rows := []orm.MCPServer{
+		{
+			ID:               "disabled-new",
+			Name:             "disabled-new",
+			Transport:        "http",
+			URL:              "https://disabled-new.example.com/mcp",
+			HeadersJSON:      json.RawMessage(`{}`),
+			AllowedToolsJSON: json.RawMessage(`[]`),
+			Enabled:          false,
+			BaseModel: orm.BaseModel{
+				CreateUserID:   "u1",
+				CreateUserName: "User 1",
+				CreatedAt:      base.Add(3 * time.Hour),
+				UpdatedAt:      base.Add(3 * time.Hour),
+			},
+		},
+		{
+			ID:               "enabled-old",
+			Name:             "enabled-old",
+			Transport:        "http",
+			URL:              "https://enabled-old.example.com/mcp",
+			HeadersJSON:      json.RawMessage(`{}`),
+			AllowedToolsJSON: json.RawMessage(`[]`),
+			Enabled:          true,
+			BaseModel: orm.BaseModel{
+				CreateUserID:   "u1",
+				CreateUserName: "User 1",
+				CreatedAt:      base.Add(time.Hour),
+				UpdatedAt:      base.Add(time.Hour),
+			},
+		},
+		{
+			ID:               "enabled-new",
+			Name:             "enabled-new",
+			Transport:        "http",
+			URL:              "https://enabled-new.example.com/mcp",
+			HeadersJSON:      json.RawMessage(`{}`),
+			AllowedToolsJSON: json.RawMessage(`[]`),
+			Enabled:          true,
+			BaseModel: orm.BaseModel{
+				CreateUserID:   "u1",
+				CreateUserName: "User 1",
+				CreatedAt:      base.Add(2 * time.Hour),
+				UpdatedAt:      base.Add(2 * time.Hour),
+			},
+		},
+	}
+	if err := db.Create(&rows).Error; err != nil {
+		t.Fatalf("create servers: %v", err)
 	}
 
-	resp, err = ListServers(context.Background(), db.DB, "u1", ListServersRequest{
-		Keyword:  "网站",
-		Page:     2,
-		PageSize: 1,
-	})
+	resp, err := ListServers(context.Background(), db.DB, "u1", ListServersRequest{Page: 2, PageSize: 1})
 	if err != nil {
-		t.Fatalf("list second page: %v", err)
+		t.Fatalf("list servers: %v", err)
 	}
-	if resp.Total != 2 || len(resp.MCPServers) != 1 || !strings.Contains(resp.MCPServers[0].Name, "网站") {
-		t.Fatalf("unexpected second page: %#v", resp)
+	if resp.Total != 3 || resp.Page != 1 || resp.PageSize != 3 {
+		t.Fatalf("unexpected list metadata: %#v", resp)
+	}
+	got := []string{resp.MCPServers[0].ID, resp.MCPServers[1].ID, resp.MCPServers[2].ID}
+	want := []string{"enabled-new", "enabled-old", "disabled-new"}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("unexpected order: got %#v want %#v", got, want)
+		}
 	}
 }
 

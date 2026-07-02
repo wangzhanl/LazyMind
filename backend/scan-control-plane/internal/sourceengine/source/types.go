@@ -38,6 +38,8 @@ type Engine interface {
 	TriggerSourceSync(ctx context.Context, req TriggerSourceSyncRequest) (TriggerSourceSyncResponse, error)
 	UpdateSource(ctx context.Context, callerID, sourceID string, req UpdateSourceRequest) (UpdateSourceResponse, error)
 	DeleteSource(ctx context.Context, sourceID string) (DeleteSourceResponse, error)
+	DeleteSourceByDatasetID(ctx context.Context, datasetID string, opts DeleteSourceOptions) (DeleteSourceResponse, error)
+	AppendSource(ctx context.Context, req AppendSourceRequest) (AppendSourceResponse, error)
 	AddBinding(ctx context.Context, callerID, sourceID string, input BindingInput) (BindingMutationResponse, error)
 	UpdateBinding(ctx context.Context, callerID, sourceID, bindingID string, input BindingInput) (BindingMutationResponse, error)
 	DeleteBinding(ctx context.Context, sourceID, bindingID string) (DeleteBindingResponse, error)
@@ -287,6 +289,10 @@ type DeleteSourceResponse struct {
 	CompensationErrors []JobError `json:"compensation_errors,omitempty"`
 }
 
+type DeleteSourceOptions struct {
+	SkipCoreDatasetDelete bool
+}
+
 type JobError struct {
 	Code    string         `json:"code"`
 	Message string         `json:"message"`
@@ -300,6 +306,7 @@ type SourceRepository interface {
 	CreateSourceWithBindings(ctx context.Context, record store.SourceCreateRecord) error
 	ListSources(ctx context.Context, req store.SourceListRequest) ([]store.SourceListRecord, int, error)
 	GetSource(ctx context.Context, sourceID string) (store.Source, error)
+	GetSourceByDatasetID(ctx context.Context, datasetID string) (store.Source, error)
 	UpdateSource(ctx context.Context, source store.Source) error
 	UpdateSourceWithBindings(ctx context.Context, mutation store.SourceUpdateMutation) (store.SourceUpdateResult, error)
 	DeleteSource(ctx context.Context, sourceID string, deletedAt time.Time) (store.SourceDeleteResult, error)
@@ -323,4 +330,22 @@ type ScheduleEngine interface {
 	BuildCheckpoint(ctx context.Context, binding store.Binding, now time.Time) (store.SyncCheckpoint, error)
 	TriggerInitialSync(ctx context.Context, binding store.Binding) ([]string, error)
 	EnqueueManualSync(ctx context.Context, req scheduleengine.ManualSyncRequest) (scheduleengine.SyncRunIntent, error)
+}
+
+// ---------- Append Source ----------
+
+// AppendSourceRequest 追加文档到已有数据源的请求参数。
+// 前端只需传 bindings，其他字段由服务端自动注入。
+type AppendSourceRequest struct {
+	CallerID string         `json:"-"`
+	TenantID string         `json:"-"`
+	SourceID string         `json:"-"`
+	Bindings []BindingInput `json:"bindings"`
+}
+
+// AppendSourceResponse 追加操作的返回结果。
+type AppendSourceResponse struct {
+	NewBindingIDs []string                `json:"new_binding_ids"`
+	NewBindings   []SourceBindingResponse `json:"new_bindings"`
+	SyncJobErrors []JobError              `json:"sync_job_errors,omitempty"`
 }
