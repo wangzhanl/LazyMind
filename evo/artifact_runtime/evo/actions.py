@@ -81,8 +81,7 @@ def dispatch_evo_query(adapter: EvoArtifactReader, spec: EvoFlowSpec, run_id: st
 
 
 def dispatch_evo_mutation(adapter: EvoArtifactAccess, spec: EvoFlowSpec,
-                          run_id: str, mutation: EvoMutation
-                        ) -> StoreResult:
+                          run_id: str, mutation: EvoMutation) -> StoreResult:
     match mutation:
         case EditArtifact(ref, pointer, value, idempotency_key):
             return edit_artifact(adapter, spec, run_id, ref, pointer, value, idempotency_key=idempotency_key)

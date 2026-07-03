@@ -16,12 +16,12 @@ from urllib.parse import urlparse
 from unidiff import PatchSet
 
 from evo.operations.abtest.materializers import (
-    candidate_judge_result,
     candidate_rag_answer,
     candidate_service,
     compare_eval_detail_for_repair,
 )
 from evo.operations.analysis.summary import build_analysis_from_answers
+from evo.operations.eval.judge import judge_case
 from evo.operations.eval.materializers import build_eval_detail_summary
 from evo.operations.public_contracts import RepairPatch, algo_id, dump_contract
 
@@ -316,7 +316,7 @@ def _candidate_validation(
         try:
             answer = candidate_rag_answer(case, service)
             answers[case_id] = answer
-            judges[case_id] = candidate_judge_result(case, answer, eval_policy)
+            judges[case_id] = judge_case(case, answer, eval_policy)
         except Exception as exc:
             _emit(trace, 'candidate.case_completed', status='failed', attempt=attempt,
                   payload={'case_id': case_id, 'error_type': type(exc).__name__})
@@ -505,11 +505,7 @@ def _patch_base_decision(
             return {'action': 'blocked', 'reason': f'external candidate service unavailable: {htype}'}
         return {'action': 'rollback_to_baseline', 'reason': 'candidate_service_failed'}
     failures = candidate.get('candidate_eval_summary', {}).get('execution_failures', [])
-    if any(
-        _text(row.get('failure_type')).startswith('candidate_route_')
-        or _text(row.get('reason')).startswith('candidate_route_')
-        for row in failures
-    ):
+    if any(_router_chat_failure(row) for row in failures):
         return {'action': 'blocked', 'reason': 'external candidate routing unavailable'}
     if _text(candidate.get('reason')).startswith('candidate_analysis_failed:'):
         return {'action': 'blocked', 'reason': candidate.get('reason')}
@@ -776,6 +772,30 @@ def _diff_by_file(diff: str) -> dict[str, str]:
         if path:
             result[path] = str(patched)
     return result
+
+
+def _router_chat_failure(row: Mapping[str, Any]) -> bool:
+    router_errors = {
+        'router_header_missing',
+        'router_algorithm_mismatch',
+        'router_algorithm_unavailable',
+        'router_algorithm_unhealthy',
+        'router_algorithm_transport_error',
+        'router_algorithm_timeout',
+        'router_algorithm_protocol_error',
+    }
+    values = (
+        _text(row.get('failure_type')),
+        _text(row.get('reason')),
+        _text(row.get('chat_error_type')),
+        _text(row.get('chat_error_message')),
+    )
+    return any(
+        value in router_errors
+        or value.startswith('candidate_route_')
+        or any(value.startswith(f'{error}:') for error in router_errors)
+        for value in values
+    )
 
 
 def _group_summary(value: object) -> dict[str, Any]:

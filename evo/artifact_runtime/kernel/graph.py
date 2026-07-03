@@ -148,7 +148,7 @@ def _next_op(instance_id: InstanceId, data: Mapping[str, object],
     )
 
 
-def _input_key_groups(op_cls: type[FixedOp], output_key_by_name: Mapping[str, ArtifactKey]) -> dict[str, tuple[ArtifactKey, ...]]:
+def _input_key_groups(op_cls: type[FixedOp], output_key_by_name: Mapping[str, ArtifactKey]) -> dict[str, tuple[ArtifactKey, ...]]:  # noqa: E501
     output_ref_key = next(iter(output_key_by_name.values()))
     output_spec = _output_spec_for_key(op_cls, output_ref_key)
     return {

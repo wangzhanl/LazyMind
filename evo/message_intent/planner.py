@@ -2,14 +2,13 @@ from __future__ import annotations
 
 import json
 from collections.abc import Mapping
-from pathlib import Path
 from typing import Any
 
 from evo.llm import LazyLLMClient
 
 from .schemas import TurnPlan
 
-PROMPT = f'''
+PROMPT = """
 You translate one user message into a strict Evo message_intent TurnPlan.
 Return only one JSON object. Do not explain. Do not use markdown.
 Allowed next_action.kind: flow, query, mutation, config_patch, approval, clarify, final.
@@ -24,7 +23,7 @@ Allowed mutation: edit_artifact, rerun_case_stage, rerun_step, invalidate_from_s
 Allowed config_patch target: run_config, source_config, target_config, eval_policy, repair_policy, candidate_config.
 If pending_approval exists, use approval decision approve/reject/amend/replace/unclear,
 or output a replacement executable action with user_message_effect amend/replace.
-'''
+"""
 
 
 class StructuredPlanError(ValueError):
