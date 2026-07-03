@@ -37,16 +37,11 @@ def test_remote_fs_uses_core_readonly_api(monkeypatch):
             return _Response({'code': 0, 'data': {'name': 'skills/a/SKILL.md', 'type': 'file', 'size': 4}})
         if url.endswith('/exists'):
             return _Response({'code': 0, 'data': {'exists': True}})
-        raise AssertionError(url)
-
-    def fake_get(url, params, timeout):
-        calls.append(('GET', url, params, timeout, None))
         if url.endswith('/content'):
             return _Response(content=b'test')
         raise AssertionError(url)
 
     monkeypatch.setattr('lazymind.chat.integrations.remote_fs.requests.request', fake_request)
-    monkeypatch.setattr('lazymind.chat.integrations.remote_fs.requests.get', fake_get)
     monkeypatch.setattr(
         'lazymind.chat.integrations.remote_fs.lazyllm.globals',
         {'agentic_config': {'session_id': 'sid-1'}},
@@ -59,10 +54,16 @@ def test_remote_fs_uses_core_readonly_api(monkeypatch):
     assert fs.exists('skills/a/SKILL.md') is True
     assert fs.open('skills/a/SKILL.md', 'rb').read() == b'test'
     assert calls == [
-        ('GET', 'http://core:8000/remote-fs/list', {'path': 'skills', 'detail': 'true', 'session_id': 'sid-1'}, 3, None),
-        ('GET', 'http://core:8000/remote-fs/info', {'path': 'skills/a/SKILL.md', 'session_id': 'sid-1'}, 3, None),
-        ('GET', 'http://core:8000/remote-fs/exists', {'path': 'skills/a/SKILL.md', 'session_id': 'sid-1'}, 3, None),
-        ('GET', 'http://core:8000/remote-fs/content', {'path': 'skills/a/SKILL.md', 'session_id': 'sid-1'}, 3, None),
+        ('GET', 'http://core:8000/remote-fs/list', {'path': 'skills', 'detail': 'true', 'task_id': 'sid-1'}, 3, None),
+        ('GET', 'http://core:8000/remote-fs/info', {'path': 'skills/a/SKILL.md', 'task_id': 'sid-1'}, 3, None),
+        ('GET', 'http://core:8000/remote-fs/exists', {'path': 'skills/a/SKILL.md', 'task_id': 'sid-1'}, 3, None),
+        (
+            'GET',
+            'http://core:8000/remote-fs/content',
+            {'path': 'skills/a/SKILL.md', 'encoding': 'raw', 'task_id': 'sid-1'},
+            3,
+            None,
+        ),
     ]
 
 
@@ -114,14 +115,14 @@ def test_remote_fs_write_and_rm_use_core_api(monkeypatch):
         (
             'PUT',
             'http://core:8000/remote-fs/content',
-            {'path': 'skills/a/b/SKILL.md', 'session_id': 'sid-1'},
+            {'path': 'skills/a/b/SKILL.md', 'task_id': 'sid-1'},
             3,
             b'hello',
         ),
         (
             'DELETE',
             'http://core:8000/remote-fs/path',
-            {'path': 'skills/a/b', 'recursive': 'true', 'session_id': 'sid-1'},
+            {'path': 'skills/a/b', 'recursive': 'true', 'task_id': 'sid-1'},
             3,
             None,
         ),

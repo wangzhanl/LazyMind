@@ -79,38 +79,17 @@ def test_memory_editor_operations_write_memory_review(monkeypatch):
 
 
 def test_skill_editor_create_modify_remove_core_paths(monkeypatch):
-    records = []
     create_calls = []
     remove_calls = []
-    pending_checks = []
-
-    def fake_insert_skill_review_result(**kwargs):
-        records.append(kwargs)
-        return {'id': f'review-{len(records)}', 'review_status': 'pending'}
-
-    def fake_apply_skill_edit_operations(current, operations):
-        return (
-            current
-            .replace('name: existing', 'name: renamed')
-            .replace('category: writing', 'category: drafts')
-            .replace('Use this skill for tests.', 'Use this skill for focused tests.'),
-            [dict(op) for op in operations],
-        )
+    replace_calls = []
 
     monkeypatch.setattr(
         skill_editor_mod.lazyllm,
         'globals',
         {'agentic_config': {'user_id': 'user-1', 'session_id': 'session-1'}},
     )
-    monkeypatch.setattr(skill_editor_mod, 'insert_skill_review_result', fake_insert_skill_review_result)
     monkeypatch.setattr(skill_editor_mod, 'create_remote_skill', lambda *args: create_calls.append(args))
     monkeypatch.setattr(skill_editor_mod, 'remove_remote_skill', lambda *args: remove_calls.append(args))
-    def fake_find_pending_skill_review(category, name, user_id):
-        pending_checks.append((category, name, user_id))
-        return None
-
-    monkeypatch.setattr(skill_editor_mod, 'find_pending_skill_review', fake_find_pending_skill_review)
-    monkeypatch.setattr(skill_editor_mod, 'apply_skill_edit_operations', fake_apply_skill_edit_operations)
 
     existing_content = (
         '---\n'
@@ -133,6 +112,23 @@ def test_skill_editor_create_modify_remove_core_paths(monkeypatch):
             }
         },
     )
+    monkeypatch.setattr(
+        skill_editor_mod,
+        'list_skill_files',
+        lambda category, name: {
+            'SKILL.md': existing_content,
+            'references/old.md': 'old reference\n',
+        },
+    )
+
+    def fake_replace_skill_package_files(category, name, before, after):
+        replace_calls.append((category, name, before, after))
+        return {
+            'written': sorted(path for path in after if before.get(path) != after.get(path)),
+            'deleted': sorted(set(before) - set(after)),
+        }
+
+    monkeypatch.setattr(skill_editor_mod, 'replace_skill_package_files', fake_replace_skill_package_files)
 
     content = (
         '---\n'
@@ -154,11 +150,19 @@ def test_skill_editor_create_modify_remove_core_paths(monkeypatch):
         category='writing',
         operations=[
             {
-                'op': 'replace_text',
-                'old': 'Use this skill for tests.',
-                'new': 'Use this skill for focused tests.',
-            }
+                'op': 'patch_file',
+                'path': 'SKILL.md',
+                'old_text': 'Use this skill for tests.',
+                'new_text': 'Use this skill for focused tests.',
+            },
+            {
+                'op': 'write_file',
+                'path': 'scripts/check.py',
+                'content': 'print("ok")\n',
+            },
+            {'op': 'delete_file', 'path': 'references/old.md'},
         ],
+        reason='package update',
     )
     remove_result = skill_editor_mod.skill_editor('existing', 'remove', category='writing')
 
@@ -172,36 +176,31 @@ def test_skill_editor_create_modify_remove_core_paths(monkeypatch):
         'status': 'created',
         'message': 'Skill was created and is now active.',
     }
-    assert modify_result['result'] == {
-        'status': 'pending_review',
-        'message': 'Skill changes were submitted and are pending review.',
-    }
+    assert modify_result['result']['status'] == 'modified'
+    assert modify_result['result']['message'] == 'Skill package was modified and is now active.'
+    assert modify_result['result']['touched_files'] == ['SKILL.md', 'references/old.md', 'scripts/check.py']
+    assert modify_result['result']['written_files'] == ['SKILL.md', 'scripts/check.py']
+    assert modify_result['result']['deleted_files'] == ['references/old.md']
+    assert modify_result['result']['summary'] == 'package update'
     assert remove_result['result'] == {
         'status': 'removed',
         'message': 'Skill was removed and is no longer active.',
     }
     assert create_calls == [('drafts', 'new_skill', content)]
     assert remove_calls == [('writing', 'existing')]
-    assert pending_checks == [
-        ('drafts', 'new_skill', 'user-1'),
-        ('drafts', 'renamed', 'user-1'),
-        ('writing', 'existing', 'user-1'),
-    ]
-    assert records == [
-        {
-            'category': 'writing',
-            'skill_name': 'existing',
-            'review_type': 'patch',
-            'skill_content': (
-                existing_content
-                .replace('name: existing', 'name: renamed')
-                .replace('category: writing', 'category: drafts')
-                .replace('Use this skill for tests.', 'Use this skill for focused tests.')
-            ),
-            'user_id': 'user-1',
-            'requestid': 'session-1',
-            'summary': 'skill_editor operations: 1',
-        },
+    assert replace_calls == [
+        (
+            'writing',
+            'existing',
+            {'SKILL.md': existing_content, 'references/old.md': 'old reference\n'},
+            {
+                'SKILL.md': existing_content.replace(
+                    'Use this skill for tests.',
+                    'Use this skill for focused tests.',
+                ),
+                'scripts/check.py': 'print("ok")\n',
+            },
+        ),
     ]
 
 
@@ -209,14 +208,14 @@ def test_skill_editor_rejects_missing_skill_without_write(monkeypatch):
     calls = []
 
     monkeypatch.setattr(skill_editor_mod.lazyllm, 'globals', {'agentic_config': {}})
-    monkeypatch.setattr(skill_editor_mod, 'insert_skill_review_result', lambda **kwargs: calls.append(kwargs))
+    monkeypatch.setattr(skill_editor_mod, 'replace_skill_package_files', lambda *args, **kwargs: calls.append(args))
     monkeypatch.setattr(skill_editor_mod, 'list_all_skill_entries', lambda _base_dir: {})
 
     result = skill_editor_mod.skill_editor(
         'missing',
         'modify',
         category='writing',
-        operations=[{'op': 'replace_text', 'old': 'old', 'new': 'new'}],
+        operations=[{'op': 'patch_file', 'old_text': 'old', 'new_text': 'new'}],
     )
 
     assert result == {
@@ -229,7 +228,16 @@ def test_skill_editor_rejects_missing_skill_without_write(monkeypatch):
     assert calls == []
 
 
-def test_skill_editor_blocks_modify_and_remove_when_pending_review_exists(monkeypatch):
+def test_skill_editor_renames_package_and_updates_runtime_delta(monkeypatch):
+    rename_calls = []
+    existing_content = (
+        '---\n'
+        'name: existing\n'
+        'category: writing\n'
+        'description: Existing skill.\n'
+        '---\n'
+        'Use this skill for tests.\n'
+    )
     monkeypatch.setattr(skill_editor_mod.lazyllm, 'globals', {'agentic_config': {'user_id': 'user-1'}})
     monkeypatch.setattr(
         skill_editor_mod,
@@ -240,46 +248,35 @@ def test_skill_editor_blocks_modify_and_remove_when_pending_review_exists(monkey
                 'category': 'writing',
                 'path': '/tmp/skills/writing/existing',
                 'source': 'remote',
-                'content': (
-                    '---\n'
-                    'name: existing\n'
-                    'category: writing\n'
-                    'description: Existing skill.\n'
-                    '---\n'
-                    'Use this skill for tests.\n'
-                ),
+                'content': existing_content,
             }
         },
     )
     monkeypatch.setattr(
         skill_editor_mod,
-        'find_pending_skill_review',
-        lambda category, name, user_id: {'id': 'pending-1', 'category': category, 'skill_name': name},
+        'list_skill_files',
+        lambda category, name: {'SKILL.md': existing_content, 'references/doc.md': 'doc\n'},
     )
-    monkeypatch.setattr(
-        skill_editor_mod,
-        'apply_skill_edit_operations',
-        lambda current, operations: (
-            current.replace('Use this skill for tests.', 'Use this skill for focused tests.'),
-            [dict(op) for op in operations],
-        ),
-    )
+    monkeypatch.setattr(skill_editor_mod, 'rename_skill_package', lambda *args, **kwargs: rename_calls.append((args, kwargs)))
 
-    modify_result = skill_editor_mod.skill_editor(
+    result = skill_editor_mod.skill_editor(
         'existing',
-        'modify',
+        'rename',
         category='writing',
-        operations=[{'op': 'replace_text', 'old': 'old', 'new': 'new'}],
+        new_name='renamed',
+        new_category='drafts',
     )
-    remove_result = skill_editor_mod.skill_editor('existing', 'remove', category='writing')
 
-    assert modify_result['success'] is False
-    assert modify_result['tool'] == 'skill_editor'
-    assert modify_result['error']['reason'] == (
-        'There is an unresolved pending change; handle it before submitting another edit.'
-    )
-    assert remove_result['success'] is False
-    assert remove_result['tool'] == 'skill_editor'
-    assert remove_result['error']['reason'] == (
-        'There is an unresolved pending change; handle it before submitting another edit.'
-    )
+    assert result['success'] is True
+    assert result['result']['status'] == 'renamed'
+    assert result['result']['old'] == {'category': 'writing', 'name': 'existing'}
+    assert result['result']['new'] == {'category': 'drafts', 'name': 'renamed'}
+    assert rename_calls[0][0][:4] == ('writing', 'existing', 'drafts', 'renamed')
+    assert 'name: renamed' in rename_calls[0][1]['skill_content']
+    assert 'category: drafts' in rename_calls[0][1]['skill_content']
+    assert skill_editor_mod.lazyllm.globals['agentic_config']['skill_runtime_delta']['renamed'] == [
+        {
+            'old': {'category': 'writing', 'name': 'existing'},
+            'new': {'category': 'drafts', 'name': 'renamed'},
+        }
+    ]
