@@ -218,15 +218,21 @@ def build_abtest_comparison_root(
     after = _eval_body(candidate)
     delta = {key: round(float(after.get(key) or 0.0) - float(origin.get(key) or 0.0), 4) for key in AGGREGATES}
     verdict = 'review_candidate'
+    status = 'completed'
     reasons: list[str] = []
-    if service.get('status') != 'ready':
+    if service.get('status') == 'skipped':
+        verdict = 'skipped'
+        status = 'skipped'
+        reasons.append('candidate evaluation skipped because repair patch is not verified')
+    elif service.get('status') != 'ready':
         verdict = 'candidate_service_unavailable'
+        status = 'failed'
         reasons.append('candidate service is not ready')
     payload = {
         'run_id': str(run_id),
         'algo_id': str(baseline.get('algo_id') or ''),
         'candidate_algo_id': str(service.get('algorithm_id') or ''),
-        'status': 'completed' if verdict == 'review_candidate' else 'failed',
+        'status': status,
         'verdict': verdict,
         'reasons': reasons,
         'origin': origin,

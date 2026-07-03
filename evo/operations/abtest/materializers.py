@@ -151,8 +151,13 @@ def candidate_rag_answer(case: Mapping[str, Any], service: Mapping[str, Any]) ->
     }
     if service.get('status') != 'ready':
         health = service.get('healthcheck') if isinstance(service.get('healthcheck'), Mapping) else {}
-        return failed_rag_answer(case, {}, target, 'candidate_service_unavailable',
-                                 _text(health.get('message')) or 'candidate not ready')
+        error_type = 'candidate_service_skipped' if service.get('status') == 'skipped' else \
+            'candidate_service_unavailable'
+        message = _text(health.get('message')) or (
+            'candidate evaluation skipped because repair patch is not verified'
+            if service.get('status') == 'skipped' else 'candidate not ready'
+        )
+        return failed_rag_answer(case, {}, target, error_type, message)
     return answer_case(case, target_config)
 
 
