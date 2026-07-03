@@ -30,8 +30,7 @@ class EvoArtifactAdapter:
         return self._store.invalidate(run_id, keys, refs, idempotency_key=idempotency_key)
 
     def delete_artifacts(self, run_id: str, keys: Sequence[ArtifactKey] = (),
-                         refs: Sequence[ArtifactRef] = (), *, idempotency_key: str
-                        ) -> tuple[ArtifactRef, ...]:
+                         refs: Sequence[ArtifactRef] = (), *, idempotency_key: str) -> tuple[ArtifactRef, ...]:
         self._require_owner_thread()
         return self._store.delete_artifacts(run_id, keys, refs, idempotency_key=idempotency_key)
 
