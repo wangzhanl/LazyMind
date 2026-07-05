@@ -117,20 +117,12 @@ def skill_editor(
         f'operations_count={len(operations) if operations else 0}'
     )
 
-    name_error = validate_skill_name(name)
-    if name_error:
-        return tool_error('skill_editor', name_error, log_message=f'[skill_editor] fail reason={name_error!r}')
-
-    normalized_category = normalize_skill_category(category)
-    if not normalized_category:
-        return tool_error(
-            'skill_editor',
-            f'Category {category!r} is invalid; it must be a single '
-            "ASCII-safe path segment (only letters, digits, '-', '_' "
-            "and '.'; no spaces, no Chinese, no '/')."
-        )
-
     existing_skills = list_all_skill_entries(_cfg['skill_fs_url'])
+    resolved = _resolve_skill_editor_identity(name, category, existing_skills, action)
+    if resolved.get('error'):
+        return tool_error('skill_editor', resolved['error'])
+    normalized_category = resolved['category']
+    name = resolved['name']
     skill_id = build_skill_identity(normalized_category or '', name)
     existing_skill = existing_skills.get(skill_id)
     lazyllm.LOG.info(
@@ -329,6 +321,67 @@ def _skill_identity_from_content(content: str) -> tuple[str, str]:
 def _operation_summary(operations: list[dict[str, Any]]) -> str:
     paths = sorted({str(op.get('path') or 'SKILL.md') for op in operations})
     return f'skill_editor package operations: {len(operations)} op(s), files={", ".join(paths)}'
+
+
+def _resolve_skill_editor_identity(
+    name: str,
+    category: Optional[str],
+    existing_skills: Dict[str, Dict[str, Any]],
+    action: str,
+) -> Dict[str, Any]:
+    raw_name = str(name or '').strip()
+    raw_category = str(category or '').strip()
+    if raw_category and '/' in raw_name:
+        return {'error': 'Pass either category plus name, or name as category/name; do not use both.'}
+
+    if not raw_category and '/' in raw_name:
+        parts = [part for part in raw_name.split('/') if part]
+        if len(parts) != 2 or raw_name.startswith('/') or raw_name.endswith('/') or '//' in raw_name:
+            return {'error': f"Skill key {raw_name!r} is invalid; expected category/name."}
+        raw_category, raw_name = parts
+
+    if raw_category:
+        name_error = validate_skill_name(raw_name)
+        if name_error:
+            return {'error': name_error}
+        normalized_category = normalize_skill_category(raw_category)
+        if not normalized_category:
+            return {
+                'error': (
+                    f'Category {raw_category!r} is invalid; it must be a single '
+                    "ASCII-safe path segment (only letters, digits, '-', '_' "
+                    "and '.'; no spaces, no Chinese, no '/')."
+                )
+            }
+        return {'category': normalized_category, 'name': raw_name}
+
+    if action == 'create':
+        return {'error': "action='create' requires category, or name formatted as category/name."}
+
+    name_error = validate_skill_name(raw_name)
+    if name_error:
+        return {'error': name_error}
+
+    matches = [
+        info for skill_id, info in existing_skills.items()
+        if info.get('name') == raw_name or skill_id.rsplit('/', 1)[-1] == raw_name
+    ]
+    if not matches:
+        return {'category': '', 'name': raw_name}
+    if len(matches) > 1:
+        match_keys = sorted(build_skill_identity(str(info.get('category') or ''), str(info.get('name') or ''))
+                            for info in matches)
+        return {
+            'error': (
+                f"Ambiguous skill name {raw_name!r}; use the full skill key "
+                f"such as {match_keys[0]!r}. Matches: {', '.join(match_keys)}."
+            )
+        }
+    match = matches[0]
+    return {
+        'category': str(match.get('category') or ''),
+        'name': str(match.get('name') or raw_name),
+    }
 
 
 def _rewrite_skill_identity(content: str, category: str, name: str) -> str:

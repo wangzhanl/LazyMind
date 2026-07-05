@@ -1,0 +1,15 @@
+services:
+  chat:
+    command: ["sleep", "infinity"]
+    environment:
+      LAZYMIND_REMOTE_FS_LOCAL_ROOT: /data/remote-fs
+    volumes:
+      - ./data/core/uploads:/var/lib/lazymind/uploads
+      - ./data/remote-fs:/data/remote-fs
+      - ./data/traces:/var/lib/lazymind/traces
+      - ./data/evo:/var/lib/lazymind/evo:ro
+      - ./data/subagent:/data/subagent
+      - ./plugins:/app/plugins:ro
+      - ./algorithm/lazymind:/opt/lazymind
+      - ./algorithm/lazyllm:/opt/lazyllm
+      - ./algorithm:/app/algorithm   # :ro 去掉了
