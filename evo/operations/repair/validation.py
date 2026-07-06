@@ -7,6 +7,8 @@ from collections.abc import Mapping
 from pathlib import Path, PurePosixPath
 from typing import Any
 
+from .trace import safe_emit
+
 DEFAULT_VERIFY = ('python -m compileall -q lazymind/chat',)
 PATCH_BYTE_LIMIT = 64 * 1024
 SECRET_LITERAL = re.compile(
@@ -23,22 +25,22 @@ def pre_validate(
     trace: Any | None = None,
     attempt: int | None = None,
 ) -> dict[str, Any]:
-    _emit(trace, 'verify.pre_validation_started', status='started', attempt=attempt)
+    safe_emit(trace, 'verify.pre_validation_started', status='started', attempt=attempt)
     diff, files = diff_info.get('diff') or '', list(diff_info.get('files') or [])
     if not diff.strip():
-        _emit(trace, 'verify.pre_validation_completed', status='failed', attempt=attempt,
+        safe_emit(trace, 'verify.pre_validation_completed', status='failed', attempt=attempt,
               payload={'reason': 'empty_diff'})
         return {'status': 'failed', 'reason': 'empty_diff', 'diff_scope': {}, 'commands': []}
     scope = _diff_scope(files, plan)
-    _emit(trace, 'verify.diff_scope_completed', status='completed' if scope['status'] == 'passed' else 'failed',
+    safe_emit(trace, 'verify.diff_scope_completed', status='completed' if scope['status'] == 'passed' else 'failed',
           attempt=attempt, payload=scope)
     hardcode = _hardcode_check(diff, plan)
-    _emit(trace, 'verify.hardcode_check_completed',
+    safe_emit(trace, 'verify.hardcode_check_completed',
           status='completed' if hardcode['status'] == 'passed' else 'failed', attempt=attempt, payload=hardcode)
     patch_safety = _patch_safety_check(diff, policy)
     if scope['status'] != 'passed' or hardcode['status'] != 'passed' or patch_safety['status'] != 'passed':
         reason = next(item['reason'] for item in (scope, hardcode, patch_safety) if item['status'] != 'passed')
-        _emit(trace, 'verify.pre_validation_completed', status='failed', attempt=attempt,
+        safe_emit(trace, 'verify.pre_validation_completed', status='failed', attempt=attempt,
               payload={'reason': reason})
         return {'status': 'failed', 'reason': reason, 'diff_scope': scope, 'hardcode_check': hardcode,
                 'patch_safety': patch_safety, 'commands': []}
@@ -51,7 +53,7 @@ def pre_validate(
     reason = '' if status == 'passed' else next(
         item['reason'] for item in (scope, hardcode, commands) if item['status'] != 'passed'
     )
-    _emit(trace, 'verify.pre_validation_completed', status='completed' if status == 'passed' else 'failed',
+    safe_emit(trace, 'verify.pre_validation_completed', status='completed' if status == 'passed' else 'failed',
           attempt=attempt, payload={'outcome': status, 'reason': reason})
     return {'status': status, 'reason': reason, 'diff_scope': scope, 'hardcode_check': hardcode,
             'patch_safety': patch_safety, 'commands': commands['results']}
@@ -108,7 +110,7 @@ def _verify(
     for raw in commands or DEFAULT_VERIFY:
         command = shlex.split(raw) if isinstance(raw, str) else [str(item) for item in raw]
         label = ' '.join(command[:4])
-        _emit(trace, 'verify.command_started', status='started', attempt=attempt, payload={'command': label})
+        safe_emit(trace, 'verify.command_started', status='started', attempt=attempt, payload={'command': label})
         try:
             done = subprocess.run(command, cwd=str(root), capture_output=True, text=True, timeout=120, check=False)
             results.append({'command': command, 'returncode': done.returncode, 'stdout': done.stdout[-2000:],
@@ -116,23 +118,14 @@ def _verify(
         except Exception as exc:
             results.append({'command': command, 'returncode': None, 'stdout': '', 'stderr': str(exc),
                             'error_type': type(exc).__name__})
-            _emit(trace, 'verify.command_completed', status='failed', attempt=attempt,
+            safe_emit(trace, 'verify.command_completed', status='failed', attempt=attempt,
                   payload={'command': label, 'error_type': type(exc).__name__})
             return {'status': 'failed', 'reason': 'verification_command_failed', 'results': results}
-        _emit(trace, 'verify.command_completed', status='completed' if done.returncode == 0 else 'failed',
+        safe_emit(trace, 'verify.command_completed', status='completed' if done.returncode == 0 else 'failed',
               attempt=attempt, payload={'command': label, 'returncode': done.returncode})
         if results[-1]['returncode'] != 0:
             return {'status': 'failed', 'reason': 'verification_command_failed', 'results': results}
     return {'status': 'passed', 'reason': '', 'results': results}
-
-
-def _emit(trace: Any | None, event_type: str, **kwargs: Any) -> None:
-    if trace is None:
-        return
-    try:
-        trace.emit(event_type, **kwargs)
-    except Exception:
-        pass
 
 
 def _relative_path(value: Any) -> str:

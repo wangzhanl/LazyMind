@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import ast
 import json
 import math
 import re
@@ -17,12 +18,28 @@ DEFAULT_DISABLED_TOOLS = tuple(
     'temp_kb calculator wikipedia web_search academic_search url_fetch multimodal image_generator image_editor '
     'vocab_learn read_memory memory_editor skill_editor local_fs feishu notion'.split()
 )
+EVO_EVAL_MEMORY = (
+    'Evo evaluation request: use the knowledge-base tool as the evidence source, '
+    'keep retrieval bounded, answer directly when enough evidence is available, '
+    'and do not ask the user or schedule tasks.'
+)
 DELTA_KEYS = ('delta', 'answer_delta', 'content_delta', 'text')
 FINAL_ANSWER_KEYS = ('answer', 'message', 'text', 'result', 'content')
 SOURCE_KEYS = ('sources', 'source_documents', 'retrieved_contexts', 'contexts', 'documents')
 TOOL_RESULT = re.compile(r'<tool_result>(.*?)</tool_result>', re.S)
+CONTROL_TAG = re.compile(r'<(?:tp|trp|tool_call|tool_result)(?:\s[^>]*)?>.*?</(?:tp|trp|tool_call|tool_result)>', re.S)
 TRACE_ID = re.compile(r'^[0-9a-f]{32}$')
 SSE_FIELD = re.compile(r'^[A-Za-z][A-Za-z0-9_-]*:')
+TOOL_ERROR_MARKERS = (
+    '[tool error]',
+    'moduleexecutionerror',
+    'connectionreseterror',
+    'connection broken',
+    'readtimeout',
+    'connecttimeout',
+    'max retries exceeded',
+    'httpconnectionpool',
+)
 
 DEFAULT_CASE_DEADLINE_SECONDS = 300.0
 DEFAULT_FIRST_FRAME_TIMEOUT_SECONDS = 60.0
@@ -224,11 +241,11 @@ def _payload(request: RouterChatRequest) -> dict[str, Any]:
             'session_id': request.trace_id,
             'conversation_id': request.conversation_id,
             'user_id': request.user_id,
-            'mode': 'manual',
+            'mode': 'auto',
         },
         'retrieval': {'filters': {'kb_id': list(request.kb_ids)}},
-        'runtime': {'debug': False, 'reasoning': False, 'trace': True},
-        'personalization': {'use_memory': False},
+        'runtime': {'debug': False, 'reasoning': True, 'trace': True},
+        'personalization': {'use_memory': True, 'memory': EVO_EVAL_MEMORY},
         'agent': {
             'disabled_tools': list(request.disabled_tools),
             'available_skills': [],
@@ -297,13 +314,15 @@ def _normalize(target: Mapping[str, Any], stream: Mapping[str, Any]) -> dict[str
         for frame in stream.get('frames', [])
         if isinstance(frame, Mapping)
     ]
-    answer = str(stream.get('answer') or _last(frames, FINAL_ANSWER_KEYS)).strip()
+    raw_answer = str(stream.get('answer') or _last(frames, FINAL_ANSWER_KEYS)).strip()
     if not stream.get('finished'):
         return _failed(stream, target, 'chat_protocol_error', 'stream ended before FINISHED')
-    if not answer:
+    if not raw_answer:
         return _failed(stream, target, 'chat_protocol_error', 'stream finished without answer text')
-    sources = _sources(frames, answer)
+    tool_errors = extract_chat_tool_errors(frames, raw_answer)
+    sources = _sources(frames, raw_answer)
     contexts, doc_ids, chunk_ids = _source_refs(sources, target)
+    answer = _answer_text(raw_answer)
     return {
         'status': 'ok',
         'answer': answer,
@@ -315,7 +334,7 @@ def _normalize(target: Mapping[str, Any], stream: Mapping[str, Any]) -> dict[str
         'doc_ids': _unique(doc_ids),
         'chunk_ids': _unique(chunk_ids),
         'sources': sources,
-        'tool_errors': _tool_errors(frames),
+        'tool_errors': tool_errors,
         'frames': list(stream.get('frames') or []),
         'chat_error': None,
         'target': dict(target),
@@ -414,20 +433,69 @@ def _sources(frames: Sequence[Mapping[str, Any]], answer: str) -> list[dict[str,
     sources: list[dict[str, Any]] = []
     for data in frames:
         for key in SOURCE_KEYS:
-            item = data.get(key)
-            values = item if isinstance(item, list) else [item] if item else []
-            sources.extend(source for source in values if isinstance(source, Mapping))
+            _collect_sources(data.get(key), sources)
+        for key in ('tool_result', 'tool_results'):
+            _collect_sources(data.get(key), sources)
+        _collect_tool_result_sources(str(data.get('text') or ''), sources)
     for match in TOOL_RESULT.finditer(answer):
-        try:
-            payload = json.loads(match.group(1))
-        except json.JSONDecodeError:
-            continue
-        result = payload.get('result') if isinstance(payload, Mapping) else {}
-        result = result.get('result') if isinstance(result, Mapping) else {}
-        items = result.get('items') if isinstance(result, Mapping) else []
-        if isinstance(items, list):
-            sources.extend(item for item in items if isinstance(item, Mapping))
+        _collect_sources(_parse_structured(match.group(1)), sources)
     return [dict(source) for source in sources]
+
+
+def _collect_sources(value: Any, sources: list[dict[str, Any]]) -> None:
+    value = _parse_structured(value)
+    if isinstance(value, Mapping):
+        if _source_like(value):
+            sources.append(dict(value))
+        for key in SOURCE_KEYS:
+            _collect_sources(value.get(key), sources)
+        items = value.get('items')
+        if isinstance(items, list):
+            for item in items:
+                _collect_sources(item, sources)
+        for key in ('result', 'data', 'tool_result', 'tool_results'):
+            _collect_sources(value.get(key), sources)
+    elif isinstance(value, list):
+        for item in value:
+            _collect_sources(item, sources)
+
+
+def _source_like(value: Mapping[str, Any]) -> bool:
+    metadata = value.get('global_metadata')
+    metadata = metadata if isinstance(metadata, Mapping) else {}
+    has_text = any(value.get(key) for key in ('content', 'text', 'chunk'))
+    has_ref = any(value.get(key) for key in ('doc_id', 'docid', 'document_id', 'chunk_id', 'chunkid', 'uid', 'id'))
+    return bool(has_text and (has_ref or metadata.get('docid') or metadata.get('core_document_id')))
+
+
+def _collect_tool_result_sources(text: str, sources: list[dict[str, Any]]) -> None:
+    for match in TOOL_RESULT.finditer(text or ''):
+        _collect_sources(match.group(1), sources)
+
+
+def _parse_structured(value: Any) -> Any:
+    if not isinstance(value, str):
+        return value
+    text = value.strip()
+    if not text or text[0] not in '{[':
+        return value
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        try:
+            return ast.literal_eval(text)
+        except (SyntaxError, ValueError):
+            return value
+
+
+def _answer_text(raw_answer: str) -> str:
+    text = str(raw_answer or '').strip()
+    if not text:
+        return ''
+    controls = list(CONTROL_TAG.finditer(text))
+    cleaned = text[controls[-1].end():].strip() if controls else text
+    cleaned = CONTROL_TAG.sub('', cleaned)
+    return re.sub(r'\n{3,}', '\n\n', cleaned).strip()
 
 
 def _source_refs(
@@ -442,7 +510,13 @@ def _source_refs(
     for source in sources:
         metadata = source.get('global_metadata')
         metadata = metadata if isinstance(metadata, Mapping) else {}
-        kb_id = str(source.get('kb_id') or metadata.get('kb_id') or metadata.get('dataset_id') or fallback_kb).strip()
+        kb_id = str(
+            source.get('kb_id')
+            or source.get('dataset_id')
+            or metadata.get('kb_id')
+            or metadata.get('dataset_id')
+            or fallback_kb
+        ).strip()
         doc = str(
             source.get('doc_id')
             or source.get('docid')
@@ -451,7 +525,15 @@ def _source_refs(
             or metadata.get('core_document_id')
             or ''
         ).strip()
-        chunk = str(source.get('chunk_id') or source.get('chunkid') or source.get('uid') or source.get('id') or '')
+        chunk = str(
+            source.get('chunk_id')
+            or source.get('chunkid')
+            or source.get('segment_id')
+            or source.get('segement_id')
+            or source.get('uid')
+            or source.get('id')
+            or ''
+        ).strip()
         doc_ref = doc if ':' in doc else f'{kb_id}:{doc}' if kb_id and doc else doc
         chunk_ref = chunk if ':' in chunk else f'{doc_ref}:{chunk}' if doc_ref and chunk else chunk
         contexts.append(source.get('content') or source.get('text') or source.get('chunk'))
@@ -460,13 +542,74 @@ def _source_refs(
     return contexts, doc_ids, chunk_ids
 
 
-def _tool_errors(frames: Sequence[Mapping[str, Any]]) -> list[Any]:
+def extract_chat_tool_errors(frames: Sequence[Mapping[str, Any]], answer: str = '') -> list[Any]:
     errors = []
     for data in frames:
         for key in ('tool_error', 'tool_errors', 'kb_errors'):
             if data.get(key):
                 errors.append(data[key])
+        for key in ('tool_result', 'tool_results'):
+            _collect_tool_errors(data.get(key), errors)
+        _collect_tool_result_tags(str(data.get('text') or ''), errors)
+    _collect_tool_result_tags(answer, errors)
     return errors
+
+
+def _collect_tool_errors(value: Any, errors: list[Any]) -> None:
+    parsed = _parse_structured(value)
+    if parsed is not value:
+        _collect_tool_errors(parsed, errors)
+        return
+    if isinstance(value, Mapping):
+        if _mapping_is_tool_error(value):
+            errors.append(dict(value))
+            return
+        for key in ('tool_error', 'tool_errors', 'kb_errors', 'error', 'exception', 'traceback'):
+            if value.get(key):
+                _collect_tool_errors(value[key], errors)
+        result = value.get('result')
+        if isinstance(result, str):
+            _collect_tool_errors(result, errors)
+        elif isinstance(result, Mapping) and _mapping_is_tool_error(result):
+            errors.append(dict(result))
+    elif isinstance(value, list):
+        for item in value:
+            _collect_tool_errors(item, errors)
+    elif _looks_like_tool_error(value):
+        errors.append(str(value))
+
+
+def _collect_tool_result_tags(text: str, errors: list[Any]) -> None:
+    for match in TOOL_RESULT.finditer(text or ''):
+        try:
+            payload = json.loads(match.group(1))
+        except json.JSONDecodeError:
+            continue
+        _collect_tool_errors(payload, errors)
+
+
+def _looks_like_tool_error(value: Any) -> bool:
+    text = _error_text(value)
+    return bool(text) and any(marker in text.lower() for marker in TOOL_ERROR_MARKERS)
+
+
+def _mapping_is_tool_error(value: Mapping[str, Any]) -> bool:
+    if value.get('success') is False:
+        return True
+    status = str(value.get('status') or '').strip().lower()
+    if status in {'error', 'failed', 'fail'}:
+        return True
+    return _looks_like_tool_error(value.get('error') or value.get('exception') or value.get('traceback'))
+
+
+def _error_text(value: Any) -> str:
+    if isinstance(value, str):
+        return value.strip()
+    if isinstance(value, Mapping):
+        return json.dumps(value, ensure_ascii=False, default=str)
+    if isinstance(value, list):
+        return json.dumps(value, ensure_ascii=False, default=str)
+    return str(value or '').strip()
 
 
 async def _http_error(response: httpx.Response) -> str:

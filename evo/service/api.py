@@ -20,7 +20,7 @@ from sse_starlette.sse import EventSourceResponse
 from starlette.responses import FileResponse
 
 from evo.message_intent.schemas import MessageRequest
-from evo.message_intent.storage import MessageConflictError, MessageInProgressError
+from evo.message_intent.storage import MessageConflictError, MessageInProgressError, message_history
 from evo.message_intent.turn import run_turn
 
 from .projections import ProjectionService
@@ -177,13 +177,31 @@ def create_app() -> FastAPI:
             raise HTTPException(422, 'step_id is required')
         return _event_stream(service, thread_id, step_id, request, service.projections.event_trace)
 
+    @app.get('/threads/{thread_id}/messages')
+    def message_history_api(
+        thread_id: str,
+        page_size: Annotated[int, Query(ge=1, le=200)] = 50,
+        page_token: str = '',
+    ) -> dict[str, Any]:
+        if service.threads.runtime.run_config(thread_id) is None:
+            raise HTTPException(404, f'thread not found: {thread_id}')
+        try:
+            return message_history(service.root, thread_id, page_size, page_token).model_dump()
+        except ValueError as exc:
+            raise HTTPException(422, str(exc)) from exc
+
     @app.post('/threads/{thread_id}/messages')
-    def messages(thread_id: str, payload: MessageRequestBody, request: Request) -> Any:
+    def messages(
+        thread_id: str,
+        payload: MessageRequestBody,
+        request: Request,
+        background_tasks: BackgroundTasks,
+    ) -> Any:
         text = payload.text or payload.content
         if not text.strip():
             raise HTTPException(422, 'text or content is required')
         msg = MessageRequest(message_id=payload.message_id, text=text)
-        result = _message_result(service, thread_id, msg)
+        result = _message_result(service, thread_id, msg, background_tasks)
         if 'text/event-stream' in request.headers.get('accept', ''):
             return _message_stream(result)
         return result.model_dump()
@@ -219,11 +237,14 @@ def _service_root() -> Path:
     return root
 
 
-def _message_result(service: EvoService, thread_id: str, request: MessageRequest):
+def _message_result(service: EvoService, thread_id: str, request: MessageRequest, background_tasks: BackgroundTasks):
     try:
         return run_turn(
             'user', service.root, service.threads.runtime,
-            service.threads.run_message_command, thread_id, request,
+            lambda tid, config, command: service.threads.submit_message_command(
+                tid, config, command, background_tasks.add_task,
+            ),
+            thread_id, request,
         )
     except MessageConflictError as exc:
         raise HTTPException(409, str(exc)) from exc

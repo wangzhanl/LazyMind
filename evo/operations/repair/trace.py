@@ -50,6 +50,7 @@ EVENT_TYPES = {
     'candidate.service_started',
     'candidate.service_ready',
     'candidate.service_failed',
+    'candidate.service_stopped',
     'candidate.case_started',
     'candidate.case_completed',
     'candidate.eval_summary_completed',
@@ -69,8 +70,8 @@ class RepairTraceStore:
         path = self._path(thread_id)
         path.parent.mkdir(parents=True, exist_ok=True)
         with self._lock(thread_id):
-            last_seq = self._repair_and_last_seq(path)
-            row = dict(event, seq=last_seq + 1, created_at=event.get('created_at') or time.time())
+            row = dict(event, seq=self._last_seq(path, repair=True) + 1,
+                       created_at=event.get('created_at') or time.time())
             clean = _clean(row)
             line = _line(clean)
             saved = json.loads(line)
@@ -97,11 +98,7 @@ class RepairTraceStore:
         if not path.exists():
             return 0
         with self._lock(thread_id):
-            row = self._tail_row(path, repair=False)
-            if row is None:
-                rows = self._read_valid(path, repair=False)
-                row = rows[-1] if rows else {}
-        return int(row.get('seq') or 0) if row else 0
+            return self._last_seq(path, repair=False)
 
     def fallback(self, thread_id: str, event_type: str, error: Exception) -> None:
         try:
@@ -124,12 +121,12 @@ class RepairTraceStore:
     def _lock(self, thread_id: str) -> FileLock:
         return FileLock(str(self.root / f'{self._safe_thread_id(thread_id)}.lock'))
 
-    def _repair_and_last_seq(self, path: Path) -> int:
+    def _last_seq(self, path: Path, *, repair: bool) -> int:
         if not path.exists():
             return 0
-        row = self._tail_row(path, repair=True)
+        row = self._tail_row(path, repair=repair)
         if row is None:
-            rows = self._read_valid(path, repair=True)
+            rows = self._read_valid(path, repair=repair)
             row = rows[-1] if rows else {}
         return int(row.get('seq') or 0) if row else 0
 
@@ -241,6 +238,25 @@ class RepairTraceSink:
             'seq_end': self.seq_end,
             'status': 'partial' if self.failures else 'ok',
         }
+
+
+def safe_emit(trace: Any | None, event_type: str, **kwargs: Any) -> None:
+    if trace is None:
+        return
+    try:
+        trace.emit(event_type, **kwargs)
+    except Exception:
+        pass
+
+
+def trace_cursor(trace: Any | None) -> dict[str, Any]:
+    if trace is None:
+        return {}
+    try:
+        cursor = trace.cursor()
+    except Exception:
+        return {}
+    return cursor if isinstance(cursor, dict) else {}
 
 
 def _clean(value: Any, depth: int = 0) -> Any:

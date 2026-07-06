@@ -74,9 +74,11 @@ def workspace_diff(workspace: Path) -> dict[str, Any]:
 def apply_diff(workspace: Path, diff: str) -> None:
     if not diff.strip():
         return
-    subprocess.run(['git', '-c', f'safe.directory={workspace}', '-C', str(workspace), 'apply', '-'],
-                   input=diff, text=True,
-                   capture_output=True, timeout=60, check=True)
+    result = subprocess.run(['git', '-c', f'safe.directory={workspace}', '-C', str(workspace), 'apply', '-'],
+                            input=diff, text=True, capture_output=True, timeout=60, check=False)
+    if result.returncode:
+        message = (result.stderr or result.stdout or f'git apply exited with {result.returncode}').strip()
+        raise RuntimeError(message)
 
 
 def git(workspace: Path, *args: str) -> str:
