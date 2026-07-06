@@ -306,7 +306,7 @@ func (h *Handler) appendSource(w http.ResponseWriter, r *http.Request) {
 		writeError(w, err)
 		return
 	}
-	if err := requireLocalSourceAdmin(actor, req.Bindings, nil); err != nil {
+	if err := h.requireLocalSourceAdmin(r, actor, req.Bindings, nil); err != nil {
 		writeError(w, err)
 		return
 	}
