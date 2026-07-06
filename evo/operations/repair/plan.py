@@ -52,7 +52,6 @@ def build_repair_plan(analysis: Mapping[str, Any], policy: Mapping[str, Any]) ->
             'brief': {},
             'policy': policy_view,
             'analysis_summary': {'total': len(rows)},
-            'events': [_event('group_selected', 'skipped', '', '', [], code)],
             'checks': {'ready': False, 'errors': [{'code': code}]},
         }
 
@@ -264,36 +263,10 @@ def build_repair_plan(analysis: Mapping[str, Any], policy: Mapping[str, Any]) ->
             'trace_quality': _dict(analysis.get('trace_quality')),
             'repair_group_count': len(_items(analysis.get('repair_group_queue'))),
         },
-        'events': [
-            _event('group_selected', 'completed', selected['group_id'], block, selected['case_ids'],
-                   f"selected {block} with {selected['badcase_count']} bad case(s)"),
-            _event('brief_ready', 'completed', selected['group_id'], block, selected['case_ids'],
-                   'repair brief generated from analysis summary'),
-        ],
         'checks': {
             'ready': not blocked_reason,
             'errors': [{'code': blocked_reason}] if blocked_reason else [],
         },
-    }
-
-
-def _event(phase: str, status: str, group_id: str, block: str, case_ids: list[str], summary: str) -> dict[str, Any]:
-    return {
-        'event_id': sha1(json.dumps(
-            {'phase': phase, 'group_id': group_id, 'case_ids': case_ids},
-            ensure_ascii=False,
-            sort_keys=True,
-        ).encode()).hexdigest()[:16],
-        'phase': phase,
-        'source': 'repair',
-        'kind': phase,
-        'status': status,
-        'severity': 'info' if status == 'completed' else 'warning',
-        'title': phase.replace('_', ' '),
-        'summary': summary,
-        'group_id': group_id,
-        'function_block_id': block,
-        'case_ids': case_ids,
     }
 
 

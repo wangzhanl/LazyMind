@@ -16,6 +16,7 @@ from evo.operations.public_contracts import RepairPatch, algo_id, dump_contract
 from .candidate import validate_candidate_patch
 from .decision import patch_base_decision, select_best_attempt
 from .opencode import run_opencode_streaming
+from .trace import safe_emit, trace_cursor
 from .validation import pre_validate
 from .workspace import (
     algorithm_source_root,
@@ -104,12 +105,18 @@ def run_repair_loop(workspace: Mapping[str, Any], cases: tuple[Mapping[str, Any]
     budget = _int(policy.get('repair_attempt_budget'), 30, 1, 100)
     session_id = ''
     for attempt_no in range(1, budget + 1):
-        _emit(trace, 'repair.attempt_started', status='started', attempt=attempt_no,
+        safe_emit(trace, 'repair.attempt_started', status='started', attempt=attempt_no,
               payload={'budget': budget})
         reset_workspace(root)
         if base_diff:
-            apply_diff(root, base_diff)
-        _emit(trace, 'repair.base_selected', status='completed', attempt=attempt_no,
+            try:
+                apply_diff(root, base_diff)
+            except RuntimeError as exc:
+                safe_emit(trace, 'repair.base_selected', status='failed', attempt=attempt_no,
+                      payload={'mode': 'continued_patch', 'reason': str(exc)[:500]})
+                base_diff = ''
+                reset_workspace(root)
+        safe_emit(trace, 'repair.base_selected', status='completed', attempt=attempt_no,
               payload={'mode': 'baseline' if not base_diff else 'continued_patch'})
         task = _task_card(plan, workspace, attempt_no, attempts)
         run = run_opencode_streaming(
@@ -143,7 +150,7 @@ def run_repair_loop(workspace: Mapping[str, Any], cases: tuple[Mapping[str, Any]
                   'recommended_action': 'rollback_to_baseline'}
         )
         decision = patch_base_decision(pre, candidate, delta, best)
-        _emit(trace, 'repair.decision_completed', status='completed', attempt=attempt_no,
+        safe_emit(trace, 'repair.decision_completed', status='completed', attempt=attempt_no,
               payload={'action': decision.get('action'), 'reason': decision.get('reason')})
         attempt = {
             'attempt': attempt_no,
@@ -167,16 +174,16 @@ def run_repair_loop(workspace: Mapping[str, Any], cases: tuple[Mapping[str, Any]
         attempts.append(attempt)
         best = select_best_attempt(best, attempt)
         if decision['action'] == 'accept_patch':
-            _emit(trace, 'repair.loop_completed', status='completed', terminal=True,
+            safe_emit(trace, 'repair.loop_completed', status='completed', terminal=True,
                   payload={'status': 'validated', 'attempt_count': len(attempts)})
             return _result('validated', plan, workspace, attempts, attempt, 'validated repair patch',
-                           baseline_algo_id, _trace_cursor(trace))
+                           baseline_algo_id, trace_cursor(trace))
         if decision['action'] == 'blocked':
             reset_workspace(root)
-            _emit(trace, 'repair.loop_completed', status='failed', terminal=True,
+            safe_emit(trace, 'repair.loop_completed', status='failed', terminal=True,
                   payload={'status': 'blocked', 'reason': decision.get('reason')})
             return _result('blocked', plan, workspace, attempts, {}, decision['reason'], baseline_algo_id,
-                           _trace_cursor(trace))
+                           trace_cursor(trace))
         base_diff = (
             diff_info['diff']
             if decision['action'] in {'continue_current_patch', 'fork_from_best_attempt'}
@@ -185,10 +192,10 @@ def run_repair_loop(workspace: Mapping[str, Any], cases: tuple[Mapping[str, Any]
         if decision['action'] == 'fork_from_best_attempt':
             base_diff = best.get('diff') or ''
     reset_workspace(root)
-    _emit(trace, 'repair.loop_completed', status='failed', terminal=True,
+    safe_emit(trace, 'repair.loop_completed', status='failed', terminal=True,
           payload={'status': 'no_validated_patch', 'attempt_count': len(attempts)})
     return _result('no_validated_patch', plan, workspace, attempts, best, f'attempt budget exhausted: {budget}',
-                   baseline_algo_id, _trace_cursor(trace))
+                   baseline_algo_id, trace_cursor(trace))
 
 
 def build_verified_patch(run_id: str, loop: Mapping[str, Any]) -> dict[str, Any]:
@@ -219,9 +226,9 @@ def _early_result(
     message: str,
     algo_id_value: str,
 ) -> dict[str, Any]:
-    _emit(trace, 'repair.loop_completed', status='skipped' if status == 'skipped' else 'failed',
+    safe_emit(trace, 'repair.loop_completed', status='skipped' if status == 'skipped' else 'failed',
           terminal=True, payload={'status': status, 'reason': message})
-    return _result(status, plan, workspace, [], {}, message, algo_id_value, _trace_cursor(trace))
+    return _result(status, plan, workspace, [], {}, message, algo_id_value, trace_cursor(trace))
 
 
 def _opencode_failure(run: Any) -> dict[str, Any]:
@@ -234,25 +241,6 @@ def _opencode_failure(run: Any) -> dict[str, Any]:
         'commands': [],
         'opencode_error': error,
     }
-
-
-def _emit(trace: Any | None, event_type: str, **kwargs: Any) -> None:
-    if trace is None:
-        return
-    try:
-        trace.emit(event_type, **kwargs)
-    except Exception:
-        pass
-
-
-def _trace_cursor(trace: Any | None) -> dict[str, Any]:
-    if trace is None:
-        return {}
-    try:
-        cursor = trace.cursor()
-    except Exception:
-        return {}
-    return cursor if isinstance(cursor, dict) else {}
 
 
 def _task_card(plan: Mapping[str, Any], workspace: Mapping[str, Any], attempt: int,

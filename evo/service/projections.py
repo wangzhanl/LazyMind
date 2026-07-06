@@ -67,6 +67,7 @@ REPAIR_TRACE_TYPES = {
     'candidate.service_started': 'repair.candidate_eval',
     'candidate.service_ready': 'repair.candidate_eval',
     'candidate.service_failed': 'repair.candidate_eval',
+    'candidate.service_stopped': 'repair.candidate_eval',
     'candidate.case_started': 'repair.candidate_eval',
     'candidate.case_completed': 'repair.candidate_eval',
     'candidate.eval_summary_completed': 'repair.candidate_eval',
@@ -181,18 +182,21 @@ class ProjectionService:
         step_id = _normalized_step_id(step_id)
         if not step_id:
             raise HTTPException(422, 'step_id is required')
+        trace_cursor = None
         store = self.runtime.store()
         try:
             rows = _source_event_rows(thread_id, store)
+            stages = {row['stage'] for row in rows if row['step_id'] == step_id}
+            if not stages:
+                raise HTTPException(422, 'unknown step_id for thread')
+            if 'repair' in stages:
+                trace_cursor = _repair_trace_cursor_for_step(thread_id, step_id, rows, store)
         finally:
             store.close()
-        repair_step_ids = {row['step_id'] for row in rows if row['stage'] == 'repair'}
-        stages = {row['stage'] for row in rows if row['step_id'] == step_id}
-        if not stages:
-            raise HTTPException(422, 'unknown step_id for thread')
-        if 'repair' in stages and len(repair_step_ids) > 1:
-            raise HTTPException(409, 'repair trace is ambiguous for repeated repair scopes')
-        items = _trace_items(thread_id, step_id, self.repair_trace.read_since(thread_id)) if 'repair' in stages else []
+        trace_rows = self.repair_trace.read_since(thread_id)
+        if 'repair' in stages:
+            trace_rows = _repair_trace_rows_for_step(rows, trace_rows, trace_cursor)
+        items = _trace_items(thread_id, step_id, trace_rows) if 'repair' in stages else []
         if after_event_id:
             ids = [str(item['event_id']) for item in items]
             if after_event_id not in ids:
@@ -459,6 +463,61 @@ def _trace_items(thread_id: str, step_id: str, trace_rows: list[dict[str, Any]])
     return items
 
 
+def _repair_trace_rows_for_step(
+    source_rows: list[dict[str, Any]],
+    trace_rows: list[dict[str, Any]],
+    trace_cursor: tuple[int, int] | None,
+) -> list[dict[str, Any]]:
+    if trace_cursor is not None:
+        start, end = trace_cursor
+        scoped = [row for row in trace_rows if start <= int(row.get('seq') or 0) <= end]
+        verified = next(
+            (
+                row for row in trace_rows
+                if int(row.get('seq') or 0) > end and row.get('type') == 'repair.patch_verified'
+            ),
+            None,
+        )
+        return scoped + ([verified] if verified else [])
+    if len(_ordered_stage_step_ids(source_rows, 'repair')) <= 1:
+        return trace_rows
+    return []
+
+
+def _repair_trace_cursor_for_step(
+    thread_id: str,
+    step_id: str,
+    rows: list[dict[str, Any]],
+    store: Any,
+) -> tuple[int, int] | None:
+    loop_ref = next(
+        (
+            row['ref']
+            for row in rows
+            if row['step_id'] == step_id
+            and row['stage'] == 'repair'
+            and row['ref'].key.artifact_id == C.REPAIR_LOOP_RESULT
+        ),
+        None,
+    )
+    if loop_ref is None:
+        return None
+    record = store.get(thread_id, loop_ref)
+    value = record.value if record is not None and isinstance(record.value, Mapping) else {}
+    cursor = value.get('trace_cursor') if isinstance(value.get('trace_cursor'), Mapping) else {}
+    start = _positive_int(cursor.get('seq_start'))
+    end = _positive_int(cursor.get('seq_end'))
+    return (start, end) if start and end and start <= end else None
+
+
+def _ordered_stage_step_ids(rows: list[dict[str, Any]], stage: str) -> list[str]:
+    result = []
+    for row in sorted(rows, key=lambda item: item['order']):
+        if row['stage'] == stage and row['step_id'] not in result:
+            result.append(row['step_id'])
+    return result
+
+
 def _trace_item(thread_id: str, step_id: str, trace: Mapping[str, Any]) -> dict[str, Any] | None:
     event_type = REPAIR_TRACE_TYPES.get(str(trace.get('type') or ''))
     if not event_type:
@@ -536,6 +595,14 @@ def _action(status: str) -> str:
 
 def _scalar(value: object) -> object:
     return value if isinstance(value, (str, int, float, bool)) else None
+
+
+def _positive_int(value: object) -> int:
+    try:
+        number = int(value)
+    except (TypeError, ValueError):
+        return 0
+    return number if number > 0 else 0
 
 
 def _clean_empty(item: dict[str, Any]) -> dict[str, Any]:

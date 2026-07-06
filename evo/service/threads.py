@@ -204,6 +204,29 @@ class ThreadService:
             with self._lock:
                 self._active.discard(thread_id)
 
+    def submit_message_command(
+        self,
+        thread_id: str,
+        config: Mapping[str, Any],
+        command: FlowCommand,
+        schedule: Callable[[Callable[[], None]], None],
+    ):
+        if isinstance(command, ContinueFlow):
+            snapshot = self.runtime.query(_num_case(config)).snapshot(thread_id)
+            payload = {'command_id': command.command_id, 'until_step': command.until_step}
+            if not any(item.completed for item in snapshot.progress) and snapshot.status != 'paused':
+                return self.start(thread_id, payload, schedule)
+            return self.continue_thread(thread_id, payload, schedule)
+        if isinstance(command, ResumeFlow):
+            return self.continue_thread(thread_id, {'command_id': command.command_id}, schedule)
+        if isinstance(command, RetryFlow):
+            return self.retry(thread_id, {'command_id': command.command_id}, schedule)
+        if isinstance(command, PauseFlow):
+            return self.pause(thread_id, {'command_id': command.command_id})
+        if isinstance(command, CancelFlow):
+            return self.cancel(thread_id, {'command_id': command.command_id})
+        return self.run_message_command(thread_id, config, command)
+
     def _config(self, thread_id: str) -> Mapping[str, Any]:
         if not THREAD_ID.fullmatch(str(thread_id or '')):
             raise HTTPException(400, 'invalid thread_id')

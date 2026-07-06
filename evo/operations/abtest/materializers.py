@@ -38,6 +38,7 @@ ENV_PASSTHROUGH = (
     'LAZYLLM_TRACE_LOCAL_STORAGE_DIR',
     'LAZYLLM_TRACE_CONSUME_BACKEND',
 )
+DEFAULT_CANDIDATE_MAX_RETRIES = '8'
 COMPARE_METRICS = (
     'overall_score',
     'answer_quality_score',
@@ -286,12 +287,18 @@ def _candidate_env(config: Mapping[str, Any], algorithm_id: str) -> dict[str, st
     env = {'LAZYMIND_ALGO_ID': _text(config.get('algo_id')) or kb_name,
            'LAZYMIND_AGENTIC_KB_NAME': kb_name,
            'LAZYMIND_ROUTER_ALGORITHM_ID': algorithm_id,
+           'LAZYMIND_MAX_RETRIES': _candidate_max_retries(config),
            'LAZYMIND_ENABLE_ROUTER': 'false',
            'LAZYMIND_ROUTER_CHILD_PROXIED_ONLY': 'true'}
     env.update({key: _text(os.getenv(key)) for key in ENV_PASSTHROUGH if _text(os.getenv(key))})
     extra = config.get('env') if isinstance(config.get('env'), Mapping) else {}
     env.update({_text(key): _text(value) for key, value in extra.items() if _text(key) and _text(value)})
     return env
+
+
+def _candidate_max_retries(config: Mapping[str, Any]) -> str:
+    value = _text(config.get('max_retries') or os.getenv('LAZYMIND_EVO_CHAT_MAX_RETRIES'))
+    return value if value.isdigit() and int(value) > 0 else DEFAULT_CANDIDATE_MAX_RETRIES
 
 
 def _code_path(config: Mapping[str, Any], patch: Mapping[str, Any]) -> str:

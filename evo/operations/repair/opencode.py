@@ -23,6 +23,30 @@ OPENCODE_FIELDS = {
     'api_key',
     'skip_auth',
 }
+TRACE_BY_TOOL = {
+    'glob': 'opencode.tool_use.search',
+    'grep': 'opencode.tool_use.search',
+    'list': 'opencode.tool_use.search',
+    'read': 'opencode.tool_use.read_file',
+    'edit': 'opencode.tool_use.edit_file',
+    'write': 'opencode.tool_use.edit_file',
+    'bash': 'opencode.tool_use.run_command',
+}
+TRACE_BY_TYPE = {
+    'setup': 'opencode.setup',
+    'process_start': 'opencode.process_start',
+    'process_heartbeat': 'opencode.heartbeat',
+    'process_exit': 'opencode.process_exit',
+    'error': 'opencode.error',
+    'timeout': 'opencode.error',
+    'first_response_timeout': 'opencode.error',
+    'process_failed': 'opencode.error',
+    'configuration_error': 'opencode.error',
+    'prompt_write_failed': 'opencode.error',
+    'process_start_failed': 'opencode.error',
+}
+PATH_KEYS = {'file', 'path', 'filepath', 'filePath'}
+DIFF_KEYS = {'diff', 'patch'}
 
 
 class OpenCodeRunResult(NamedTuple):
@@ -191,7 +215,8 @@ def _read_line(line: str, stdout: list[str], events: list[dict[str, Any]],
     if isinstance(event, dict):
         events.append(event)
         emit(event)
-        if first is None and (_tool(event) or _message(event) or event.get('type') == 'error'):
+        compact = _compact(len(events) - 1, event)
+        if first is None and (compact['tool'] or compact['summary'] or event.get('type') == 'error'):
             first = round(time.time() - start, 3)
         return session or str(event.get('sessionID') or ''), event if event.get('type') == 'error' else error, first
     return session, error, first
@@ -230,19 +255,37 @@ def _opencode_json(settings: dict[str, str]) -> dict[str, Any]:
 
 
 def _compact(index: int, event: dict[str, Any]) -> dict[str, Any]:
-    paths = _paths(event)
+    part = event.get('part') if isinstance(event.get('part'), dict) else {}
+    call = event.get('call') if isinstance(event.get('call'), dict) else {}
+    state = part.get('state') if isinstance(part.get('state'), dict) else {}
+    tool_input = state.get('input') if isinstance(state.get('input'), dict) else {}
+    fields = list(_walk(event))
+    paths = [value for key, value in fields if key in PATH_KEYS and isinstance(value, str)]
     for key in ('changed_files', 'files'):
-        paths += [str(path) for path in event.get(key, []) if isinstance(path, str)]
+        extra = event.get(key)
+        paths += [extra] if isinstance(extra, str) else [path for path in (extra or []) if isinstance(path, str)]
+    raw_type = str(event.get('type') or 'unknown')
+    tool = str(event.get('tool') or part.get('tool') or call.get('tool') or '')
+    message = str(
+        part.get('text') or event.get('text') or event.get('message')
+        or event.get('error') or state.get('error') or part.get('title') or ''
+    ).strip()
+    command = str(tool_input.get('command') or event.get('command') or event.get('cmd') or '')
+    status = str(event.get('status') or state.get('status') or event.get('state') or '')
     return {
         'index': index,
-        'event_type': str(event.get('type') or 'unknown'),
-        'tool': _tool(event),
-        'execution_type': _execution_type(event),
-        'summary': _message(event)[:500],
+        'event_type': raw_type,
+        'tool': tool,
+        'execution_type': 'tool_use' if tool else (
+            'code' if raw_type in {'text', 'stdout'} and 'diff --git' in message else
+            'message' if raw_type in {'text', 'stdout'} else raw_type
+        ),
+        'summary': message[:500],
         'file_paths': sorted(set(paths)),
-        'command': _command(event),
-        'status': _status(event),
+        'command': command,
+        'status': 'failed' if status == 'error' else status,
         'returncode': event.get('returncode'),
+        'has_diff': any(key in DIFF_KEYS and isinstance(value, str) and value.strip() for key, value in fields),
     }
 
 
@@ -251,29 +294,10 @@ def _emit_trace(trace: Any, attempt: int | None, index: int, event: dict[str, An
     raw_type, tool = compact['event_type'], compact['tool']
     if raw_type in {'step_start', 'step_finish'}:
         return
-    event_type = {
-        'glob': 'opencode.tool_use.search',
-        'grep': 'opencode.tool_use.search',
-        'list': 'opencode.tool_use.search',
-        'read': 'opencode.tool_use.read_file',
-        'edit': 'opencode.tool_use.edit_file',
-        'write': 'opencode.tool_use.edit_file',
-        'bash': 'opencode.tool_use.run_command',
-    }.get(tool) or {
-        'setup': 'opencode.setup',
-        'process_start': 'opencode.process_start',
-        'process_heartbeat': 'opencode.heartbeat',
-        'process_exit': 'opencode.process_exit',
-        'error': 'opencode.error',
-        'timeout': 'opencode.error',
-        'first_response_timeout': 'opencode.error',
-        'process_failed': 'opencode.error',
-        'configuration_error': 'opencode.error',
-        'prompt_write_failed': 'opencode.error',
-        'process_start_failed': 'opencode.error',
-        'text': 'opencode.code' if 'diff --git' in compact['summary'] else 'opencode.message',
-        'stdout': 'opencode.code' if 'diff --git' in compact['summary'] else 'opencode.message',
-    }.get(raw_type, 'opencode.message')
+    event_type = TRACE_BY_TOOL.get(tool) or TRACE_BY_TYPE.get(raw_type)
+    if not event_type and raw_type in {'text', 'stdout'}:
+        event_type = 'opencode.code' if 'diff --git' in compact['summary'] else 'opencode.message'
+    event_type = event_type or 'opencode.message'
     trace.emit(
         event_type,
         status='failed' if event_type == 'opencode.error' else compact['status'] or 'running',
@@ -289,7 +313,7 @@ def _emit_trace(trace: Any, attempt: int | None, index: int, event: dict[str, An
             'returncode': compact.get('returncode'),
         },
     )
-    if tool in {'edit', 'write'} and _has_diff(event):
+    if tool in {'edit', 'write'} and compact['has_diff']:
         trace.emit(
             'opencode.code',
             status=compact['status'] or 'completed',
@@ -304,73 +328,18 @@ def _emit_trace(trace: Any, attempt: int | None, index: int, event: dict[str, An
         )
 
 
-def _execution_type(event: dict[str, Any]) -> str:
-    if _tool(event):
-        return 'tool_use'
-    if event.get('type') in {'text', 'stdout'}:
-        return 'code' if 'diff --git' in _message(event) else 'message'
-    return str(event.get('type') or 'unknown')
-
-
-def _tool(event: dict[str, Any]) -> str:
-    part = event.get('part') if isinstance(event.get('part'), dict) else {}
-    call = event.get('call') if isinstance(event.get('call'), dict) else {}
-    return str(event.get('tool') or part.get('tool') or call.get('tool') or '')
-
-
-def _message(event: dict[str, Any]) -> str:
-    part = event.get('part') if isinstance(event.get('part'), dict) else {}
-    state = part.get('state') if isinstance(part.get('state'), dict) else {}
-    text = (
-        part.get('text') or event.get('text') or event.get('message')
-        or event.get('error') or state.get('error') or part.get('title') or ''
-    )
-    return str(text).strip()
-
-
-def _command(event: dict[str, Any]) -> str:
-    part = event.get('part') if isinstance(event.get('part'), dict) else {}
-    state = part.get('state') if isinstance(part.get('state'), dict) else {}
-    tool_input = state.get('input') if isinstance(state.get('input'), dict) else {}
-    if tool_input.get('command'):
-        return str(tool_input['command'])
-    for key in ('command', 'cmd'):
-        if event.get(key):
-            return str(event[key])
-    return ''
-
-
 def _command_label(command: object) -> str:
     return ' '.join(str(command or '').split()[:8])[:200]
 
 
-def _status(event: dict[str, Any]) -> str:
-    part = event.get('part') if isinstance(event.get('part'), dict) else {}
-    state = part.get('state') if isinstance(part.get('state'), dict) else {}
-    status = str(event.get('status') or state.get('status') or event.get('state') or '')
-    return 'failed' if status == 'error' else status
-
-
-def _has_diff(value: Any) -> bool:
+def _walk(value: Any):
     if isinstance(value, dict):
-        return any(
-            isinstance(child, str) and key in {'diff', 'patch'} and child.strip()
-            or _has_diff(child)
-            for key, child in value.items()
-        )
-    if isinstance(value, list):
-        return any(_has_diff(child) for child in value)
-    return False
-
-
-def _paths(value: Any) -> list[str]:
-    if isinstance(value, dict):
-        return [item for key, child in value.items()
-                for item in ([child] if key in {'file', 'path', 'filepath', 'filePath'} and isinstance(child, str)
-                             else _paths(child))]
-    if isinstance(value, list):
-        return [item for child in value for item in _paths(child)]
-    return []
+        for key, child in value.items():
+            yield str(key), child
+            yield from _walk(child)
+    elif isinstance(value, list):
+        for child in value:
+            yield from _walk(child)
 
 
 def _changed(workdir: Path) -> list[str]:

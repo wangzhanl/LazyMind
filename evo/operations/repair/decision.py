@@ -32,6 +32,11 @@ def patch_base_decision(
             'ReadTimeout',
             'RemoteProtocolError',
             'TimeoutError',
+            'router_config_error',
+            'router_http_error',
+            'router_protocol_error',
+            'router_timeout',
+            'router_transport_error',
         }
         if htype in external:
             return {'action': 'blocked', 'reason': f'external candidate service unavailable: {htype}'}
@@ -50,7 +55,7 @@ def patch_base_decision(
         return {'action': 'rollback_to_baseline', 'reason': 'candidate_execution_failed'}
     if comparison and comparison.get('status') != 'completed':
         return {'action': 'rollback_to_baseline', 'reason': 'candidate_eval_not_completed'}
-    if _has_target_progress(delta):
+    if _should_continue_current_patch(delta):
         reason = (
             'target topology improved with follow-up groups'
             if delta.get('new_group_count') else 'target topology improved below acceptance threshold'
@@ -142,11 +147,18 @@ def _attempt_score(attempt: Mapping[str, Any]) -> tuple[int, float]:
 def _has_target_progress(delta: Mapping[str, Any]) -> bool:
     if delta.get('status') != 'completed':
         return False
-    if delta.get('target_group_status') == 'regressed':
+    if delta.get('target_group_status') not in {'resolved', 'improved'}:
         return False
     if delta.get('goodcase_guard_status') != 'passed':
         return False
     return int(delta.get('target_remaining_delta') or 0) > 0 or _positive_metric(delta)
+
+
+def _should_continue_current_patch(delta: Mapping[str, Any]) -> bool:
+    action = _text(delta.get('recommended_action'))
+    if action and action != 'continue_current_patch':
+        return False
+    return _has_target_progress(delta)
 
 
 def _positive_metric(delta: Mapping[str, Any]) -> bool:
