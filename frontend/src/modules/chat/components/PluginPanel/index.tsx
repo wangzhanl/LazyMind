@@ -5,6 +5,7 @@ import { usePluginSession } from '@/modules/chat/hooks/usePlugin';
 import { usePluginStore } from '@/modules/chat/store/pluginPanel';
 import { uploadFileInChunks } from '@/modules/chat/utils/chunkUpload';
 import { PluginSessionApi } from '@/modules/chat/utils/request';
+import StateGraphModal from '@/components/StateGraphModal';
 import type {
   PluginSession,
   SlotRevision,
@@ -216,10 +217,10 @@ function getCompositeRows(
   tab: TabDef,
   session: PluginSession,
 ): number[] {
-  const participating = new Set(tab.slots.map((s) => s.artifact_key ?? s.id));
+  const participating = new Set(tab.slots.map((s) => s.id));
   const orders = new Set<number>();
   for (const slot of session.slots ?? []) {
-    if (slot.selected && participating.has(slot.artifact_key ?? slot.slot_id)) {
+    if (slot.selected && participating.has(slot.slot)) {
       if (slot.sort_order !== undefined) {
         orders.add(slot.sort_order);
       }
@@ -228,14 +229,14 @@ function getCompositeRows(
   return Array.from(orders).sort((a, b) => a - b);
 }
 
-/** Find a slot revision for (artifact_key, sort_order). */
+/** Find a slot revision for (slot, sort_order). */
 function findSlotRevision(
   session: PluginSession,
   artifactKey: string,
   sortOrder: number,
 ): SlotRevision | undefined {
   return (session.slots ?? []).find(
-    (s) => s.selected && (s.artifact_key ?? s.slot_id) === artifactKey && s.sort_order === sortOrder,
+    (s) => s.selected && s.slot === artifactKey && s.sort_order === sortOrder,
   );
 }
 
@@ -285,7 +286,7 @@ function InnerTabsCell({
       </div>
       {innerSlotIds.map((slotId, i) => {
         const def = slotDefs.find((s) => s.id === slotId);
-        const artifactKey = def?.artifact_key ?? slotId;
+        const artifactKey = def?.id ?? slotId;
         const rev = findSlotRevision(session, artifactKey, sortOrder);
         return (
           <div key={slotId} role='tabpanel' hidden={i !== activeIdx}>
@@ -372,7 +373,7 @@ function CompositeSlotGrid({
             }
             const slotId = col.slotId as string;
             const def = tab.slots.find((s) => s.id === slotId);
-            const artifactKey = def?.artifact_key ?? slotId;
+            const artifactKey = def?.id ?? slotId;
             const rev = findSlotRevision(session, artifactKey, sortOrder);
             return (
               <div
@@ -681,9 +682,9 @@ function TabSlotGrid({
         aria-hidden='true'
       />
       {tab.slots.map((slotDef) => {
-        const artifactKey = slotDef.artifact_key ?? slotDef.id;
+        const artifactKey = slotDef.id;
         const revisions = (session.slots ?? []).filter(
-          (s) => s.artifact_key === artifactKey && s.selected,
+          (s) => s.slot === artifactKey && s.selected,
         );
         const isImageList = slotDef.type === 'image' && slotDef.cardinality === 'list';
         const isDraggable = Boolean(slotDef.ordered);
@@ -766,6 +767,7 @@ export function PluginPanel({
   const setFocusedSortOrder = usePluginStore((s) => s.setFocusedSortOrder);
   const [ui, setUI] = useState<PluginUI>({});
   const [dismissing, setDismissing] = useState(false);
+  const [stateGraphOpen, setStateGraphOpen] = useState(false);
 
   const handleDismiss = useCallback(async () => {
     if (!session || dismissing) return;
@@ -891,6 +893,12 @@ export function PluginPanel({
           <span
             className={`plugin-panel__status plugin-panel__status--${displayStatus}`}
             aria-label={`Status: ${t(STATUS_KEY[displayStatus] ?? displayStatus)}`}
+            onClick={() => session && setStateGraphOpen(true)}
+            style={{ cursor: 'pointer' }}
+            title='查看工作流图'
+            role='button'
+            tabIndex={0}
+            onKeyDown={(e) => e.key === 'Enter' && session && setStateGraphOpen(true)}
           >
             {t(STATUS_KEY[displayStatus] ?? displayStatus)}
           </span>
@@ -1092,6 +1100,16 @@ export function PluginPanel({
         </div>
       )}
     </div>
+    {session && (
+      <StateGraphModal
+        open={stateGraphOpen}
+        onClose={() => setStateGraphOpen(false)}
+        sessionId={session.session_id}
+        pluginId={session.plugin_id}
+        liveRefresh
+        conversationId={conversationId}
+      />
+    )}
     </SlotEditingContext.Provider>
   );
 }

@@ -3,6 +3,7 @@ import { AgentAppsAuth } from "@/components/auth";
 import { Method, SSE } from "@/modules/chat/utils/sse";
 import { TaskServiceApi, taskStreamUrl, convEventsUrl } from "@/modules/chat/utils/request";
 import UIUtils from "@/modules/chat/utils/ui";
+import { PLUGIN_GRAPH_REFRESH_EVENT } from "@/components/StateGraphModal";
 
 export type TaskStatus =
   | "pending"
@@ -13,7 +14,7 @@ export type TaskStatus =
   | "canceled";
 
 export interface TaskArtifact {
-  artifact_key: string;
+  slot: string;
   content_type: string;
   seq: number;
   value: any;
@@ -51,7 +52,7 @@ export interface SubAgentTask {
   current_phase?: string;
   estimated_sec?: number;
   summary?: string;
-  output_artifact_keys?: string[];
+  output_slots?: string[];
   artifacts: TaskArtifact[];
   execution_log: TaskLogEntry[];
 }
@@ -64,7 +65,7 @@ const TERMINAL: TaskStatus[] = [
 ];
 
 function artifactKey(a: TaskArtifact): string {
-  return `${a.artifact_key}#${a.seq}`;
+  return `${a.slot}#${a.seq}`;
 }
 
 interface TaskCenterStore {
@@ -171,7 +172,7 @@ export const useTaskCenterStore = create<TaskCenterStore>()((set, get) => ({
             current_phase: task.current_phase,
             estimated_sec: task.estimated_sec,
             summary: task.summary,
-            output_artifact_keys: task.output_artifact_keys,
+            output_slots: task.output_slots,
             artifacts: task.artifacts ?? [],
             execution_log: task.execution_log ?? [],
             conversation_id: conversationId,
@@ -207,7 +208,7 @@ export const useTaskCenterStore = create<TaskCenterStore>()((set, get) => ({
           break;
         case "artifact": {
           const newArtifact: TaskArtifact = {
-            artifact_key: event.artifact_key,
+            slot: event.slot,
             content_type: event.content_type,
             seq: event.seq ?? 1,
             value: event.value,
@@ -366,7 +367,7 @@ export const useTaskCenterStore = create<TaskCenterStore>()((set, get) => ({
           current_phase: t.current_phase,
           estimated_sec: t.estimated_sec,
           summary: t.summary,
-          output_artifact_keys: t.output_artifact_keys,
+            output_slots: t.output_slots,
           artifacts: t.artifacts ?? [],
           execution_log: stepsToExecutionLog(t.steps ?? []),
         });
@@ -471,11 +472,17 @@ export const useTaskCenterStore = create<TaskCenterStore>()((set, get) => ({
             type === 'plugin_error'
           ) {
             get().loadConversationTasks(conversationId);
+            window.dispatchEvent(
+              new CustomEvent(PLUGIN_GRAPH_REFRESH_EVENT, { detail: { conversationId } }),
+            );
             import('@/modules/chat/store/pluginPanel').then(({ usePluginStore }) => {
               usePluginStore.getState().loadActiveSession(conversationId);
               usePluginStore.getState().setAutoRunning(conversationId, false);
             });
           } else if (type === 'step_partial_done') {
+            window.dispatchEvent(
+              new CustomEvent(PLUGIN_GRAPH_REFRESH_EVENT, { detail: { conversationId } }),
+            );
             import('@/modules/chat/store/pluginPanel').then(({ usePluginStore }) => {
               usePluginStore.getState().loadActiveSession(conversationId);
             });
