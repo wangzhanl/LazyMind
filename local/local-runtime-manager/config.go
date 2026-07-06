@@ -15,6 +15,7 @@ const (
 	processComposePortEnvVar      = "LAZYMIND_PROCESS_COMPOSE_PORT"
 	localUpTimeoutEnvVar          = "LAZYMIND_LOCAL_UP_TIMEOUT"
 	localDownTimeoutEnvVar        = "LAZYMIND_LOCAL_DOWN_TIMEOUT"
+	localNetworkProfileEnvVar     = "LAZYMIND_LOCAL_NETWORK_PROFILE"
 	localProxyAddressEnvVar       = "LAZYMIND_LOCAL_PROXY_ADDRESS"
 	localProxyPortEnvVar          = "LAZYMIND_LOCAL_PROXY_PORT"
 	localProxyAuthHostPortEnvVar  = "LAZYMIND_LOCAL_PROXY_AUTH_HOST_PORT"
@@ -54,7 +55,8 @@ const (
 	defaultLocalUpTimeout         = 30 * 60
 	defaultLocalDownTimeout       = 2 * 60
 	defaultFrontendPort           = 8090
-	defaultLocalProxyAddress      = "0.0.0.0"
+	defaultLocalNetworkProfile    = "localhost"
+	defaultLocalProxyAddress      = "127.0.0.1"
 	defaultLocalProxyPort         = 5024
 	defaultLocalProxyAuthHostPort = 18000
 	defaultLocalProxyCoreHostPort = 18001
@@ -171,6 +173,7 @@ type RuntimeConfig struct {
 	ModeProfile        RuntimeModeProfileConfig
 	ProcessComposePort int
 	FrontendPort       int
+	NetworkProfile     string
 	LocalProxy         LocalProxyConfig
 	AuthService        AuthServiceConfig
 	CaddyVersion       string
@@ -297,18 +300,22 @@ func (a *localPortAllocator) envOrAvailable(envName string, fallback int) int {
 }
 
 func (a *localPortAllocator) envOrAvailableDefaultCanMove(envName string, fallback int) int {
+	return a.envOrAvailableDefaultCanMoveOn(envName, fallback, "127.0.0.1")
+}
+
+func (a *localPortAllocator) envOrAvailableDefaultCanMoveOn(envName string, fallback int, address string) int {
 	raw := strings.TrimSpace(os.Getenv(envName))
 	if raw == "" {
-		return a.availableFrom(fallback, 500)
+		return a.availableFromOn(fallback, 500, address)
 	}
 	port := envPort(envName, fallback)
 	if envBool(localPortsPinnedEnvVar, false) {
 		return a.reserve(port)
 	}
-	if port != fallback || localPortAvailable(port) {
+	if port != fallback || localPortAvailableOn(address, port) {
 		return a.reserve(port)
 	}
-	return a.availableFrom(fallback, 500)
+	return a.availableFromOn(fallback, 500, address)
 }
 
 func (a *localPortAllocator) firstEnvOrAvailable(envNames []string, fallback int) int {
@@ -321,11 +328,15 @@ func (a *localPortAllocator) firstEnvOrAvailable(envNames []string, fallback int
 }
 
 func (a *localPortAllocator) availableFrom(start int, attempts int) int {
+	return a.availableFromOn(start, attempts, "127.0.0.1")
+}
+
+func (a *localPortAllocator) availableFromOn(start int, attempts int, address string) int {
 	for port := start; port < start+attempts && port < 65536; port++ {
 		if _, ok := a.used[port]; ok {
 			continue
 		}
-		if !localPortAvailable(port) {
+		if !localPortAvailableOn(address, port) {
 			continue
 		}
 		return a.reserve(port)
@@ -334,7 +345,11 @@ func (a *localPortAllocator) availableFrom(start int, attempts int) int {
 }
 
 func localPortAvailable(port int) bool {
-	ln, err := net.Listen("tcp", net.JoinHostPort("127.0.0.1", strconv.Itoa(port)))
+	return localPortAvailableOn("127.0.0.1", port)
+}
+
+func localPortAvailableOn(address string, port int) bool {
+	ln, err := net.Listen("tcp", net.JoinHostPort(address, strconv.Itoa(port)))
 	if err != nil {
 		return false
 	}
@@ -381,6 +396,19 @@ func envBool(name string, fallback bool) bool {
 		return false
 	default:
 		return fallback
+	}
+}
+
+func localNetworkProfile() (string, error) {
+	profile := strings.ToLower(strings.TrimSpace(os.Getenv(localNetworkProfileEnvVar)))
+	if profile == "" {
+		return defaultLocalNetworkProfile, nil
+	}
+	switch profile {
+	case "localhost", "lan":
+		return profile, nil
+	default:
+		return "", fmt.Errorf("%s must be localhost or lan", localNetworkProfileEnvVar)
 	}
 }
 
@@ -581,8 +609,16 @@ func NewRuntimeConfig(profile, repoRootHint string) (RuntimeConfig, RuntimePaths
 		AlgorithmPIDDir:          filepath.Join(runtimeRoot, "run", "algorithm"),
 	}
 	ports := newLocalPortAllocator()
+	networkProfile, err := localNetworkProfile()
+	if err != nil {
+		return RuntimeConfig{}, RuntimePaths{}, err
+	}
+	frontendBindCheckAddress := "127.0.0.1"
+	if networkProfile == "lan" {
+		frontendBindCheckAddress = "0.0.0.0"
+	}
 	processComposePort := ports.envOrAvailable(processComposePortEnvVar, defaultProcessComposePort)
-	frontendPort := ports.envOrAvailableDefaultCanMove(frontendPortEnvVar, defaultFrontendPort)
+	frontendPort := ports.envOrAvailableDefaultCanMoveOn(frontendPortEnvVar, defaultFrontendPort, frontendBindCheckAddress)
 	localProxyPort := ports.envOrAvailable(localProxyPortEnvVar, defaultLocalProxyPort)
 	authHostPort := ports.envOrAvailable(localProxyAuthHostPortEnvVar, defaultLocalProxyAuthHostPort)
 	coreHostPort := ports.firstEnvOrAvailable([]string{localCorePortEnvVar, localProxyCoreHostPortEnvVar}, defaultLocalProxyCoreHostPort)
@@ -605,6 +641,7 @@ func NewRuntimeConfig(profile, repoRootHint string) (RuntimeConfig, RuntimePaths
 		ModeProfile:        localRuntimeModeProfile(milvusPort, milvusLiteDBPath),
 		ProcessComposePort: processComposePort,
 		FrontendPort:       frontendPort,
+		NetworkProfile:     networkProfile,
 		CaddyVersion:       envText(caddyVersionEnvVar, defaultCaddyVersion),
 		LocalProxy: LocalProxyConfig{
 			Address:      envText(localProxyAddressEnvVar, defaultLocalProxyAddress),

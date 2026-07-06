@@ -228,6 +228,66 @@ func TestRuntimeConfigKeepsPinnedFrontendPortWhenOccupied(t *testing.T) {
 	}
 }
 
+func TestRuntimeConfigDefaultsToLocalhostNetworkProfile(t *testing.T) {
+	t.Setenv(localNetworkProfileEnvVar, "")
+	t.Setenv(localProxyAddressEnvVar, "")
+	repo := t.TempDir()
+	writeComposeFixture(t, repo)
+	cfg, _, err := NewRuntimeConfig(defaultProfileValue(), repo)
+	if err != nil {
+		t.Fatalf("runtime config: %v", err)
+	}
+	if cfg.NetworkProfile != "localhost" {
+		t.Fatalf("network profile = %q, want localhost", cfg.NetworkProfile)
+	}
+	if cfg.LocalProxy.Address != "127.0.0.1" {
+		t.Fatalf("local proxy address = %q, want 127.0.0.1", cfg.LocalProxy.Address)
+	}
+}
+
+func TestRuntimeConfigAllowsLANNetworkProfile(t *testing.T) {
+	t.Setenv(localNetworkProfileEnvVar, "lan")
+	repo := t.TempDir()
+	writeComposeFixture(t, repo)
+	cfg, _, err := NewRuntimeConfig(defaultProfileValue(), repo)
+	if err != nil {
+		t.Fatalf("runtime config: %v", err)
+	}
+	if cfg.NetworkProfile != "lan" {
+		t.Fatalf("network profile = %q, want lan", cfg.NetworkProfile)
+	}
+}
+
+func TestRuntimeConfigLANFrontendPortAvoidsWildcardOccupiedDefault(t *testing.T) {
+	t.Setenv(localNetworkProfileEnvVar, "lan")
+	t.Setenv(frontendPortEnvVar, "")
+	ln := occupyPortsOn(t, "0.0.0.0", defaultFrontendPort)
+	defer func() {
+		for _, existing := range ln {
+			_ = existing.Close()
+		}
+	}()
+
+	repo := t.TempDir()
+	writeComposeFixture(t, repo)
+	cfg, _, err := NewRuntimeConfig(defaultProfileValue(), repo)
+	if err != nil {
+		t.Fatalf("runtime config: %v", err)
+	}
+	if cfg.FrontendPort == defaultFrontendPort {
+		t.Fatalf("expected LAN frontend port to avoid wildcard-occupied default")
+	}
+}
+
+func TestRuntimeConfigRejectsUnknownNetworkProfile(t *testing.T) {
+	t.Setenv(localNetworkProfileEnvVar, "public")
+	repo := t.TempDir()
+	writeComposeFixture(t, repo)
+	if _, _, err := NewRuntimeConfig(defaultProfileValue(), repo); err == nil {
+		t.Fatal("expected invalid network profile error")
+	}
+}
+
 func TestFrontendBuildEnvIncludesLocalViteOverrides(t *testing.T) {
 	t.Setenv("VITE_LAZYMIND_MODE", "")
 	t.Setenv("VITE_HIDE_EVO", "true")
@@ -242,6 +302,72 @@ func TestFrontendBuildEnvIncludesLocalViteOverrides(t *testing.T) {
 		"VITE_APP_LOGO=/logo.svg",
 		"VITE_APP_CHAT_TITLE=Local Chat",
 	})
+}
+
+func TestWriteCaddyfileBindsLocalhostByDefault(t *testing.T) {
+	repo := t.TempDir()
+	writeComposeFixture(t, repo)
+	cfg, paths, err := NewRuntimeConfig(defaultProfileValue(), repo)
+	if err != nil {
+		t.Fatalf("runtime config: %v", err)
+	}
+	if err := paths.EnsureAllDirs(); err != nil {
+		t.Fatalf("ensure dirs: %v", err)
+	}
+	if err := writeCaddyfile(paths, cfg); err != nil {
+		t.Fatalf("write caddyfile: %v", err)
+	}
+	raw, err := os.ReadFile(paths.CaddyConfig)
+	if err != nil {
+		t.Fatalf("read caddyfile: %v", err)
+	}
+	content := string(raw)
+	for _, want := range []string{
+		"http://localhost:" + strconv.Itoa(cfg.FrontendPort),
+		"http://127.0.0.1:" + strconv.Itoa(cfg.FrontendPort),
+		"bind 127.0.0.1",
+		"reverse_proxy http://127.0.0.1:" + strconv.Itoa(cfg.LocalProxy.Port),
+	} {
+		if !strings.Contains(content, want) {
+			t.Fatalf("caddyfile missing %q:\n%s", want, content)
+		}
+	}
+	if strings.Contains(content, "bind 0.0.0.0") {
+		t.Fatalf("default caddyfile should not bind all interfaces:\n%s", content)
+	}
+}
+
+func TestWriteCaddyfileBindsLANFrontendOnly(t *testing.T) {
+	t.Setenv(localNetworkProfileEnvVar, "lan")
+	repo := t.TempDir()
+	writeComposeFixture(t, repo)
+	cfg, paths, err := NewRuntimeConfig(defaultProfileValue(), repo)
+	if err != nil {
+		t.Fatalf("runtime config: %v", err)
+	}
+	if err := paths.EnsureAllDirs(); err != nil {
+		t.Fatalf("ensure dirs: %v", err)
+	}
+	if err := writeCaddyfile(paths, cfg); err != nil {
+		t.Fatalf("write caddyfile: %v", err)
+	}
+	raw, err := os.ReadFile(paths.CaddyConfig)
+	if err != nil {
+		t.Fatalf("read caddyfile: %v", err)
+	}
+	content := string(raw)
+	for _, want := range []string{
+		"http://:" + strconv.Itoa(cfg.FrontendPort),
+		"bind 0.0.0.0",
+		"reverse_proxy http://127.0.0.1:" + strconv.Itoa(cfg.LocalProxy.Port),
+	} {
+		if !strings.Contains(content, want) {
+			t.Fatalf("caddyfile missing %q:\n%s", want, content)
+		}
+	}
+	if strings.Contains(content, "http://localhost:") || strings.Contains(content, "http://127.0.0.1:"+strconv.Itoa(cfg.FrontendPort)+" {") {
+		t.Fatalf("lan caddyfile should use wildcard host matching:\n%s", content)
+	}
 }
 
 func TestAlgorithmServiceEnvIncludesCloudParityDefaults(t *testing.T) {
@@ -1444,15 +1570,19 @@ func writeComposeFixture(t *testing.T, repo string) {
 }
 
 func occupyLocalPorts(t *testing.T, ports ...int) []net.Listener {
+	return occupyPortsOn(t, "127.0.0.1", ports...)
+}
+
+func occupyPortsOn(t *testing.T, address string, ports ...int) []net.Listener {
 	t.Helper()
 	listeners := make([]net.Listener, 0, len(ports))
 	for _, port := range ports {
-		ln, err := net.Listen("tcp", net.JoinHostPort("127.0.0.1", strconv.Itoa(port)))
+		ln, err := net.Listen("tcp", net.JoinHostPort(address, strconv.Itoa(port)))
 		if err != nil {
 			for _, existing := range listeners {
 				_ = existing.Close()
 			}
-			t.Skipf("port %d is already in use on this test host: %v", port, err)
+			t.Skipf("port %d is already in use on %s on this test host: %v", port, address, err)
 		}
 		listeners = append(listeners, ln)
 	}
