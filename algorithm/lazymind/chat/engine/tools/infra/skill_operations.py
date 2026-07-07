@@ -19,23 +19,6 @@ class SkillEditOperation(TypedDict, total=False):
     replace_all: bool
 
 
-def apply_skill_edit_operations(
-    current_content: str,
-    operations: List[SkillEditOperation],
-) -> tuple[str, list[Dict[str, Any]]]:
-    from lazymind.rewrite.base import UnprocessableContentError
-    from lazymind.rewrite.skill import _apply_skill_edit_operations
-
-    operation_payload = [dict(op) for op in operations]
-    edited_content = _apply_skill_edit_operations(current_content, {'operations': operation_payload})
-    if edited_content.strip() == current_content.strip():
-        raise UnprocessableContentError(
-            'Edited SKILL.md content is unchanged from current content. '
-            'A review row must contain at least one real content change.'
-        )
-    return edited_content, operation_payload
-
-
 def normalize_skill_package_path(path: str | None, *, default: str = 'SKILL.md') -> str:
     raw = str(path or default).strip()
     if not raw or raw.startswith('/') or '\\' in raw:

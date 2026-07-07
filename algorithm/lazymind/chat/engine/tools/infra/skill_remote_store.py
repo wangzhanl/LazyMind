@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import os
 from typing import Any, Dict, Mapping
 
 from lazymind.chat.integrations.remote_fs import RemoteFS
@@ -50,12 +49,6 @@ def remove_skill_file(category: str, name: str, rel_path: str, *, fs=None) -> No
     store.rm(skill_file_path(category, name, rel_path), recursive=False)
 
 
-def write_skill_files(category: str, name: str, files: Mapping[str, str], *, fs=None) -> None:
-    store = fs or _remote_fs()
-    for rel_path, content in files.items():
-        write_skill_file(category, name, rel_path, content, fs=store)
-
-
 def replace_skill_package_files(
     category: str,
     name: str,
@@ -94,21 +87,6 @@ def list_skill_files(category: str, name: str, *, fs=None) -> Dict[str, str]:
 
     walk(package_dir)
     return files
-
-
-def materialize_skill_package(category: str, name: str, local_dir: str, *, fs=None) -> Dict[str, Any]:
-    files = list_skill_files(category, name, fs=fs)
-    for rel_path, content in files.items():
-        destination = os.path.join(local_dir, *rel_path.split('/'))
-        os.makedirs(os.path.dirname(destination), exist_ok=True)
-        with open(destination, 'w', encoding='utf-8') as fh:
-            fh.write(content)
-    return {
-        'path': skill_package_dir(category, name),
-        'local_dir': local_dir,
-        'file_count': len(files),
-        'files': sorted(files),
-    }
 
 
 def rename_skill_package(

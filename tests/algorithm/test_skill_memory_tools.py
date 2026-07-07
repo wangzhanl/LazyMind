@@ -101,19 +101,6 @@ def test_skill_editor_create_modify_remove_core_paths(monkeypatch):
     )
     monkeypatch.setattr(
         skill_editor_mod,
-        'list_all_skill_entries',
-        lambda _base_dir: {
-            'writing/existing': {
-                'name': 'existing',
-                'category': 'writing',
-                'path': '/tmp/skills/writing/existing',
-                'source': 'remote',
-                'content': existing_content,
-            }
-        },
-    )
-    monkeypatch.setattr(
-        skill_editor_mod,
         'list_skill_files',
         lambda category, name: {
             'SKILL.md': existing_content,
@@ -138,15 +125,14 @@ def test_skill_editor_create_modify_remove_core_paths(monkeypatch):
         '---\n'
         'Use this skill for tests.\n'
     )
-    create_result = skill_editor_mod.skill_editor(
+    tool_group = skill_editor_mod.SkillEditorToolGroup()
+    create_result = tool_group.create_skill(
         'new_skill',
-        'create',
         category='drafts',
         content=content,
     )
-    modify_result = skill_editor_mod.skill_editor(
+    modify_result = tool_group.modify_skill(
         'existing',
-        'modify',
         category='writing',
         operations=[
             {
@@ -164,14 +150,14 @@ def test_skill_editor_create_modify_remove_core_paths(monkeypatch):
         ],
         reason='package update',
     )
-    remove_result = skill_editor_mod.skill_editor('existing', 'remove', category='writing')
+    remove_result = tool_group.remove_skill('existing', category='writing')
 
     assert create_result['success'] is True
-    assert create_result['tool'] == 'skill_editor'
+    assert create_result['tool'] == 'create_skill'
     assert modify_result['success'] is True
-    assert modify_result['tool'] == 'skill_editor'
+    assert modify_result['tool'] == 'modify_skill'
     assert remove_result['success'] is True
-    assert remove_result['tool'] == 'skill_editor'
+    assert remove_result['tool'] == 'remove_skill'
     assert create_result['result'] == {
         'status': 'created',
         'message': 'Skill was created and is now active.',
@@ -209,26 +195,29 @@ def test_skill_editor_rejects_missing_skill_without_write(monkeypatch):
 
     monkeypatch.setattr(skill_editor_mod.lazyllm, 'globals', {'agentic_config': {}})
     monkeypatch.setattr(skill_editor_mod, 'replace_skill_package_files', lambda *args, **kwargs: calls.append(args))
-    monkeypatch.setattr(skill_editor_mod, 'list_all_skill_entries', lambda _base_dir: {})
 
-    result = skill_editor_mod.skill_editor(
+    def raise_missing_skill(*args, **kwargs):
+        raise FileNotFoundError('skill not found')
+
+    monkeypatch.setattr(skill_editor_mod, 'list_skill_files', raise_missing_skill)
+
+    result = skill_editor_mod.SkillEditorToolGroup().modify_skill(
         'missing',
-        'modify',
         category='writing',
         operations=[{'op': 'patch_file', 'old_text': 'old', 'new_text': 'new'}],
     )
 
     assert result == {
         'success': False,
-        'tool': 'skill_editor',
+        'tool': 'modify_skill',
         'error': {
-            'reason': "Skill 'missing' does not exist in category 'writing'; use action='create' to add a new skill.",
+            'reason': 'Failed to load or edit skill package: skill not found',
         },
     }
     assert calls == []
 
 
-def test_skill_editor_renames_package_and_updates_runtime_delta(monkeypatch):
+def test_skill_editor_renames_package(monkeypatch):
     rename_calls = []
     existing_content = (
         '---\n'
@@ -241,27 +230,17 @@ def test_skill_editor_renames_package_and_updates_runtime_delta(monkeypatch):
     monkeypatch.setattr(skill_editor_mod.lazyllm, 'globals', {'agentic_config': {'user_id': 'user-1'}})
     monkeypatch.setattr(
         skill_editor_mod,
-        'list_all_skill_entries',
-        lambda _base_dir: {
-            'writing/existing': {
-                'name': 'existing',
-                'category': 'writing',
-                'path': '/tmp/skills/writing/existing',
-                'source': 'remote',
-                'content': existing_content,
-            }
-        },
-    )
-    monkeypatch.setattr(
-        skill_editor_mod,
         'list_skill_files',
         lambda category, name: {'SKILL.md': existing_content, 'references/doc.md': 'doc\n'},
     )
-    monkeypatch.setattr(skill_editor_mod, 'rename_skill_package', lambda *args, **kwargs: rename_calls.append((args, kwargs)))
+    monkeypatch.setattr(
+        skill_editor_mod,
+        'rename_skill_package',
+        lambda *args, **kwargs: rename_calls.append((args, kwargs)),
+    )
 
-    result = skill_editor_mod.skill_editor(
+    result = skill_editor_mod.SkillEditorToolGroup().rename_skill(
         'existing',
-        'rename',
         category='writing',
         new_name='renamed',
         new_category='drafts',
@@ -274,9 +253,3 @@ def test_skill_editor_renames_package_and_updates_runtime_delta(monkeypatch):
     assert rename_calls[0][0][:4] == ('writing', 'existing', 'drafts', 'renamed')
     assert 'name: renamed' in rename_calls[0][1]['skill_content']
     assert 'category: drafts' in rename_calls[0][1]['skill_content']
-    assert skill_editor_mod.lazyllm.globals['agentic_config']['skill_runtime_delta']['renamed'] == [
-        {
-            'old': {'category': 'writing', 'name': 'existing'},
-            'new': {'category': 'drafts', 'name': 'renamed'},
-        }
-    ]

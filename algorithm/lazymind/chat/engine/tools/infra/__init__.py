@@ -14,16 +14,14 @@ from .kb_opensearch_client import (
     resolve_index,
     term_filter,
 )
-from .skill_registry import (
-    build_skill_identity,
-    is_writable_skill_source,
-    list_all_skill_entries,
-    list_all_skills_with_category,
+from .skill_identity import (
+    resolve_skill_editor_identity,
+    rewrite_skill_identity,
+    skill_identity_from_content,
 )
 from .skill_remote_store import (
     create_remote_skill,
     list_skill_files,
-    materialize_skill_package,
     read_skill_file,
     remove_remote_skill,
     remove_skill_file,
@@ -31,7 +29,6 @@ from .skill_remote_store import (
     replace_skill_package_files,
     skill_file_path,
     skill_package_dir,
-    write_skill_files,
     write_skill_file,
 )
 from .skill_validation import (
@@ -91,7 +88,6 @@ __all__ = [
     'VocabSuggestion',
     'VocabEvolutionRequest',
     'VocabManager',
-    'build_skill_identity',
     'clear_vocab_registry',
     'create_remote_skill',
     'dedupe_vocab_values_keep_order',
@@ -101,11 +97,7 @@ __all__ = [
     'fetch_url_content',
     'fetch_vocab_groups_for_user_id',
     'get_vocab_manager',
-    'is_writable_skill_source',
     'list_skill_files',
-    'list_all_skill_entries',
-    'list_all_skills_with_category',
-    'materialize_skill_package',
     'norm_vocab_text',
     'normalize_skill_category',
     'opensearch_search',
@@ -119,9 +111,12 @@ __all__ = [
     'rename_skill_package',
     'replace_skill_package_files',
     'resolve_index',
+    'resolve_skill_editor_identity',
     'resolve_vocab_user_id',
+    'rewrite_skill_identity',
     'safe_evaluate_expression',
     'serialize_vocab_backend_actions',
+    'skill_identity_from_content',
     'skill_file_path',
     'skill_package_dir',
     'summarize_vocab_action_for_log',
@@ -134,6 +129,5 @@ __all__ = [
     'validate_skill_content',
     'validate_skill_name',
     'validate_user_preference_content',
-    'write_skill_files',
     'write_skill_file',
 ]
