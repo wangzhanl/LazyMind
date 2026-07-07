@@ -42,6 +42,7 @@ type groupModelListItem struct {
 	GroupName                string `json:"group_name"`
 	BaseURL                  string `json:"base_url"`
 	IsDefault                bool   `json:"is_default"`
+	MaxInputTokens           *int64 `json:"max_input_tokens"`
 }
 
 type groupModelListResponse struct {
@@ -238,6 +239,7 @@ func ListGroupModels(w http.ResponseWriter, r *http.Request) {
 			GroupName:                group.Name,
 			BaseURL:                  group.BaseURL,
 			IsDefault:                m.IsDefault,
+			MaxInputTokens:           m.MaxInputTokens,
 		})
 	}
 	common.ReplyOK(w, groupModelListResponse{Models: out})
@@ -335,6 +337,7 @@ func ListUserModelsByModelType(w http.ResponseWriter, r *http.Request) {
 			GroupName:                grp.name,
 			BaseURL:                  grp.baseURL,
 			IsDefault:                m.IsDefault,
+			MaxInputTokens:           m.MaxInputTokens,
 		})
 	}
 	common.ReplyOK(w, groupModelListResponse{Models: out})
