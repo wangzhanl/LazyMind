@@ -136,6 +136,36 @@ func TestAgentThreadGateDownloadRouteRegistered(t *testing.T) {
 	}
 }
 
+func TestAgentThreadGateDetailRoutesRegistered(t *testing.T) {
+	r := mux.NewRouter()
+	r.UseEncodedPath()
+	registerAllRoutes(r)
+
+	cases := []struct {
+		method string
+		path   string
+		want   string
+	}{
+		{http.MethodGet, "/agent/threads/thr-1/gates/eval/versions/2/bad-cases", "/agent/threads/{thread_id}/gates/eval/versions/{version}/bad-cases"},
+		{http.MethodGet, "/agent/threads/thr-1/gates/abtest/versions/3/case-details", "/agent/threads/{thread_id}/gates/abtest/versions/{version}/case-details"},
+		{http.MethodGet, "/agent/threads/thr-1/results/traces/trace-1", "/agent/threads/{thread_id}/results/traces/{trace_id}"},
+	}
+	for _, tc := range cases {
+		req := httptest.NewRequest(tc.method, tc.path, nil)
+		var match mux.RouteMatch
+		if !r.Match(req, &match) {
+			t.Fatalf("expected gate detail route to match: %s", tc.path)
+		}
+		gotTemplate, err := match.Route.GetPathTemplate()
+		if err != nil {
+			t.Fatalf("get matched route template: %v", err)
+		}
+		if gotTemplate != tc.want {
+			t.Fatalf("expected template %q, got %q", tc.want, gotTemplate)
+		}
+	}
+}
+
 func TestLegacyAgentEvoRoutesAreNotRegistered(t *testing.T) {
 	r := mux.NewRouter()
 	r.UseEncodedPath()
@@ -155,11 +185,12 @@ func TestLegacyAgentEvoRoutesAreNotRegistered(t *testing.T) {
 		{http.MethodPost, "/agent/threads/thr-1:retry"},
 		{http.MethodPost, "/agent/threads/thr-1:continue"},
 		{http.MethodGet, "/agent/threads/thr-1/results/datasets"},
+		{http.MethodGet, "/agent/threads/thr-1/results/eval-reports"},
 		{http.MethodGet, "/agent/threads/thr-1/results/eval-reports:download"},
-		{http.MethodGet, "/agent/threads/thr-1/artifacts/eval.dataset@v1"},
 		{http.MethodGet, "/agent/threads/thr-1/results/eval-reports/v0001/bad-cases"},
+		{http.MethodGet, "/agent/threads/thr-1/results/abtests"},
 		{http.MethodGet, "/agent/threads/thr-1/results/abtests/abtest.comparison/case-details"},
-		{http.MethodGet, "/agent/threads/thr-1/results/traces/trace-1"},
+		{http.MethodGet, "/agent/threads/thr-1/artifacts/eval.dataset@v1"},
 		{http.MethodGet, "/agent/threads/thr-1/results/traces-compare"},
 		{http.MethodGet, "/agent/reports/report-1:content"},
 		{http.MethodGet, "/agent/diffs/apply-1/file.diff"},

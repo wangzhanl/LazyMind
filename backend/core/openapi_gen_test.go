@@ -88,6 +88,7 @@ func TestOpenAPISpecIncludesAgentEvoContracts(t *testing.T) {
 		{"get", "/api/core/agent/threads/{thread_id}/gates"},
 		{"get", "/api/core/agent/threads/{thread_id}/gates/{step}/versions/{version}"},
 		{"get", "/api/core/agent/threads/{thread_id}/gates/{step}/versions/{version}:download"},
+		{"get", "/api/core/agent/threads/{thread_id}/results/traces/{trace_id}"},
 		{"get", "/api/core/agent/threads/{thread_id}/messages"},
 		{"post", "/api/core/agent/threads/{thread_id}/messages"},
 		{"post", "/api/core/agent/threads/{thread_id}/start"},
@@ -143,6 +144,14 @@ func TestOpenAPISpecIncludesAgentEvoContracts(t *testing.T) {
 	}
 
 	paths := spec["paths"].(map[string]any)
+	for _, gateDetailPath := range []string{
+		"/api/core/agent/threads/{thread_id}/gates/eval/versions/{version}/bad-cases",
+		"/api/core/agent/threads/{thread_id}/gates/abtest/versions/{version}/case-details",
+	} {
+		if _, ok := paths[gateDetailPath]; !ok {
+			t.Fatalf("gate detail path missing from openapi spec: %s", gateDetailPath)
+		}
+	}
 	for _, legacyPath := range []string{
 		"/api/core/agent/threads/{thread_id}:events",
 		"/api/core/agent/threads/{thread_id}:messages",
@@ -159,7 +168,6 @@ func TestOpenAPISpecIncludesAgentEvoContracts(t *testing.T) {
 		"/api/core/agent/threads/{thread_id}/results/{kind}:download",
 		"/api/core/agent/threads/{thread_id}/results/datasets",
 		"/api/core/agent/threads/{thread_id}/results/abtests/{abtest_id}/case-details",
-		"/api/core/agent/threads/{thread_id}/results/traces/{trace_id}",
 		"/api/core/agent/threads/{thread_id}/results/traces-compare",
 		"/api/core/agent/reports/{report_id}:content",
 		"/api/core/agent/diffs/{apply_id}/{filename:.*}",
