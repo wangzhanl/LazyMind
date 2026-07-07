@@ -82,7 +82,8 @@ func statusForMessage(message string) int {
 	case strings.Contains(msg, "another user"), strings.Contains(msg, "not for target user"),
 		strings.Contains(msg, "forbidden"):
 		return http.StatusForbidden
-	case strings.Contains(msg, "stale draft version"):
+	case strings.Contains(msg, "stale draft version"), strings.Contains(msg, "stale review version"),
+		strings.Contains(msg, "draft snapshot changed"):
 		return http.StatusConflict
 	case strings.Contains(msg, "while draft overlay exists"), strings.Contains(msg, "draft belongs to another task"),
 		strings.Contains(msg, "cannot rollback while draft overlay exists"):
@@ -116,7 +117,8 @@ func codeForMessage(message string, status int) string {
 		return CodeInvalidPath
 	case strings.Contains(msg, "draft overlay is empty"):
 		return CodeEmptyDraft
-	case strings.Contains(msg, "stale draft version"):
+	case strings.Contains(msg, "stale draft version"), strings.Contains(msg, "stale review version"),
+		strings.Contains(msg, "draft snapshot changed"):
 		return CodeDraftVersionConflict
 	case strings.Contains(msg, "while draft overlay exists"), strings.Contains(msg, "draft belongs to another task"),
 		strings.Contains(msg, "cannot rollback while draft overlay exists"):
