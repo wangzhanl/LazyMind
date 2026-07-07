@@ -16,6 +16,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/gorilla/mux"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 
 	"lazymind/core/common"
 	"lazymind/core/common/orm"
@@ -302,8 +303,26 @@ func ListThreadRecords(w http.ResponseWriter, r *http.Request) {
 }
 
 func ListThreadSteps(w http.ResponseWriter, r *http.Request) {
-	threadID, ok := ownerCheckedThreadID(w, r)
-	if !ok {
+	db := store.DB()
+	if db == nil {
+		common.ReplyErr(w, "store not initialized", http.StatusInternalServerError)
+		return
+	}
+	threadID := strings.TrimSpace(mux.Vars(r)["thread_id"])
+	if _, err := loadUserThread(db, r, threadID); err != nil {
+		replyThreadLoadError(w, err)
+		return
+	}
+	if err := syncThreadStepsFromUpstream(r.Context(), r, db, threadID); err != nil {
+		common.ReplyErrWithData(w, "sync upstream projection steps failed", map[string]any{"detail": err.Error()}, evoProxyStatusCode(err))
+		return
+	}
+
+	var steps []orm.AgentThreadStep
+	if err := db.Where("thread_id = ?", threadID).
+		Order("order_index ASC, created_at ASC, step_id ASC").
+		Find(&steps).Error; err != nil {
+		common.ReplyErr(w, fmt.Sprintf("%s: %v", "list thread steps failed", err), http.StatusInternalServerError)
 		return
 	}
 

@@ -1514,6 +1514,8 @@ func TestListThreadStepsProxiesEvoResponse(t *testing.T) {
 	}).Error; err != nil {
 		t.Fatalf("create thread: %v", err)
 	}
+	stepOneID := "aaaaaaaa-aaaa-5aaa-8aaa-aaaaaaaaaaaa"
+	stepTwoID := "bbbbbbbb-bbbb-5bbb-8bbb-bbbbbbbbbbbb"
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet || r.URL.Path != "/threads/thr_1/steps" {
 			http.Error(w, "unexpected request", http.StatusNotFound)
@@ -1621,7 +1623,14 @@ func TestListThreadStepsSyncsProjectionStepsFromUpstream(t *testing.T) {
 	rec := httptest.NewRecorder()
 	ListThreadSteps(rec, req)
 
-	var response map[string]any
+	var response struct {
+		Code int `json:"code"`
+		Data struct {
+			ActiveStepID string               `json:"active_step_id"`
+			Items        []threadStepResponse `json:"items"`
+			TotalSize    int                  `json:"total_size"`
+		} `json:"data"`
+	}
 	if err := json.NewDecoder(rec.Body).Decode(&response); err != nil {
 		t.Fatalf("decode response: %v", err)
 	}
@@ -1700,8 +1709,12 @@ func TestListThreadStepsClearsLocalStepsWhenUpstreamProjectionIsEmpty(t *testing
 	if rec.Code != http.StatusOK {
 		t.Fatalf("expected ok response, status=%d body=%s", rec.Code, rec.Body.String())
 	}
-	if response["thread_id"] != "thr_1" {
-		t.Fatalf("expected raw evo response, got %#v", response)
+	var count int64
+	if err := db.DB.Model(&orm.AgentThreadStep{}).Where("thread_id = ?", "thr_1").Count(&count).Error; err != nil {
+		t.Fatalf("count steps: %v", err)
+	}
+	if count != 0 {
+		t.Fatalf("expected local steps to be cleared, got %d", count)
 	}
 }
 
