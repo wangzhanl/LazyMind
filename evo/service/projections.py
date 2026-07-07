@@ -11,6 +11,8 @@ from fastapi import HTTPException
 
 from evo.artifact_runtime.evo import catalog as C
 from evo.artifact_runtime.kernel import ArtifactKey, ArtifactRef
+from evo.operations.abtest.materializers import compare_eval_detail_for_repair
+from evo.operations.eval.materializers import build_eval_detail_summary
 from evo.operations.repair.trace import RepairTraceStore
 
 from .runtime_port import RuntimePort
@@ -225,6 +227,67 @@ class ProjectionService:
         content = detail['content'] if isinstance(detail['content'], Mapping) else {}
         return _candidate_row(thread_id, step, version, content, detail=True)
 
+    def eval_bad_cases(
+        self,
+        thread_id: str,
+        version: int,
+        page_size: int,
+        page_token: str,
+        keyword: str = '',
+        failure_type: str = '',
+    ) -> dict[str, Any]:
+        self._require_thread(thread_id)
+        store = self.runtime.store()
+        try:
+            record = self._gate_record(thread_id, 'eval', version, store)
+            summary = _eval_detail_summary_from_record(store, thread_id, record, C.EVAL_JUDGE_RESULT)
+            rows = [
+                _bad_case_item(row)
+                for row in _list_of_mappings(summary.get('bad_cases'))
+            ]
+        finally:
+            store.close()
+        rows = _filter_keyword(rows, keyword, ('case_id', 'question', 'defect', 'reason', 'failure_type'))
+        if failure_type:
+            rows = [row for row in rows if row.get('failure_type') == failure_type]
+        page, next_token, total = _page(rows, page_size, page_token)
+        return {'items': [public_value(row) for row in page],
+                'next_page_token': next_token, 'total_size': total}
+
+    def abtest_case_details(
+        self,
+        thread_id: str,
+        version: int,
+        page_size: int,
+        page_token: str,
+        keyword: str = '',
+        outcome: str = '',
+    ) -> dict[str, Any]:
+        self._require_thread(thread_id)
+        store = self.runtime.store()
+        try:
+            record = self._gate_record(thread_id, 'abtest', version, store)
+            comparison = _abtest_detail_from_record(store, thread_id, record)
+            rows = _abtest_case_detail_items(comparison)
+        finally:
+            store.close()
+        rows = _filter_keyword(rows, keyword, ('case_id', 'query', 'outcome'))
+        if outcome:
+            rows = [row for row in rows if row.get('outcome') == outcome]
+        page, next_token, total = _page(rows, page_size, page_token)
+        return {'items': [public_value(row) for row in page], 'next_page_token': next_token, 'total_size': total}
+
+    def _gate_record(self, thread_id: str, step: str, version: int, store: Any) -> Any:
+        if step not in C.ROOTS:
+            raise HTTPException(422, f'step must be one of: {", ".join(C.STEPS)}')
+        if version < 1:
+            raise HTTPException(422, 'version must be positive')
+        ref = ArtifactRef(ArtifactKey.of(C.ROOTS[step]), version)
+        record = store.get(thread_id, ref)
+        if record is None or record.run_id != thread_id:
+            raise HTTPException(404, 'gate artifact version not found')
+        return record
+
     def _candidate_items(self, thread_id: str) -> list[dict[str, Any]]:
         rows = []
         store = self.runtime.store()
@@ -302,6 +365,219 @@ def _summary(data: Mapping[str, Any]) -> dict[str, Any]:
                                                     'candidate_algo_id') if key in data},
         **({'diff_files': [item for item in diff if _safe_file(str(item))]} if diff else {}),
     }
+
+
+def _eval_detail_summary_from_record(
+    store: Any,
+    thread_id: str,
+    record: Any,
+    judge_artifact_id: str,
+) -> dict[str, Any]:
+    value = record.value if isinstance(record.value, Mapping) else {}
+    if 'bad_cases' in value or 'rows' in value:
+        detail = dict(value)
+        detail.setdefault(
+            'bad_cases',
+            [row for row in _list_of_mappings(value.get('rows')) if row.get('quality_label') != 'good'],
+        )
+        return detail
+
+    judge_refs = _input_refs(record, judge_artifact_id, partitioned=True)
+    if not judge_refs:
+        raise HTTPException(409, f'{_ref_text(record.ref)} has no {judge_artifact_id} provenance')
+    judges = tuple(_values_for_refs(store, thread_id, judge_refs))
+    return build_eval_detail_summary(judges)
+
+
+def _abtest_detail_from_record(store: Any, thread_id: str, record: Any) -> dict[str, Any]:
+    value = record.value if isinstance(record.value, Mapping) else {}
+    case_deltas = _comparison_case_deltas(value)
+    summary = value.get('summary') if isinstance(value.get('summary'), Mapping) else {}
+    if 'case_deltas' in value or 'case_deltas' in summary:
+        detail = dict(value)
+        detail['case_deltas'] = case_deltas
+        return detail
+
+    baseline_record = _input_record(store, thread_id, record, C.ROOTS['eval'])
+    candidate_record = _input_record(store, thread_id, record, C.ABTEST_CANDIDATE_EVAL_SUMMARY)
+    baseline = _eval_detail_summary_from_record(store, thread_id, baseline_record, C.EVAL_JUDGE_RESULT)
+    candidate = _eval_detail_summary_from_record(
+        store,
+        thread_id,
+        candidate_record,
+        C.ABTEST_CANDIDATE_JUDGE_RESULT,
+    )
+    return _enrich_abtest_case_deltas(compare_eval_detail_for_repair(baseline, candidate), baseline, candidate)
+
+
+def _input_record(store: Any, thread_id: str, record: Any, artifact_id: str) -> Any:
+    refs = _input_refs(record, artifact_id, partitioned=False)
+    if not refs:
+        raise HTTPException(409, f'{_ref_text(record.ref)} has no {artifact_id} provenance')
+    result = store.get(thread_id, refs[0])
+    if result is None:
+        raise HTTPException(409, f'{_ref_text(refs[0])} provenance payload is missing')
+    return result
+
+
+def _input_refs(record: Any, artifact_id: str, *, partitioned: bool) -> list[ArtifactRef]:
+    refs = [
+        ref for key, ref in record.input_refs.items()
+        if key.artifact_id == artifact_id and bool(key.partition) == partitioned
+    ]
+    return sorted(refs, key=lambda ref: ref.key.partition)
+
+
+def _values_for_refs(store: Any, thread_id: str, refs: list[ArtifactRef]) -> list[Mapping[str, Any]]:
+    values: list[Mapping[str, Any]] = []
+    for ref in refs:
+        record = store.get(thread_id, ref)
+        if record is not None and isinstance(record.value, Mapping):
+            values.append(record.value)
+    return values
+
+
+def _list_of_mappings(value: object) -> list[dict[str, Any]]:
+    if not isinstance(value, list):
+        return []
+    return [dict(item) for item in value if isinstance(item, Mapping)]
+
+
+def _bad_case_item(row: Mapping[str, Any]) -> dict[str, Any]:
+    score_source = (
+        row.get('answer_correctness')
+        if row.get('answer_correctness') is not None
+        else row.get('overall_score')
+    )
+    score = _number(score_source)
+    payload = dict(row)
+    payload.update({
+        'query': row.get('query') or row.get('question'),
+        'reference': row.get('reference') or row.get('ground_truth'),
+        'answer': row.get('answer') or row.get('rag_answer'),
+        'score': score,
+        'Defect': row.get('Defect') or row.get('defect'),
+        'Reason': row.get('Reason') or row.get('reason'),
+        'trace_status': row.get('trace_status') or ('linked' if row.get('trace_id') else ''),
+        'failure_detail': row.get('failure_detail') or row.get('chat_error_message')
+        or row.get('reason') or row.get('failure_type'),
+    })
+    return payload
+
+
+def _abtest_case_detail_items(comparison: Mapping[str, Any]) -> list[dict[str, Any]]:
+    return [_abtest_case_detail_item(row) for row in _comparison_case_deltas(comparison)]
+
+
+def _comparison_case_deltas(comparison: Mapping[str, Any]) -> list[dict[str, Any]]:
+    case_deltas = _list_of_mappings(comparison.get('case_deltas'))
+    if case_deltas:
+        return case_deltas
+    summary = comparison.get('summary') if isinstance(comparison.get('summary'), Mapping) else {}
+    return _list_of_mappings(summary.get('case_deltas'))
+
+
+def _abtest_case_detail_item(row: Mapping[str, Any]) -> dict[str, Any]:
+    before = dict(row.get('before') if isinstance(row.get('before'), Mapping) else {})
+    after = dict(row.get('after') if isinstance(row.get('after'), Mapping) else {})
+    payload = dict(row)
+    payload['before'] = before
+    payload['after'] = after
+    payload.setdefault('baseline', before)
+    payload.setdefault('candidate', after)
+    payload.setdefault('query', row.get('question') or '')
+    payload.setdefault('a_trace_id', row.get('baseline_trace_id') or before.get('trace_id'))
+    payload.setdefault('b_trace_id', row.get('candidate_trace_id') or after.get('trace_id'))
+    payload.setdefault('baseline_trace_id', payload.get('a_trace_id'))
+    payload.setdefault('candidate_trace_id', payload.get('b_trace_id'))
+    return payload
+
+
+def _enrich_abtest_case_deltas(
+    comparison: Mapping[str, Any],
+    baseline: Mapping[str, Any],
+    candidate: Mapping[str, Any],
+) -> dict[str, Any]:
+    baseline_rows = _rows_by_case(baseline.get('rows'))
+    candidate_rows = _rows_by_case(candidate.get('rows'))
+    detail = dict(comparison)
+    detail['case_deltas'] = [
+        _enrich_abtest_case_delta(row, baseline_rows, candidate_rows)
+        for row in _comparison_case_deltas(detail)
+    ]
+    summary = dict(detail.get('summary') if isinstance(detail.get('summary'), Mapping) else {})
+    if summary:
+        summary['case_deltas'] = detail['case_deltas']
+        detail['summary'] = summary
+    return detail
+
+
+def _enrich_abtest_case_delta(
+    row: Mapping[str, Any],
+    baseline_rows: Mapping[str, Mapping[str, Any]],
+    candidate_rows: Mapping[str, Mapping[str, Any]],
+) -> dict[str, Any]:
+    case_id = _text(row.get('case_id'))
+    baseline = baseline_rows.get(case_id, {})
+    candidate = candidate_rows.get(case_id, {})
+    before = dict(row.get('before') if isinstance(row.get('before'), Mapping) else {})
+    after = dict(row.get('after') if isinstance(row.get('after'), Mapping) else {})
+    before.setdefault('trace_id', baseline.get('trace_id'))
+    after.setdefault('trace_id', candidate.get('trace_id'))
+    before.setdefault('quality_label', baseline.get('quality_label'))
+    after.setdefault('quality_label', candidate.get('quality_label'))
+    return {
+        **dict(row),
+        'query': baseline.get('query') or baseline.get('question')
+        or candidate.get('query') or candidate.get('question') or '',
+        'before': before,
+        'after': after,
+        'baseline': before,
+        'candidate': after,
+        'baseline_trace_id': baseline.get('trace_id'),
+        'candidate_trace_id': candidate.get('trace_id'),
+        'a_trace_id': baseline.get('trace_id'),
+        'b_trace_id': candidate.get('trace_id'),
+        'question_type': baseline.get('question_type') or candidate.get('question_type'),
+    }
+
+
+def _rows_by_case(value: object) -> dict[str, Mapping[str, Any]]:
+    return {
+        _text(row.get('case_id')): row
+        for row in _list_of_mappings(value)
+        if _text(row.get('case_id'))
+    }
+
+
+def _filter_keyword(rows: list[dict[str, Any]], keyword: str, fields: tuple[str, ...]) -> list[dict[str, Any]]:
+    text = keyword.strip().lower()
+    if not text:
+        return rows
+    return [
+        row for row in rows
+        if any(text in str(row.get(field) or '').lower() for field in fields)
+    ]
+
+
+def _page(rows: list[dict[str, Any]], page_size: int, page_token: str) -> tuple[list[dict[str, Any]], str, int]:
+    offset = int(page_token or 0) if str(page_token or '0').isdigit() else -1
+    if offset < 0:
+        raise HTTPException(422, 'page_token must be an integer offset')
+    page = rows[offset:offset + page_size]
+    next_token = str(offset + page_size) if offset + page_size < len(rows) else ''
+    return page, next_token, len(rows)
+
+
+def _number(value: object) -> float:
+    try:
+        return round(float(value or 0.0), 4)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _text(value: object) -> str:
+    return str(value or '').strip()
 
 
 def _normalized_step_id(value: str) -> str:

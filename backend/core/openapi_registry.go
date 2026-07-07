@@ -499,6 +499,30 @@ type agentThreadGatePathParams struct {
 	Version  int32  `path:"version"`
 }
 
+type agentThreadGateVersionPathParams struct {
+	ThreadID string `path:"thread_id"`
+	Version  int32  `path:"version"`
+}
+
+type agentThreadTracePathParams struct {
+	ThreadID string `path:"thread_id"`
+	TraceID  string `path:"trace_id"`
+}
+
+type agentThreadEvalBadCasesQueryParams struct {
+	PageSize    int32  `query:"page_size"`
+	PageToken   string `query:"page_token"`
+	Keyword     string `query:"keyword"`
+	FailureType string `query:"failure_type"`
+}
+
+type agentThreadABTestCaseDetailsQueryParams struct {
+	PageSize  int32  `query:"page_size"`
+	PageToken string `query:"page_token"`
+	Keyword   string `query:"keyword"`
+	Outcome   string `query:"outcome"`
+}
+
 type agentThreadEventsQueryParams struct {
 	StepID string `query:"step_id"`
 }
@@ -3226,6 +3250,35 @@ func registeredCoreOperations() []openAPIOperation {
 			Tags:        []string{"agent"},
 			PathParams:  agentThreadGatePathParams{},
 			Responses:   map[int]openAPIResponse{200: evoGateContentResp},
+		},
+		{
+			Method:      "GET",
+			Path:        "/agent/threads/{thread_id}/gates/eval/versions/{version}/bad-cases",
+			Summary:     "List eval bad cases for a gate version",
+			Description: "Proxies Evo GET /threads/{thread_id}/gates/eval/versions/{version}/bad-cases.",
+			Tags:        []string{"agent"},
+			PathParams:  agentThreadGateVersionPathParams{},
+			QueryParams: agentThreadEvalBadCasesQueryParams{},
+			Responses:   map[int]openAPIResponse{200: evoJSONResp("Evo eval bad case page")},
+		},
+		{
+			Method:      "GET",
+			Path:        "/agent/threads/{thread_id}/gates/abtest/versions/{version}/case-details",
+			Summary:     "List AB test case details for a gate version",
+			Description: "Proxies Evo GET /threads/{thread_id}/gates/abtest/versions/{version}/case-details.",
+			Tags:        []string{"agent"},
+			PathParams:  agentThreadGateVersionPathParams{},
+			QueryParams: agentThreadABTestCaseDetailsQueryParams{},
+			Responses:   map[int]openAPIResponse{200: evoJSONResp("Evo AB test case detail page")},
+		},
+		{
+			Method:      "GET",
+			Path:        "/agent/threads/{thread_id}/results/traces/{trace_id}",
+			Summary:     "Get agent trace detail",
+			Description: "Proxies Evo GET /threads/{thread_id}/results/traces/{trace_id}.",
+			Tags:        []string{"agent"},
+			PathParams:  agentThreadTracePathParams{},
+			Responses:   map[int]openAPIResponse{200: evoJSONResp("Evo trace detail")},
 		},
 		{
 			Method:      "GET",

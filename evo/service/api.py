@@ -177,6 +177,36 @@ def create_app() -> FastAPI:
             raise HTTPException(422, 'step_id is required')
         return _event_stream(service, thread_id, step_id, request, service.projections.event_trace)
 
+    @app.get('/threads/{thread_id}/gates/eval/versions/{version}/bad-cases')
+    def eval_report_bad_cases(
+        thread_id: str,
+        version: int,
+        page_size: Annotated[int, Query(ge=1, le=200)] = 50,
+        page_token: str = '',
+        keyword: str = '',
+        failure_type: str = '',
+    ) -> dict[str, Any]:
+        return service.projections.eval_bad_cases(thread_id, version, page_size, page_token, keyword, failure_type)
+
+    @app.get('/threads/{thread_id}/gates/abtest/versions/{version}/case-details')
+    def abtest_case_details(
+        thread_id: str,
+        version: int,
+        page_size: Annotated[int, Query(ge=1, le=200)] = 50,
+        page_token: str = '',
+        keyword: str = '',
+        outcome: str = '',
+    ) -> dict[str, Any]:
+        return service.projections.abtest_case_details(thread_id, version, page_size, page_token, keyword, outcome)
+
+    @app.get('/threads/{thread_id}/results/traces/{trace_id}')
+    def trace_detail(thread_id: str, trace_id: str) -> dict[str, Any]:
+        if service.threads.runtime.run_config(thread_id) is None:
+            raise HTTPException(404, f'thread not found: {thread_id}')
+        from evo.traces import build_trace_detail_view
+
+        return build_trace_detail_view(trace_id)
+
     @app.get('/threads/{thread_id}/messages')
     def message_history_api(
         thread_id: str,

@@ -106,6 +106,9 @@ Core 调用的 Evo 端点:
 | GET | `/threads/{thread_id}/gates` | 查询 gate 列表 | `agent/handlers.go` |
 | GET | `/threads/{thread_id}/gates/{step}/versions/{version}` | 查询 gate 内容 | `agent/handlers.go` |
 | GET | `/threads/{thread_id}/gates/{step}/versions/{version}:download` | 下载 gate 内容 | `agent/handlers.go` |
+| GET | `/threads/{thread_id}/gates/eval/versions/{version}/bad-cases` | 查询指定 eval 产物版本的坏例明细 | `agent/handlers.go` |
+| GET | `/threads/{thread_id}/gates/abtest/versions/{version}/case-details` | 查询指定 ABTest 产物版本的 case 对比明细 | `agent/handlers.go` |
+| GET | `/threads/{thread_id}/results/traces/{trace_id}` | 查询 LazyLLM trace 详情视图 | `agent/handlers.go` |
 | GET | `/threads/{thread_id}/messages` | 查询消息历史 | `agent/handlers.go` |
 | POST | `/threads/{thread_id}/messages` | 发送消息，支持 JSON 或 SSE 响应 | `agent/handlers.go` |
 | GET | `/candidates` | 查询候选产物 | `agent/handlers.go` |
