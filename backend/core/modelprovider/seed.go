@@ -16,8 +16,9 @@ import (
 )
 
 type catalogModel struct {
-	Name string `yaml:"name"`
-	Type string `yaml:"type"`
+	Name           string `yaml:"name"`
+	Type           string `yaml:"type"`
+	MaxInputTokens *int64 `yaml:"max_input_tokens"`
 }
 
 type catalogSupplier struct {
@@ -114,6 +115,9 @@ func upsertDefaultModel(tx *gorm.DB, now time.Time, providerID, providerName str
 	if name == "" || modelType == "" {
 		return errors.New("model name and type are required")
 	}
+	if item.MaxInputTokens != nil && *item.MaxInputTokens <= 0 {
+		return errors.New("model max_input_tokens must be greater than zero")
+	}
 
 	var row orm.DefaultModel
 	err := tx.Where("default_model_provider_id = ? AND name = ?", providerID, name).Take(&row).Error
@@ -124,22 +128,48 @@ func upsertDefaultModel(tx *gorm.DB, now time.Time, providerID, providerName str
 			ProviderName:           providerName,
 			Name:                   name,
 			ModelType:              modelType,
+			MaxInputTokens:         item.MaxInputTokens,
 			CreatedAt:              now,
 			UpdatedAt:              now,
 		}
-		return tx.Create(&row).Error
+		if err := tx.Create(&row).Error; err != nil {
+			return err
+		}
+		return syncDefaultModelMaxInputTokens(tx, now, providerID, name, item.MaxInputTokens)
 	}
 	if err != nil {
 		return err
 	}
 
-	return tx.Model(&orm.DefaultModel{}).
+	if err := tx.Model(&orm.DefaultModel{}).
 		Where("id = ?", row.ID).
 		Updates(map[string]any{
-			"provider_name": providerName,
-			"model_type":    modelType,
-			"updated_at":    now,
-			"deleted_at":    nil,
+			"provider_name":    providerName,
+			"model_type":       modelType,
+			"max_input_tokens": item.MaxInputTokens,
+			"updated_at":       now,
+			"deleted_at":       nil,
+		}).Error; err != nil {
+		return err
+	}
+	return syncDefaultModelMaxInputTokens(tx, now, providerID, name, item.MaxInputTokens)
+}
+
+// syncDefaultModelMaxInputTokens backfills known catalog metadata into default models already
+// copied to user groups. Unknown limits and custom models are intentionally left untouched.
+func syncDefaultModelMaxInputTokens(tx *gorm.DB, now time.Time, providerID, modelName string, maxInputTokens *int64) error {
+	if maxInputTokens == nil {
+		return nil
+	}
+	providerIDs := tx.Model(&orm.UserModelProvider{}).
+		Select("id").
+		Where("default_model_provider_id = ? AND deleted_at IS NULL", providerID)
+	return tx.Model(&orm.UserModelProviderGroupModel{}).
+		Where("is_default = ? AND name = ? AND user_model_provider_id IN (?) AND deleted_at IS NULL", true, modelName, providerIDs).
+		Where("max_input_tokens IS NULL OR max_input_tokens <> ?", *maxInputTokens).
+		Updates(map[string]any{
+			"max_input_tokens": maxInputTokens,
+			"updated_at":       now,
 		}).Error
 }
 
