@@ -7,6 +7,7 @@ import (
 	"io"
 	"log"
 	"os"
+	"strings"
 )
 
 func main() {
@@ -81,6 +82,26 @@ func (c *CLI) Run(ctx context.Context, args []string) error {
 			_, _ = io.WriteString(c.out, "\n")
 		}
 		return nil
+	case "reset":
+		scope, profile, repoRoot, err := parseResetArgs(args[1:], c.errOut)
+		if err != nil {
+			return err
+		}
+		cfg, paths, err := NewRuntimeConfig(profile, repoRoot)
+		if err != nil {
+			return err
+		}
+		return manager.Reset(ctx, cfg, paths, scope)
+	case "service":
+		service, action, profile, repoRoot, err := parseServiceArgs(args[1:], c.errOut)
+		if err != nil {
+			return err
+		}
+		cfg, paths, err := NewRuntimeConfig(profile, repoRoot)
+		if err != nil {
+			return err
+		}
+		return manager.RunServiceAction(ctx, cfg, paths, service, action)
 	case "internal":
 		return c.runInternal(ctx, manager, args[1:])
 	default:
@@ -146,10 +167,22 @@ func (c *CLI) runInternal(ctx context.Context, manager *RuntimeManager, args []s
 		return manager.coreService.Run(ctx, cfg, paths)
 	case "core-down":
 		return manager.coreService.Down(ctx, cfg, paths)
+	case "scan-control-plane-run":
+		return manager.scanControl.Run(ctx, cfg, paths)
+	case "scan-control-plane-down":
+		return manager.scanControl.Down(ctx, paths)
+	case "file-watcher-run":
+		return manager.fileWatcher.Run(ctx, cfg, paths)
+	case "file-watcher-down":
+		return manager.fileWatcher.Down(ctx, paths)
 	case "frontend-run":
 		return manager.frontend.Run(ctx, cfg, paths)
 	case "frontend-down":
 		return manager.frontend.Down(ctx, cfg, paths)
+	case "milvus-lite-run":
+		return manager.milvusLite.Run(ctx, cfg, paths)
+	case "milvus-lite-down":
+		return manager.milvusLite.Down(ctx, paths)
 	default:
 		return fmt.Errorf("unknown internal command: %s", sub)
 	}
@@ -202,10 +235,53 @@ func parseStatusArgs(args []string, out io.Writer) (bool, string, string, error)
 	return *asJSON, *profile, *repoRoot, nil
 }
 
+func parseResetArgs(args []string, out io.Writer) (ResetScope, string, string, error) {
+	fs := flag.NewFlagSet("reset", flag.ContinueOnError)
+	fs.SetOutput(out)
+	scopeText := fs.String("scope", string(ResetScopeKB), "")
+	profile := fs.String("profile", defaultProfileValue(), "")
+	repoRoot := fs.String("repo-root", "", "")
+	if err := fs.Parse(args); err != nil {
+		return "", "", "", err
+	}
+	if len(fs.Args()) != 0 {
+		return "", "", "", fmt.Errorf("unexpected positional args: %v", fs.Args())
+	}
+	scope, err := parseResetScope(*scopeText)
+	if err != nil {
+		return "", "", "", err
+	}
+	return scope, *profile, *repoRoot, nil
+}
+
+func parseServiceArgs(args []string, out io.Writer) (string, string, string, string, error) {
+	fs := flag.NewFlagSet("service", flag.ContinueOnError)
+	fs.SetOutput(out)
+	service := fs.String("name", "", "")
+	action := fs.String("action", "", "")
+	profile := fs.String("profile", defaultProfileValue(), "")
+	repoRoot := fs.String("repo-root", "", "")
+	if err := fs.Parse(args); err != nil {
+		return "", "", "", "", err
+	}
+	if len(fs.Args()) != 0 {
+		return "", "", "", "", fmt.Errorf("unexpected positional args: %v", fs.Args())
+	}
+	if strings.TrimSpace(*service) == "" {
+		return "", "", "", "", fmt.Errorf("--name is required")
+	}
+	if strings.TrimSpace(*action) == "" {
+		return "", "", "", "", fmt.Errorf("--action is required")
+	}
+	return *service, *action, *profile, *repoRoot, nil
+}
+
 func (c *CLI) usage() {
 	_, _ = io.WriteString(c.out, "Usage:\n")
 	_, _ = io.WriteString(c.out, "  lazymind-local up --profile <profile>\n")
 	_, _ = io.WriteString(c.out, "  lazymind-local down --profile <profile>\n")
 	_, _ = io.WriteString(c.out, "  lazymind-local status --json\n")
-	_, _ = io.WriteString(c.out, "  lazymind-local internal compose-up|compose-down|compose-services|local-proxy-run|local-proxy-down|auth-service-run|auth-service-down|core-run|core-down|frontend-run|frontend-down|algorithm-run|algorithm-down --profile <profile>\n")
+	_, _ = io.WriteString(c.out, "  lazymind-local reset --scope kb|all --profile <profile>\n")
+	_, _ = io.WriteString(c.out, "  lazymind-local service --name file-watcher --action build|start|stop --profile <profile>\n")
+	_, _ = io.WriteString(c.out, "  lazymind-local internal compose-up|compose-down|compose-services|local-proxy-run|local-proxy-down|auth-service-run|auth-service-down|core-run|core-down|scan-control-plane-run|scan-control-plane-down|file-watcher-run|file-watcher-down|frontend-run|frontend-down|milvus-lite-run|milvus-lite-down|algorithm-run|algorithm-down --profile <profile>\n")
 }

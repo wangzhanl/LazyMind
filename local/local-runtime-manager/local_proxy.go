@@ -80,12 +80,29 @@ func localRuntimeEnv(cfg RuntimeConfig) []string {
 	return []string{
 		processComposePortEnvVar + "=" + strconv.Itoa(cfg.ProcessComposePort),
 		frontendPortEnvVar + "=" + strconv.Itoa(cfg.FrontendPort),
+		frontendLANOriginEnvVar + "=" + frontendLANOrigin(cfg),
+		localNetworkProfileEnvVar + "=" + cfg.NetworkProfile,
 		localProxyAddressEnvVar + "=" + cfg.LocalProxy.Address,
 		localProxyPortEnvVar + "=" + strconv.Itoa(cfg.LocalProxy.Port),
+		localAuthPortEnvVar + "=" + strconv.Itoa(cfg.LocalProxy.AuthHostPort),
 		localProxyAuthHostPortEnvVar + "=" + strconv.Itoa(cfg.LocalProxy.AuthHostPort),
 		localProxyCoreHostPortEnvVar + "=" + strconv.Itoa(cfg.LocalProxy.CoreHostPort),
 		localProxyChatHostPortEnvVar + "=" + strconv.Itoa(cfg.LocalProxy.ChatHostPort),
 		localProxyScanHostPortEnvVar + "=" + strconv.Itoa(cfg.LocalProxy.ScanHostPort),
 		localProxyEvoHostPortEnvVar + "=" + strconv.Itoa(cfg.LocalProxy.EvoHostPort),
 	}
+}
+
+func frontendLANOrigin(cfg RuntimeConfig) string {
+	if explicit := strings.TrimSpace(os.Getenv(frontendLANOriginEnvVar)); explicit != "" {
+		return explicit
+	}
+	if cfg.NetworkProfile != "lan" {
+		return ""
+	}
+	ip := firstLANIPv4()
+	if ip == "" {
+		return ""
+	}
+	return "http://" + ip + ":" + strconv.Itoa(cfg.FrontendPort)
 }
