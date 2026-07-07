@@ -1587,6 +1587,8 @@ func TestListThreadStepsSyncsProjectionStepsFromUpstream(t *testing.T) {
 
 	stepOneID := "aaaaaaaa-aaaa-5aaa-8aaa-aaaaaaaaaaaa"
 	stepTwoID := "bbbbbbbb-bbbb-5bbb-8bbb-bbbbbbbbbbbb"
+	versionOne := 1
+	versionTwo := 2
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet || r.URL.Path != "/threads/thr_1/steps" {
 			http.Error(w, "unexpected request", http.StatusNotFound)
@@ -1596,8 +1598,8 @@ func TestListThreadStepsSyncsProjectionStepsFromUpstream(t *testing.T) {
 			ThreadID:     "thr_1",
 			ActiveStepID: stepTwoID,
 			Items: []evoStep{
-				{ThreadID: "thr_1", StepID: stepOneID, Stage: "dataset", Title: "dataset", Status: "completed", Active: false, OrderIndex: 0, EventCount: 4, NextStepID: stepTwoID},
-				{ThreadID: "thr_1", StepID: stepTwoID, Stage: "eval", Title: "eval", Status: "running", Active: true, OrderIndex: 1, EventCount: 1},
+				{ThreadID: "thr_1", StepID: stepOneID, Stage: "dataset", Title: "dataset", Status: "completed", Active: false, OrderIndex: 0, EventCount: 4, NextStepID: stepTwoID, Version: &versionOne},
+				{ThreadID: "thr_1", StepID: stepTwoID, Stage: "eval", Title: "eval", Status: "running", Active: true, OrderIndex: 1, EventCount: 1, Version: &versionTwo},
 			},
 			TotalSize: 2,
 		})
@@ -1632,6 +1634,9 @@ func TestListThreadStepsSyncsProjectionStepsFromUpstream(t *testing.T) {
 		response.Data.Items[0].Stage != "dataset" || response.Data.Items[0].NextStepID != stepTwoID {
 		t.Fatalf("unexpected first synced step: %#v", response.Data.Items)
 	}
+	if response.Data.Items[0].Version == nil || *response.Data.Items[0].Version != versionOne {
+		t.Fatalf("expected first synced step version %d, got %#v", versionOne, response.Data.Items[0].Version)
+	}
 
 	var staleCount int64
 	if err := db.DB.Model(&orm.AgentThreadStep{}).Where("thread_id = ? AND step_id = ?", "thr_1", "stale").Count(&staleCount).Error; err != nil {
@@ -1639,6 +1644,13 @@ func TestListThreadStepsSyncsProjectionStepsFromUpstream(t *testing.T) {
 	}
 	if staleCount != 0 {
 		t.Fatalf("expected stale local step to be deleted, got %d", staleCount)
+	}
+	var persisted orm.AgentThreadStep
+	if err := db.DB.Where("thread_id = ? AND step_id = ?", "thr_1", stepOneID).First(&persisted).Error; err != nil {
+		t.Fatalf("load persisted step: %v", err)
+	}
+	if persisted.Version == nil || *persisted.Version != versionOne {
+		t.Fatalf("expected persisted version %d, got %#v", versionOne, persisted.Version)
 	}
 }
 

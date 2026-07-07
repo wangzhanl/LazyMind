@@ -59,6 +59,7 @@ type threadStepResponse struct {
 	Active        bool       `json:"active"`
 	OrderIndex    int        `json:"order_index"`
 	EventCount    int64      `json:"event_count"`
+	Version       *int       `json:"version"`
 	CurrentTaskID string     `json:"current_task_id,omitempty"`
 	NextStepID    string     `json:"next_step_id"`
 	StartedAt     *time.Time `json:"started_at,omitempty"`
@@ -386,6 +387,7 @@ func syncThreadStepsFromUpstream(ctx context.Context, r *http.Request, db *gorm.
 				OrderIndex: item.OrderIndex,
 				EventCount: item.EventCount,
 				NextStepID: nextStepID,
+				Version:    item.Version,
 				StartedAt:  &now,
 				EndedAt:    endedAt,
 				CreatedAt:  now,
@@ -399,6 +401,7 @@ func syncThreadStepsFromUpstream(ctx context.Context, r *http.Request, db *gorm.
 				"order_index":  item.OrderIndex,
 				"event_count":  item.EventCount,
 				"next_step_id": nextStepID,
+				"version":      item.Version,
 				"updated_at":   now,
 			}
 			if active {
@@ -2015,6 +2018,7 @@ func toThreadStepResponse(step orm.AgentThreadStep) threadStepResponse {
 		Active:        step.Active,
 		OrderIndex:    step.OrderIndex,
 		EventCount:    step.EventCount,
+		Version:       step.Version,
 		CurrentTaskID: step.CurrentTaskID,
 		NextStepID:    step.NextStepID,
 		StartedAt:     step.StartedAt,
