@@ -5,7 +5,7 @@ import json
 import os
 import sqlite3
 from pathlib import Path
-from typing import Annotated, Any
+from typing import Annotated, Any, Mapping
 
 from fastapi import (
     BackgroundTasks,
@@ -299,10 +299,11 @@ def _event_stream(
             snapshot = await asyncio.to_thread(snapshot_fn, thread_id, step_id, last_event_id)
             for item in snapshot['items']:
                 last_event_id = str(item['event_id'])
+                event_type = str(item['event_type'])
                 yield {
                     'id': last_event_id,
-                    'event': str(item['event_type']),
-                    'data': json.dumps(item, ensure_ascii=False),
+                    'event': event_type,
+                    'data': json.dumps(_sse_payload(event_type, item), ensure_ascii=False),
                 }
             if not snapshot['items'] and await asyncio.to_thread(_thread_events_done, service, thread_id):
                 public = await asyncio.to_thread(service.threads.public_thread, thread_id, include_inputs=False)
@@ -314,13 +315,24 @@ def _event_stream(
                 }
                 if snapshot.get('step_id'):
                     payload['step_id'] = snapshot['step_id']
-                yield {'id': last_event_id, 'event': 'done', 'data': json.dumps(payload, ensure_ascii=False)}
+                yield {
+                    'id': last_event_id,
+                    'event': 'done',
+                    'data': json.dumps(_sse_payload('done', payload), ensure_ascii=False),
+                }
                 break
             if await request.is_disconnected():
                 break
             await asyncio.sleep(1.0)
 
     return EventSourceResponse(events())
+
+
+def _sse_payload(event_type: str, payload: Mapping[str, Any]) -> dict[str, Any]:
+    data = dict(payload)
+    data.setdefault('event_type', event_type)
+    data.setdefault('type', data['event_type'])
+    return data
 
 
 def _thread_events_done(service: EvoService, thread_id: str) -> bool:

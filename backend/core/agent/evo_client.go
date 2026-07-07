@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -28,46 +29,6 @@ type evoThread struct {
 	Status      string `json:"status"`
 	CurrentStep string `json:"current_step,omitempty"`
 	LastError   any    `json:"last_error,omitempty"`
-}
-
-type evoGate struct {
-	Step             string `json:"step"`
-	ArtifactID       string `json:"artifact_id"`
-	Versions         []int  `json:"versions"`
-	EffectiveVersion *int   `json:"effective_version"`
-	LatestVersion    *int   `json:"latest_version"`
-}
-
-type evoGateList struct {
-	ThreadID string    `json:"thread_id"`
-	Gates    []evoGate `json:"gates"`
-}
-
-type evoGateContent struct {
-	ThreadID string `json:"thread_id"`
-	Step     string `json:"step"`
-	Version  int    `json:"version"`
-	Content  any    `json:"content"`
-}
-
-type evoStep struct {
-	ThreadID   string `json:"thread_id"`
-	StepID     string `json:"step_id"`
-	Stage      string `json:"stage"`
-	Title      string `json:"title"`
-	Status     string `json:"status"`
-	Active     bool   `json:"active"`
-	OrderIndex int    `json:"order_index"`
-	EventCount int64  `json:"event_count"`
-	NextStepID string `json:"next_step_id"`
-	Version    *int   `json:"version"`
-}
-
-type evoStepList struct {
-	ThreadID     string    `json:"thread_id"`
-	ActiveStepID string    `json:"active_step_id"`
-	Items        []evoStep `json:"items"`
-	TotalSize    int       `json:"total_size"`
 }
 
 func newEvoClient(headers map[string]string) evoClient {
@@ -116,18 +77,6 @@ func (c evoClient) DeleteThread(ctx context.Context, threadID string, out any) e
 	return c.doJSON(ctx, http.MethodDelete, "/threads/"+url.PathEscape(threadID), nil, nil, out)
 }
 
-func (c evoClient) EventsStreamURL(threadID, stepID string) string {
-	query := url.Values{}
-	if strings.TrimSpace(stepID) != "" {
-		query.Set("step_id", strings.TrimSpace(stepID))
-	}
-	return c.url("/threads/"+url.PathEscape(threadID)+"/events:stream", query)
-}
-
-func (c evoClient) MessagesURL(threadID string) string {
-	return c.url("/threads/"+url.PathEscape(threadID)+"/messages", nil)
-}
-
 func (c evoClient) ProxyRequest(ctx context.Context, method, path string, query url.Values, body io.Reader) (*http.Request, error) {
 	if body == nil {
 		body = http.NoBody
@@ -162,36 +111,6 @@ func (c evoClient) doProxyRaw(ctx context.Context, method, path string, query ur
 		return nil, err
 	}
 	return rawProxyResponse(resp.StatusCode, respBytes, resp.Header), nil
-}
-
-func (c evoClient) ListGates(ctx context.Context, threadID string) (*evoGateList, error) {
-	var result evoGateList
-	if err := c.doJSON(ctx, http.MethodGet, "/threads/"+url.PathEscape(threadID)+"/gates", nil, nil, &result); err != nil {
-		return nil, err
-	}
-	return &result, nil
-}
-
-func (c evoClient) ListSteps(ctx context.Context, threadID string) (*evoStepList, error) {
-	var result evoStepList
-	if err := c.doJSON(ctx, http.MethodGet, "/threads/"+url.PathEscape(threadID)+"/steps", nil, nil, &result); err != nil {
-		return nil, err
-	}
-	return &result, nil
-}
-
-func (c evoClient) GetGateContent(ctx context.Context, threadID, step string, version int) (*evoGateContent, error) {
-	targetPath := fmt.Sprintf(
-		"/threads/%s/gates/%s/versions/%d",
-		url.PathEscape(threadID),
-		url.PathEscape(step),
-		version,
-	)
-	var result evoGateContent
-	if err := c.doJSON(ctx, http.MethodGet, targetPath, nil, nil, &result); err != nil {
-		return nil, err
-	}
-	return &result, nil
 }
 
 func (c evoClient) doJSON(ctx context.Context, method, path string, query url.Values, body any, out any) error {
@@ -280,4 +199,15 @@ func proxyStatusCode(proxy *upstreamProxyResponse) int {
 		return http.StatusOK
 	}
 	return proxy.StatusCode
+}
+
+func evoProxyStatusCode(err error) int {
+	if err == nil {
+		return http.StatusOK
+	}
+	var httpErr *common.HTTPError
+	if errors.As(err, &httpErr) && httpErr.StatusCode > 0 {
+		return httpErr.StatusCode
+	}
+	return http.StatusBadGateway
 }
