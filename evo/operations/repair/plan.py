@@ -15,24 +15,6 @@ BUDGET_LIMITS = {
     'evidence_case_budget': (8, 1, 30),
     'seed_file_budget': (5, 1, 10),
 }
-BLOCK_INVARIANTS = {
-    'retrieval': ('do not change eval policy, case data, reference answers, or document ids',
-                  'preserve chat API request/response contract and trace emission'),
-    'context_assembly': ('preserve retrieved source attribution',
-                         'do not synthesize unseen source chunks or document ids'),
-    'rerank': ('preserve recall before optimizing precision',
-               'do not hide low confidence retrieval evidence'),
-    'prompt_build': ('do not lower safety, grounding, or tool-use constraints',
-                     'do not hard-code case questions, answers, or expected ids'),
-    'llm_generation': ('do not lower safety, grounding, or tool-use constraints',
-                       'do not hard-code case questions, answers, or expected ids'),
-    'postprocess_serialization': ('preserve SSE protocol compatibility',
-                                  'do not change evaluator schemas to mask output defects'),
-    'tracing_observability': ('preserve trace ids across answer and analysis',
-                              'do not fabricate trace stages or metrics'),
-}
-
-
 def build_repair_plan(analysis: Mapping[str, Any], policy: Mapping[str, Any]) -> dict[str, Any]:
     rows = [row for row in _items(analysis.get('rows')) if isinstance(row, Mapping)]
     allowed_roots = _roots(policy.get('allowed_roots'), DEFAULT_ALLOWED_ROOTS)
@@ -129,7 +111,10 @@ def build_repair_plan(analysis: Mapping[str, Any], policy: Mapping[str, Any]) ->
     if not groups:
         return empty_plan('skipped_no_repairable_group')
 
-    selected = groups[0]
+    selected_rank, selected = next(
+        ((rank, group) for rank, group in enumerate(groups, start=1) if not group.get('deeper_analysis_reason')),
+        (1, groups[0]),
+    )
     selected_ids = set(selected.get('case_ids') or ())
     block = str(selected.get('function_block_id') or '').strip()
     adjacent = {str(item or '').strip() for item in selected.get('adjacent_blocks') or () if str(item or '').strip()}
@@ -183,19 +168,19 @@ def build_repair_plan(analysis: Mapping[str, Any], policy: Mapping[str, Any]) ->
     objective = {
         'selected_group_id': selected['group_id'],
         'function_block_id': block,
-        'selection_reason': 'highest badcase_count in analysis repair_group_queue',
+        'selection_reason': 'highest-ranked repairable group in analysis repair_group_queue',
         'target_cases': target,
         'neighbor_cases': neighbor,
         'goodcase_guard_cases': good,
         'cross_block_guard_cases': cross,
         'validation_case_ids': validation_cases,
-        'group_rank': 1,
+        'group_rank': selected_rank,
         'candidate_group_count': len(groups),
     }
 
     blocked_reason = selected.get('deeper_analysis_reason') or ''
     invariants = list(dict.fromkeys([
-        *list(BLOCK_INVARIANTS.get(block, ())),
+        *list(selected.get('invariants') or ()),
         'do not edit eval, analysis, dataset, tests, secrets, generated data, or vendored lazyllm',
         'do not hard-code case ids, questions, answers, document ids, chunk ids, or metric thresholds',
     ]))
@@ -255,12 +240,6 @@ def build_repair_plan(analysis: Mapping[str, Any], policy: Mapping[str, Any]) ->
         'analysis_summary': {
             'id': str(analysis.get('id') or '').strip(),
             'total': int(_number(analysis.get('total'), 0.0)),
-            'issue_category_counts': _dict(analysis.get('issue_category_counts')),
-            'issue_type_counts': _dict(analysis.get('issue_type_counts')),
-            'affected_block_counts': _dict(analysis.get('affected_block_counts')),
-            'failure_mode_counts': _dict(analysis.get('failure_mode_counts')),
-            'top_failure_patterns': _items(analysis.get('top_failure_patterns'))[:10],
-            'trace_quality': _dict(analysis.get('trace_quality')),
             'repair_group_count': len(_items(analysis.get('repair_group_queue'))),
         },
         'checks': {
@@ -273,7 +252,6 @@ def build_repair_plan(analysis: Mapping[str, Any], policy: Mapping[str, Any]) ->
 def _roots(value: Any, default: tuple[str, ...]) -> list[str]:
     roots = [_path(item) for item in _items(value)]
     return [root for root in roots if root] or list(default)
-
 
 def _path(value: Any) -> str:
     text = str(value or '').strip()
@@ -289,11 +267,6 @@ def _items(value: Any) -> list[Any]:
     if isinstance(value, (list, tuple)):
         return list(value)
     return [] if value in (None, '') else [value]
-
-
-def _dict(value: Any) -> dict[str, Any]:
-    return dict(value) if isinstance(value, Mapping) else {}
-
 
 def _bounded_int(value: Any, default: int, minimum: int, maximum: int) -> int:
     try:

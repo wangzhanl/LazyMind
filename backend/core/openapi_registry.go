@@ -493,38 +493,14 @@ type agentThreadPathParams struct {
 	ThreadID string `path:"thread_id"`
 }
 
-type agentThreadStepPathParams struct {
-	ThreadID string `path:"thread_id"`
-	StepID   string `path:"step_id"`
-}
-
 type agentThreadGatePathParams struct {
 	ThreadID string `path:"thread_id"`
 	Step     string `path:"step"`
 	Version  int32  `path:"version"`
 }
 
-type agentThreadArtifactPathParams struct {
-	ThreadID   string `path:"thread_id"`
-	ArtifactID string `path:"artifact_id"`
-}
-
-type agentThreadResultDownloadPathParams struct {
-	ThreadID string `path:"thread_id"`
-	Kind     string `path:"kind" enum:"datasets,eval-reports,analysis-reports,diffs,abtests"`
-}
-
-type agentThreadResultQueryParams struct {
-	Version int32 `query:"version"`
-}
-
-type agentThreadResultDownloadQueryParams struct {
-	Format  string `query:"format" enum:"csv"`
-	Version int32  `query:"version"`
-}
-
 type agentThreadEventsQueryParams struct {
-	Since string `query:"since"`
+	StepID string `query:"step_id"`
 }
 
 type agentThreadEventTraceQueryParams struct {
@@ -545,6 +521,10 @@ type agentCandidateListQueryParams struct {
 
 type agentCandidatePathParams struct {
 	CandidateID string `path:"candidate_id:.*"`
+}
+
+type agentRouterAlgorithmPathParams struct {
+	AlgorithmID string `path:"algorithm_id"`
 }
 
 type agentThreadOpenAPIResponse struct {
@@ -1650,14 +1630,6 @@ func registeredCoreOperations() []openAPIOperation {
 		Schema: schemaSource{Inline: map[string]any{
 			"type":                 "object",
 			"additionalProperties": true,
-		}},
-	}
-	evoGateCSVResp := openAPIResponse{
-		Description: "Evo gate CSV download",
-		ContentType: "text/csv",
-		Schema: schemaSource{Inline: map[string]any{
-			"type":   "string",
-			"format": "binary",
 		}},
 	}
 	return []openAPIOperation{
@@ -3182,7 +3154,7 @@ func registeredCoreOperations() []openAPIOperation {
 			Method:      "GET",
 			Path:        "/agent/threads",
 			Summary:     "List agent threads",
-			Description: "List the current user's agent threads. Use thread_id from this response to load thread details or history.",
+			Description: "List the current user's Core thread index entries. Core refreshes status from Evo when available.",
 			Tags:        []string{"agent"},
 			QueryParams: agentThreadListQueryParams{},
 			Responses:   map[int]openAPIResponse{200: resp("Agent thread list", agentThreadListOpenAPIResponse{})},
@@ -3198,9 +3170,9 @@ func registeredCoreOperations() []openAPIOperation {
 		},
 		{
 			Method:      "GET",
-			Path:        "/agent/threads/{thread_id}:events",
+			Path:        "/agent/threads/{thread_id}/events:stream",
 			Summary:     "Stream agent thread events",
-			Description: "Proxies Evo GET /threads/{thread_id}/events:stream without persisting event details in Core.",
+			Description: "Proxies Evo GET /threads/{thread_id}/events:stream.",
 			Tags:        []string{"agent"},
 			PathParams:  agentThreadPathParams{},
 			QueryParams: agentThreadEventsQueryParams{},
@@ -3210,19 +3182,10 @@ func registeredCoreOperations() []openAPIOperation {
 			Method:      "GET",
 			Path:        "/agent/threads/{thread_id}/event-trace:stream",
 			Summary:     "Stream agent thread event trace",
-			Description: "Proxies Evo GET /threads/{thread_id}/event-trace:stream without persisting trace details in Core.",
+			Description: "Proxies Evo GET /threads/{thread_id}/event-trace:stream.",
 			Tags:        []string{"agent"},
 			PathParams:  agentThreadPathParams{},
 			QueryParams: agentThreadEventTraceQueryParams{},
-			Responses:   map[int]openAPIResponse{200: evoStreamResp},
-		},
-		{
-			Method:      "GET",
-			Path:        "/agent/threads/{thread_id}/events/{step_id}",
-			Summary:     "Stream agent thread step events",
-			Description: "Proxies Evo event stream with step_id filtering.",
-			Tags:        []string{"agent"},
-			PathParams:  agentThreadStepPathParams{},
 			Responses:   map[int]openAPIResponse{200: evoStreamResp},
 		},
 		{
@@ -3284,87 +3247,22 @@ func registeredCoreOperations() []openAPIOperation {
 		},
 		{
 			Method:      "GET",
-			Path:        "/agent/threads/{thread_id}/results/{kind}:download",
-			Summary:     "Download agent thread gate result as CSV",
-			Description: "Downloads one of datasets, eval-reports, analysis-reports, diffs, or abtests as CSV. Core converts Evo gate JSON content to CSV only on this download path.",
-			Tags:        []string{"agent"},
-			PathParams:  agentThreadResultDownloadPathParams{},
-			QueryParams: agentThreadResultDownloadQueryParams{},
-			Responses:   map[int]openAPIResponse{200: evoGateCSVResp},
-		},
-		{
-			Method:      "GET",
-			Path:        "/agent/threads/{thread_id}/results/datasets",
-			Summary:     "GET /agent/threads/{thread_id}/results/datasets",
-			Description: "Returns the Evo dataset gate version response directly. Core performs no result post-processing on this content path.",
+			Path:        "/agent/threads/{thread_id}/messages",
+			Summary:     "List agent thread messages",
+			Description: "Proxies Evo GET /threads/{thread_id}/messages.",
 			Tags:        []string{"agent"},
 			PathParams:  agentThreadPathParams{},
-			QueryParams: agentThreadResultQueryParams{},
-			Responses:   map[int]openAPIResponse{200: evoGateContentResp},
-		},
-		{
-			Method:      "GET",
-			Path:        "/agent/threads/{thread_id}/results/eval-reports",
-			Summary:     "GET /agent/threads/{thread_id}/results/eval-reports",
-			Description: "Returns the Evo eval gate version response directly. Core performs no result post-processing on this content path.",
-			Tags:        []string{"agent"},
-			PathParams:  agentThreadPathParams{},
-			QueryParams: agentThreadResultQueryParams{},
-			Responses:   map[int]openAPIResponse{200: evoGateContentResp},
-		},
-		{
-			Method:      "GET",
-			Path:        "/agent/threads/{thread_id}/results/analysis-reports",
-			Summary:     "GET /agent/threads/{thread_id}/results/analysis-reports",
-			Description: "Returns the Evo analysis gate version response directly. Core performs no result post-processing on this content path.",
-			Tags:        []string{"agent"},
-			PathParams:  agentThreadPathParams{},
-			QueryParams: agentThreadResultQueryParams{},
-			Responses:   map[int]openAPIResponse{200: evoGateContentResp},
-		},
-		{
-			Method:      "GET",
-			Path:        "/agent/threads/{thread_id}/results/diffs",
-			Summary:     "GET /agent/threads/{thread_id}/results/diffs",
-			Description: "Returns the Evo repair gate version response directly. Core performs no result post-processing on this content path.",
-			Tags:        []string{"agent"},
-			PathParams:  agentThreadPathParams{},
-			QueryParams: agentThreadResultQueryParams{},
-			Responses:   map[int]openAPIResponse{200: evoGateContentResp},
-		},
-		{
-			Method:      "GET",
-			Path:        "/agent/threads/{thread_id}/results/abtests",
-			Summary:     "GET /agent/threads/{thread_id}/results/abtests",
-			Description: "Returns the Evo abtest gate version response directly. Core performs no result post-processing on this content path.",
-			Tags:        []string{"agent"},
-			PathParams:  agentThreadPathParams{},
-			QueryParams: agentThreadResultQueryParams{},
-			Responses:   map[int]openAPIResponse{200: evoGateContentResp},
-		},
-		{
-			Method:      "GET",
-			Path:        "/agent/threads/{thread_id}/flow-status",
-			Summary:     "Get agent thread flow status",
-			Description: "Returns a Core-compatible flow status derived from Evo thread status.",
-			Tags:        []string{"agent"},
-			PathParams:  agentThreadPathParams{},
-			Responses:   map[int]openAPIResponse{200: evoJSONResp("Agent thread flow status")},
-		},
-		{
-			Method:      "GET",
-			Path:        "/agent/threads/{thread_id}/artifacts/{artifact_id}",
-			Summary:     "Get agent thread artifact",
-			Description: "Maps legacy artifact aliases to Evo gates and returns the Evo gate version response directly.",
-			Tags:        []string{"agent"},
-			PathParams:  agentThreadArtifactPathParams{},
-			Responses:   map[int]openAPIResponse{200: evoGateContentResp},
+			QueryParams: struct {
+				PageSize  int32  `query:"page_size"`
+				PageToken string `query:"page_token"`
+			}{},
+			Responses: map[int]openAPIResponse{200: evoJSONResp("Evo thread messages")},
 		},
 		{
 			Method:      "POST",
-			Path:        "/agent/threads/{thread_id}:messages",
+			Path:        "/agent/threads/{thread_id}/messages",
 			Summary:     "Send agent thread message",
-			Description: "Proxies Evo POST /threads/{thread_id}/messages. Core does not persist message detail rows.",
+			Description: "Proxies Evo POST /threads/{thread_id}/messages.",
 			Tags:        []string{"agent"},
 			PathParams:  agentThreadPathParams{},
 			RequestBody: evoJSONBody(true),
@@ -3372,7 +3270,7 @@ func registeredCoreOperations() []openAPIOperation {
 		},
 		{
 			Method:      "POST",
-			Path:        "/agent/threads/{thread_id}:start",
+			Path:        "/agent/threads/{thread_id}/start",
 			Summary:     "Start agent thread",
 			Description: "Proxies Evo start and updates Core's local thread status and active-thread lock.",
 			Tags:        []string{"agent"},
@@ -3382,7 +3280,7 @@ func registeredCoreOperations() []openAPIOperation {
 		},
 		{
 			Method:      "POST",
-			Path:        "/agent/threads/{thread_id}:pause",
+			Path:        "/agent/threads/{thread_id}/pause",
 			Summary:     "Pause agent thread",
 			Description: "Proxies Evo pause and updates Core's local thread status.",
 			Tags:        []string{"agent"},
@@ -3392,7 +3290,7 @@ func registeredCoreOperations() []openAPIOperation {
 		},
 		{
 			Method:      "POST",
-			Path:        "/agent/threads/{thread_id}:cancel",
+			Path:        "/agent/threads/{thread_id}/cancel",
 			Summary:     "Cancel agent thread",
 			Description: "Proxies Evo cancel and releases Core's active-thread lock for the thread.",
 			Tags:        []string{"agent"},
@@ -3402,7 +3300,7 @@ func registeredCoreOperations() []openAPIOperation {
 		},
 		{
 			Method:      "POST",
-			Path:        "/agent/threads/{thread_id}:retry",
+			Path:        "/agent/threads/{thread_id}/retry",
 			Summary:     "Retry agent thread",
 			Description: "Proxies Evo retry and updates Core's local thread status and active-thread lock.",
 			Tags:        []string{"agent"},
@@ -3412,7 +3310,7 @@ func registeredCoreOperations() []openAPIOperation {
 		},
 		{
 			Method:      "POST",
-			Path:        "/agent/threads/{thread_id}:continue",
+			Path:        "/agent/threads/{thread_id}/continue",
 			Summary:     "Continue agent thread",
 			Description: "Proxies Evo continue and updates Core's local thread status and active-thread lock.",
 			Tags:        []string{"agent"},
@@ -3437,6 +3335,69 @@ func registeredCoreOperations() []openAPIOperation {
 			Tags:        []string{"agent"},
 			PathParams:  agentCandidatePathParams{},
 			Responses:   map[int]openAPIResponse{200: evoJSONResp("Evo candidate")},
+		},
+		{
+			Method:      "GET",
+			Path:        "/agent/router/status",
+			Summary:     "Get Evo router status",
+			Description: "Proxies Evo GET /router/status.",
+			Tags:        []string{"agent"},
+			Responses:   map[int]openAPIResponse{200: evoJSONResp("Evo router status")},
+		},
+		{
+			Method:      "GET",
+			Path:        "/agent/router/algorithms",
+			Summary:     "List Evo router algorithms",
+			Description: "Proxies Evo GET /router/algorithms.",
+			Tags:        []string{"agent"},
+			QueryParams: struct {
+				ThreadID       string `query:"thread_id"`
+				AlgorithmID    string `query:"algorithm_id"`
+				Status         string `query:"status"`
+				RouterAdminURL string `query:"router_admin_url"`
+				RouterChatURL  string `query:"router_chat_url"`
+			}{},
+			Responses: map[int]openAPIResponse{200: evoJSONResp("Evo router algorithms")},
+		},
+		{
+			Method:      "POST",
+			Path:        "/agent/router/algorithms",
+			Summary:     "Register Evo router algorithm",
+			Description: "Proxies Evo POST /router/algorithms.",
+			Tags:        []string{"agent"},
+			RequestBody: evoJSONBody(true),
+			Responses:   map[int]openAPIResponse{200: evoJSONResp("Evo router algorithm")},
+		},
+		{
+			Method:      "POST",
+			Path:        "/agent/router/algorithms/{algorithm_id}:action",
+			Summary:     "Run Evo router algorithm action",
+			Description: "Proxies Evo POST /router/algorithms/{algorithm_id}:action.",
+			Tags:        []string{"agent"},
+			PathParams:  agentRouterAlgorithmPathParams{},
+			RequestBody: evoJSONBody(true),
+			Responses:   map[int]openAPIResponse{200: evoJSONResp("Evo router algorithm action")},
+		},
+		{
+			Method:      "GET",
+			Path:        "/agent/router/ab-strategy",
+			Summary:     "Get Evo router AB strategy",
+			Description: "Proxies Evo GET /router/ab-strategy.",
+			Tags:        []string{"agent"},
+			QueryParams: struct {
+				RouterAdminURL string `query:"router_admin_url"`
+				RouterChatURL  string `query:"router_chat_url"`
+			}{},
+			Responses: map[int]openAPIResponse{200: evoJSONResp("Evo router AB strategy")},
+		},
+		{
+			Method:      "PUT",
+			Path:        "/agent/router/ab-strategy",
+			Summary:     "Update Evo router AB strategy",
+			Description: "Proxies Evo PUT /router/ab-strategy.",
+			Tags:        []string{"agent"},
+			RequestBody: evoJSONBody(true),
+			Responses:   map[int]openAPIResponse{200: evoJSONResp("Evo router AB strategy")},
 		},
 		{
 			Method:  "POST",
