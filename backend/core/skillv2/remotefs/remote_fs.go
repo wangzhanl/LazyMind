@@ -739,11 +739,14 @@ func (h *Handler) createEmptyPackage(ctx context.Context, tx *gorm.DB, userID st
 		HeadRevisionID:     &revisionID,
 		Version:            1,
 		AutoEvoApplyStatus: "idle",
-		IsEnabled:          true,
+		IsEnabled:          false,
 		UpdateStatus:       "up_to_date",
 		CreatedAt:          now,
 		UpdatedAt:          now,
 	}).Error; err != nil {
+		return err
+	}
+	if err := tx.WithContext(ctx).Model(&skillRow{}).Where("id = ?", skillID).Update("is_enabled", false).Error; err != nil {
 		return err
 	}
 	if err := tx.WithContext(ctx).Create(&skillRevisionRow{
