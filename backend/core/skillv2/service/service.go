@@ -452,6 +452,9 @@ func (s *SkillService) DiscardDraft(ctx context.Context, req DiscardDraftRequest
 				return err
 			}
 			out.DraftVersion = row.Version
+			if err := markDraftReviewSessions(tx, req.SkillID, "discarded", req.UserID, now); err != nil {
+				return err
+			}
 			return nil
 		}
 		var draft skillDraftRow
@@ -459,9 +462,20 @@ func (s *SkillService) DiscardDraft(ctx context.Context, req DiscardDraftRequest
 			return err
 		}
 		out.DraftVersion = draft.Version
+		if err := markDraftReviewSessions(tx, req.SkillID, "discarded", req.UserID, now); err != nil {
+			return err
+		}
 		return nil
 	})
 	return out, err
+}
+
+func markDraftReviewSessions(tx *gorm.DB, skillID, status, userID string, now time.Time) error {
+	return tx.Table("skill_draft_review_sessions").Where("skill_id = ? AND status = ?", skillID, "active").Updates(map[string]any{
+		"status":     status,
+		"updated_by": nullableString(userID),
+		"updated_at": now,
+	}).Error
 }
 
 func (s *SkillService) ApplyAutoEvoDraft(ctx context.Context, req AutoEvoDraftRequest) error {

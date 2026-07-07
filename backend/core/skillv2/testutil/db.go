@@ -27,6 +27,9 @@ func NewTestDB(t *testing.T) *TestDB {
 		&SkillRevisionEntryRow{},
 		&SkillDraftRow{},
 		&SkillDraftEntryRow{},
+		&SkillDraftReviewSessionRow{},
+		&SkillDraftReviewActionBatchRow{},
+		&SkillDraftReviewActionItemRow{},
 		&SkillMarketItemRow{},
 		&SkillShareItemRow{},
 	); err != nil {
@@ -40,6 +43,9 @@ func ResetSkillTables(t *testing.T, db *TestDB) {
 
 	for _, table := range []string{
 		"skill_draft_entries",
+		"skill_draft_review_action_items",
+		"skill_draft_review_action_batches",
+		"skill_draft_review_sessions",
 		"skill_drafts",
 		"skill_revision_entries",
 		"skill_revisions",
@@ -185,6 +191,55 @@ type SkillDraftEntryRow struct {
 }
 
 func (SkillDraftEntryRow) TableName() string { return "skill_draft_entries" }
+
+type SkillDraftReviewSessionRow struct {
+	ID                  string    `gorm:"column:id;type:varchar(36);primaryKey"`
+	SkillID             string    `gorm:"column:skill_id;type:varchar(36);not null;index:idx_skill_draft_review_sessions_skill_status,priority:1"`
+	BaseRevisionID      string    `gorm:"column:base_revision_id;type:varchar(36);not null"`
+	DraftVersionAtStart int64     `gorm:"column:draft_version_at_start;not null"`
+	DraftSnapshotHash   string    `gorm:"column:draft_snapshot_hash;type:text;not null"`
+	Status              string    `gorm:"column:status;type:text;not null;default:'active';index:idx_skill_draft_review_sessions_skill_status,priority:2"`
+	Version             int64     `gorm:"column:version;not null;default:1"`
+	UndoLimit           int       `gorm:"column:undo_limit;not null;default:20"`
+	CreatedBy           *string   `gorm:"column:created_by;type:text"`
+	UpdatedBy           *string   `gorm:"column:updated_by;type:text"`
+	CreatedAt           time.Time `gorm:"column:created_at;not null"`
+	UpdatedAt           time.Time `gorm:"column:updated_at;not null;index:idx_skill_draft_review_sessions_skill_status,priority:3"`
+}
+
+func (SkillDraftReviewSessionRow) TableName() string {
+	return "skill_draft_review_sessions"
+}
+
+type SkillDraftReviewActionBatchRow struct {
+	ID              string     `gorm:"column:id;type:varchar(36);primaryKey"`
+	ReviewSessionID string     `gorm:"column:review_session_id;type:varchar(36);not null;uniqueIndex:uk_skill_draft_review_batch_sequence,priority:1;index:idx_skill_draft_review_batches_session_created,priority:1"`
+	Sequence        int64      `gorm:"column:sequence;not null;uniqueIndex:uk_skill_draft_review_batch_sequence,priority:2"`
+	UndoLocked      bool       `gorm:"column:undo_locked;not null;default:false"`
+	UndoneAt        *time.Time `gorm:"column:undone_at"`
+	UndoneBy        *string    `gorm:"column:undone_by;type:text"`
+	CreatedBy       *string    `gorm:"column:created_by;type:text"`
+	CreatedAt       time.Time  `gorm:"column:created_at;not null;index:idx_skill_draft_review_batches_session_created,priority:2"`
+}
+
+func (SkillDraftReviewActionBatchRow) TableName() string {
+	return "skill_draft_review_action_batches"
+}
+
+type SkillDraftReviewActionItemRow struct {
+	ID              string    `gorm:"column:id;type:varchar(36);primaryKey"`
+	BatchID         string    `gorm:"column:batch_id;type:varchar(36);not null;index:idx_skill_draft_review_items_batch"`
+	ReviewSessionID string    `gorm:"column:review_session_id;type:varchar(36);not null;index:idx_skill_draft_review_items_session_hunk,priority:1"`
+	Path            string    `gorm:"column:path;type:text;not null;index:idx_skill_draft_review_items_session_hunk,priority:2"`
+	HunkID          string    `gorm:"column:hunk_id;type:text;not null;index:idx_skill_draft_review_items_session_hunk,priority:3"`
+	BeforeDecision  string    `gorm:"column:before_decision;type:text;not null;default:'pending'"`
+	AfterDecision   string    `gorm:"column:after_decision;type:text;not null"`
+	CreatedAt       time.Time `gorm:"column:created_at;not null"`
+}
+
+func (SkillDraftReviewActionItemRow) TableName() string {
+	return "skill_draft_review_action_items"
+}
 
 type SkillMarketItemRow struct {
 	ID            string     `gorm:"column:id;type:varchar(36);primaryKey"`
