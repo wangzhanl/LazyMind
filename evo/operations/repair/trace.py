@@ -32,7 +32,6 @@ EVENT_TYPES = {
     'repair.patch_verified',
     'opencode.setup',
     'opencode.process_start',
-    'opencode.heartbeat',
     'opencode.tool_use.search',
     'opencode.tool_use.read_file',
     'opencode.tool_use.edit_file',
@@ -44,6 +43,7 @@ EVENT_TYPES = {
     'verify.pre_validation_started',
     'verify.diff_scope_completed',
     'verify.hardcode_check_completed',
+    'verify.patch_policy_completed',
     'verify.command_started',
     'verify.command_completed',
     'verify.pre_validation_completed',
@@ -208,9 +208,8 @@ class RepairTraceSink:
         payload: Mapping[str, Any] | None = None,
         terminal: bool = False,
     ) -> None:
-        event_type = event_type if event_type in EVENT_TYPES else (
-            'opencode.error' if event_type.startswith('opencode.') and status == 'failed' else 'opencode.message'
-        )
+        if event_type not in EVENT_TYPES:
+            raise ValueError(f'unknown repair trace event type: {event_type}')
         event = {
             'thread_id': self.thread_id,
             'trace_id': self.trace_id,

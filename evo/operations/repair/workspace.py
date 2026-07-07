@@ -68,7 +68,7 @@ def workspace_diff(workspace: Path) -> dict[str, Any]:
                  and not path.startswith('.evo_repair_logs/') and not path.endswith('.pyc')]
     if untracked:
         git(workspace, 'add', '-N', '--', *untracked)
-    return {'diff': git(workspace, 'diff', '--'), 'files': git(workspace, 'diff', '--name-only').splitlines()}
+    return {'diff': git(workspace, 'diff', '--', strip=False), 'files': git(workspace, 'diff', '--name-only').splitlines()}
 
 
 def apply_diff(workspace: Path, diff: str) -> None:
@@ -81,12 +81,12 @@ def apply_diff(workspace: Path, diff: str) -> None:
         raise RuntimeError(message)
 
 
-def git(workspace: Path, *args: str) -> str:
+def git(workspace: Path, *args: str, strip: bool = True) -> str:
     result = subprocess.run(['git', '-c', f'safe.directory={workspace}', '-C', str(workspace), *args],
                             capture_output=True, text=True, timeout=60, check=False)
     if result.returncode:
         raise RuntimeError((result.stderr or result.stdout).strip())
-    return result.stdout.strip()
+    return result.stdout.strip() if strip else result.stdout
 
 
 def source_fingerprint(source: Path) -> dict[str, str]:

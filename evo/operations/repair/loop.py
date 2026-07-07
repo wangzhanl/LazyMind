@@ -3,11 +3,10 @@ from __future__ import annotations
 import hashlib
 import json
 import os
-from collections import Counter
+import re
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
-from urllib.parse import urlparse
 
 from unidiff import PatchSet
 
@@ -15,6 +14,7 @@ from evo.operations.public_contracts import RepairPatch, algo_id, dump_contract
 
 from .candidate import validate_candidate_patch
 from .decision import patch_base_decision, select_best_attempt
+from .memory import patch_policy_check, patch_profile, repair_memory
 from .opencode import run_opencode_streaming
 from .trace import safe_emit, trace_cursor
 from .validation import pre_validate
@@ -31,6 +31,7 @@ from .workspace import (
 )
 
 DEFAULT_SOURCE = '/app/algorithm'
+PROVIDER_NAME = re.compile(r'^[a-z0-9][a-z0-9_-]*$')
 
 
 def prepare_candidate_workspace(
@@ -101,7 +102,7 @@ def run_repair_loop(workspace: Mapping[str, Any], cases: tuple[Mapping[str, Any]
     if not opencode_config:
         return _early_result(trace, 'blocked', plan, workspace,
                              'missing opencode model configuration', baseline_algo_id)
-    attempts, base_diff, best = [], '', {}
+    attempts, base_diff, base_mode, best = [], '', 'baseline', {}
     budget = _int(policy.get('repair_attempt_budget'), 30, 1, 100)
     session_id = ''
     for attempt_no in range(1, budget + 1):
@@ -113,12 +114,13 @@ def run_repair_loop(workspace: Mapping[str, Any], cases: tuple[Mapping[str, Any]
                 apply_diff(root, base_diff)
             except RuntimeError as exc:
                 safe_emit(trace, 'repair.base_selected', status='failed', attempt=attempt_no,
-                      payload={'mode': 'continued_patch', 'reason': str(exc)[:500]})
-                base_diff = ''
+                      payload={'mode': base_mode, 'reason': str(exc)[:500]})
+                base_diff, base_mode = '', 'baseline'
                 reset_workspace(root)
         safe_emit(trace, 'repair.base_selected', status='completed', attempt=attempt_no,
-              payload={'mode': 'baseline' if not base_diff else 'continued_patch'})
-        task = _task_card(plan, workspace, attempt_no, attempts)
+              payload={'mode': base_mode})
+        base_profile = patch_profile(base_diff)
+        task = _task_card(plan, workspace, attempt_no, attempts, base_profile, base_mode)
         run = run_opencode_streaming(
             workdir=str(root),
             prompt=json.dumps(task, ensure_ascii=False, indent=2),
@@ -126,15 +128,21 @@ def run_repair_loop(workspace: Mapping[str, Any], cases: tuple[Mapping[str, Any]
             session_id=session_id,
             config=opencode_config,
             timeout_s=_int(policy.get('opencode_timeout_s') or os.getenv('LAZYMIND_EVO_CODE_TIMEOUT_S'), 900, 30, 7200),
-            first_response_timeout_s=_int(policy.get('opencode_first_response_timeout_s'), 300, 10, 1800),
             trace=trace,
             attempt=attempt_no,
         )
         session_id = run.session_id or session_id
         diff_info = workspace_diff(root)
+        profile = patch_profile(diff_info['diff'])
+        patch_policy = patch_policy_check(profile, attempts, base_profile)
+        safe_emit(trace, 'verify.patch_policy_completed',
+              status='completed' if patch_policy['status'] == 'passed' else 'failed',
+              attempt=attempt_no, payload=patch_policy)
         pre = (
             _opencode_failure(run)
             if run.returncode or run.last_error
+            else patch_policy
+            if patch_policy['status'] != 'passed'
             else pre_validate(root, diff_info, plan, policy, trace, attempt_no)
         )
         candidate = (
@@ -155,14 +163,10 @@ def run_repair_loop(workspace: Mapping[str, Any], cases: tuple[Mapping[str, Any]
         attempt = {
             'attempt': attempt_no,
             'status': 'validated' if decision['action'] == 'accept_patch' else 'failed',
-            'base': {'mode': 'baseline' if not base_diff else 'continued_patch'},
+            'base': {'mode': base_mode},
             'opencode': {
                 'returncode': run.returncode,
                 'last_error': run.last_error,
-                'raw_paths': run.raw_paths,
-                'provider': run.provider,
-                'model': run.model,
-                'duration_seconds': run.duration_seconds,
             },
             'pre_validation': pre,
             'candidate_validation': candidate,
@@ -170,6 +174,7 @@ def run_repair_loop(workspace: Mapping[str, Any], cases: tuple[Mapping[str, Any]
             'patch_base_decision': decision,
             'files_changed': diff_info['files'],
             'diff': diff_info['diff'],
+            'patch_profile': profile.as_dict(),
         }
         attempts.append(attempt)
         best = select_best_attempt(best, attempt)
@@ -184,13 +189,13 @@ def run_repair_loop(workspace: Mapping[str, Any], cases: tuple[Mapping[str, Any]
                   payload={'status': 'blocked', 'reason': decision.get('reason')})
             return _result('blocked', plan, workspace, attempts, {}, decision['reason'], baseline_algo_id,
                            trace_cursor(trace))
-        base_diff = (
-            diff_info['diff']
-            if decision['action'] in {'continue_current_patch', 'fork_from_best_attempt'}
-            else ''
-        )
+        base_mode = 'baseline'
+        base_diff = diff_info['diff'] if decision['action'] == 'continue_current_patch' else ''
+        if base_diff:
+            base_mode = 'continued_patch'
         if decision['action'] == 'fork_from_best_attempt':
             base_diff = best.get('diff') or ''
+            base_mode = 'fork_from_best_attempt' if base_diff else 'baseline'
     reset_workspace(root)
     safe_emit(trace, 'repair.loop_completed', status='failed', terminal=True,
           payload={'status': 'no_validated_patch', 'attempt_count': len(attempts)})
@@ -199,8 +204,9 @@ def run_repair_loop(workspace: Mapping[str, Any], cases: tuple[Mapping[str, Any]
 
 
 def build_verified_patch(run_id: str, loop: Mapping[str, Any]) -> dict[str, Any]:
-    diff = _text(loop.get('winning_patch_diff'))
-    if loop.get('status') != 'validated' or not diff:
+    raw_diff = loop.get('winning_patch_diff')
+    diff = raw_diff if isinstance(raw_diff, str) else str(raw_diff or '')
+    if loop.get('status') != 'validated' or not diff.strip():
         status = 'blocked' if loop.get('status') == 'blocked' else 'no_patch'
         return dump_contract(RepairPatch, {
             'run_id': run_id,
@@ -244,17 +250,27 @@ def _opencode_failure(run: Any) -> dict[str, Any]:
 
 
 def _task_card(plan: Mapping[str, Any], workspace: Mapping[str, Any], attempt: int,
-               attempts: list[Mapping[str, Any]]) -> dict[str, Any]:
+               attempts: list[Mapping[str, Any]], base_profile: Any | None = None,
+               base_mode: str = 'baseline') -> dict[str, Any]:
     brief = plan.get('brief') if isinstance(plan.get('brief'), Mapping) else {}
-    memory = _repair_memory(attempts)
+    memory = repair_memory(attempts, base_profile)
     return {
         'mode': 'lazyrag_trace_driven_repair_v1',
         'attempt': attempt,
         'objective': plan.get('objective'),
         'brief': brief,
         'workspace': {'path': workspace.get('workspace_ref'), 'source_dir': workspace.get('source_dir')},
+        'selected_base': {
+            'mode': base_mode,
+            'patch_profile': base_profile.as_dict() if base_profile and base_profile.normalized_hash else {},
+        },
         'repair_memory': memory,
         'previous_attempts': memory['recent_attempts'][-2:],
+        'hard_constraints': [
+            'Preserve selected_base.patch_profile when mode is not baseline.',
+            'Do not repeat forbidden_patch_fingerprints or forbidden_strategy_keys outside selected_base.',
+            'If continuing from a selected base patch, add a new repair hypothesis; do not only retune carried edits.',
+        ],
         'instructions': [
             'Patch exactly the selected function block. Do not choose another group.',
             'Inspect seed_files first and stay inside allowed_roots.',
@@ -266,45 +282,13 @@ def _task_card(plan: Mapping[str, Any], workspace: Mapping[str, Any], attempt: i
     }
 
 
-def _repair_memory(attempts: list[Mapping[str, Any]]) -> dict[str, Any]:
-    if not attempts:
-        return {'attempt_count': 0, 'failure_reason_counts': {}, 'recent_attempts': [], 'repeat_failures': []}
-
-    def field(attempt: Mapping[str, Any], key: str, name: str) -> Any:
-        value = attempt.get(key)
-        return value.get(name) if isinstance(value, Mapping) else None
-
-    reasons = Counter(
-        reason for attempt in attempts
-        for reason in (_text(field(attempt, 'patch_base_decision', 'reason')),)
-        if reason
-    )
-    recent = [
-        {
-            'attempt': attempt.get('attempt'),
-            'action': _text(field(attempt, 'patch_base_decision', 'action')),
-            'reason': _text(field(attempt, 'patch_base_decision', 'reason')),
-            'target_group_status': field(attempt, 'analysis_delta', 'target_group_status'),
-            'target_remaining_delta': field(attempt, 'analysis_delta', 'target_remaining_delta'),
-            'new_group_count': field(attempt, 'analysis_delta', 'new_group_count'),
-            'files_changed': attempt.get('files_changed') or [],
-        }
-        for attempt in attempts[-5:]
-    ]
-    return {
-        'attempt_count': len(attempts),
-        'failure_reason_counts': dict(reasons),
-        'recent_attempts': recent,
-        'repeat_failures': [reason for reason, count in reasons.items() if reason and count >= 2],
-    }
-
-
 def _result(status: str, plan: Mapping[str, Any], workspace: Mapping[str, Any], attempts: list[Mapping[str, Any]],
             best: Mapping[str, Any], message: str, algo_id_value: str = '',
             trace_cursor: Mapping[str, Any] | None = None) -> dict[str, Any]:
     winner = best if _validated_attempt(best) else {}
     candidate = winner.get('candidate_validation') if isinstance(winner.get('candidate_validation'), Mapping) else {}
     service = candidate.get('service') if isinstance(candidate.get('service'), Mapping) else {}
+    diff = winner.get('diff')
     return {
         'id': 'repair.loop_result',
         'status': status,
@@ -313,7 +297,7 @@ def _result(status: str, plan: Mapping[str, Any], workspace: Mapping[str, Any], 
         'attempt_count': len(attempts),
         'files_changed': winner.get('files_changed') or [],
         'candidate_algo_id': _text(service.get('algorithm_id')),
-        'winning_patch_diff': _text(winner.get('diff')),
+        'winning_patch_diff': diff if isinstance(diff, str) else str(diff or ''),
         'selected_group': _group_summary(plan.get('selected_group')),
         'trace_cursor': dict(trace_cursor or {}),
     }
@@ -373,20 +357,15 @@ def _opencode_config_from_policy(policy: Mapping[str, Any]) -> dict[str, str]:
         role = value
     if not role:
         return {}
-    model = _text(role.get('model') or role.get('name'))
-    base_url = _text(role.get('base_url') or role.get('url')).rstrip('/')
-    provider = ''.join(
-        ch.lower() if ch.isalnum() else '_'
-        for ch in _text(role.get('provider') or role.get('source'))
-    ).strip('_')
-    host = (urlparse(base_url).hostname or '').lower()
-    if host.endswith('dashscope.aliyuncs.com'):
-        base_url = 'https://dashscope.aliyuncs.com/compatible-mode/v1'
+    model = _text(role.get('model'))
+    base_url = _text(role.get('base_url')).rstrip('/')
+    provider = _text(role.get('provider') or role.get('source')).lower()
+    if not PROVIDER_NAME.fullmatch(provider):
+        return {}
+    if provider == 'qwen' and base_url == 'https://dashscope.aliyuncs.com':
+        base_url = f'{base_url}/compatible-mode/v1'
     api_key = _text(role.get('api_key'))
-    skip_auth = (
-        str(role.get('skip_auth')).lower() == 'true'
-        or role.get('skip_auth') is True
-    )
+    skip_auth = role.get('skip_auth') is True
     if not (provider and model and base_url and (api_key or skip_auth)):
         return {}
     return {
@@ -421,7 +400,6 @@ def _runtime_policy(plan: Mapping[str, Any], repair_policy: Mapping[str, Any] | 
         'verification_commands',
         'repair_attempt_budget',
         'opencode_timeout_s',
-        'opencode_first_response_timeout_s',
         'max_patch_bytes',
         'llm_config',
     }
@@ -449,7 +427,6 @@ def _pick(value: Mapping[str, Any], keys: tuple[str, ...]) -> dict[str, Any]:
 
 def _validated_attempt(attempt: Mapping[str, Any]) -> bool:
     candidate = attempt.get('candidate_validation') if isinstance(attempt.get('candidate_validation'), Mapping) else {}
-    opencode = attempt.get('opencode') if isinstance(attempt.get('opencode'), Mapping) else {}
     pre = attempt.get('pre_validation') if isinstance(attempt.get('pre_validation'), Mapping) else {}
     analysis = attempt.get('analysis_delta') if isinstance(attempt.get('analysis_delta'), Mapping) else {}
     comparison = candidate.get('comparison') if isinstance(candidate.get('comparison'), Mapping) else {}
@@ -460,6 +437,4 @@ def _validated_attempt(attempt: Mapping[str, Any]) -> bool:
         and candidate.get('accepted') is True
         and comparison.get('status') == 'completed'
         and analysis.get('status') == 'completed'
-        and opencode.get('returncode') == 0
-        and not opencode.get('last_error')
     )
