@@ -2,6 +2,7 @@ import importlib
 
 memory_mod = importlib.import_module('lazymind.chat.engine.tools.memory_editor')
 skill_editor_mod = importlib.import_module('lazymind.chat.engine.tools.skill_editor')
+skill_operations_mod = importlib.import_module('lazymind.chat.engine.tools.infra.skill_operations')
 skill_remote_store_mod = importlib.import_module('lazymind.chat.engine.tools.infra.skill_remote_store')
 
 
@@ -79,7 +80,7 @@ def test_memory_editor_operations_write_memory_review(monkeypatch):
     ]
 
 
-def test_skill_editor_create_modify_remove_core_paths(monkeypatch):
+def test_skill_editor_create_file_tools_remove_core_paths(monkeypatch):
     create_calls = []
     remove_calls = []
     replace_calls = []
@@ -110,8 +111,8 @@ def test_skill_editor_create_modify_remove_core_paths(monkeypatch):
         'Use this skill for tests.\n'
     )
     monkeypatch.setattr(
-        skill_editor_mod,
-        'list_skill_files',
+        skill_operations_mod,
+        '_list_skill_files',
         lambda category, name, **kwargs: {
             'SKILL.md': existing_content,
             'references/old.md': 'old reference\n',
@@ -126,7 +127,7 @@ def test_skill_editor_create_modify_remove_core_paths(monkeypatch):
             'deleted': sorted(set(before) - set(after)),
         }
 
-    monkeypatch.setattr(skill_editor_mod, 'replace_skill_package_files', fake_replace_skill_package_files)
+    monkeypatch.setattr(skill_operations_mod, '_replace_skill_package_files', fake_replace_skill_package_files)
 
     content = (
         '---\n'
@@ -142,43 +143,54 @@ def test_skill_editor_create_modify_remove_core_paths(monkeypatch):
         category='drafts',
         content=content,
     )
-    modify_result = tool_group.modify_skill(
+    patch_result = tool_group.patch_file(
         'existing',
         category='writing',
-        operations=[
-            {
-                'op': 'patch_file',
-                'path': 'SKILL.md',
-                'old_text': 'Use this skill for tests.',
-                'new_text': 'Use this skill for focused tests.',
-            },
-            {
-                'op': 'write_file',
-                'path': 'scripts/check.py',
-                'content': 'print("ok")\n',
-            },
-            {'op': 'delete_file', 'path': 'references/old.md'},
-        ],
-        reason='package update',
+        path='SKILL.md',
+        old_text='Use this skill for tests.',
+        new_text='Use this skill for focused tests.',
+        reason='patch skill body',
+    )
+    file_create_result = tool_group.create_file(
+        'writing/existing',
+        category='writing',
+        path='scripts/check.py',
+        content='print("ok")\n',
+        reason='new helper script',
+    )
+    delete_result = tool_group.delete_file(
+        'existing',
+        category='writing',
+        path='references/old.md',
+        reason='remove stale reference',
     )
     remove_result = tool_group.remove_skill('existing', category='writing')
 
     assert create_result['success'] is True
     assert create_result['tool'] == 'create_skill'
-    assert modify_result['success'] is True
-    assert modify_result['tool'] == 'modify_skill'
+    assert patch_result['success'] is True
+    assert patch_result['tool'] == 'patch_file'
+    assert file_create_result['success'] is True
+    assert file_create_result['tool'] == 'create_file'
+    assert delete_result['success'] is True
+    assert delete_result['tool'] == 'delete_file'
     assert remove_result['success'] is True
     assert remove_result['tool'] == 'remove_skill'
     assert create_result['result'] == {
         'status': 'created',
         'message': 'Skill was created and is now active.',
     }
-    assert modify_result['result']['status'] == 'modified'
-    assert modify_result['result']['message'] == 'Skill package was modified and is now active.'
-    assert modify_result['result']['touched_files'] == ['SKILL.md', 'references/old.md', 'scripts/check.py']
-    assert modify_result['result']['written_files'] == ['SKILL.md', 'scripts/check.py']
-    assert modify_result['result']['deleted_files'] == ['references/old.md']
-    assert modify_result['result']['summary'] == 'package update'
+    assert patch_result['result']['status'] == 'patched'
+    assert patch_result['result']['touched_files'] == ['SKILL.md']
+    assert patch_result['result']['written_files'] == ['SKILL.md']
+    assert patch_result['result']['deleted_files'] == []
+    assert patch_result['result']['summary'] == 'patch skill body'
+    assert file_create_result['result']['status'] == 'created'
+    assert file_create_result['result']['written_files'] == ['scripts/check.py']
+    assert file_create_result['result']['deleted_files'] == []
+    assert delete_result['result']['status'] == 'deleted'
+    assert delete_result['result']['written_files'] == []
+    assert delete_result['result']['deleted_files'] == ['references/old.md']
     assert remove_result['result'] == {
         'status': 'removed',
         'message': 'Skill was removed and is no longer active.',
@@ -195,10 +207,51 @@ def test_skill_editor_create_modify_remove_core_paths(monkeypatch):
                     'Use this skill for tests.',
                     'Use this skill for focused tests.',
                 ),
+                'references/old.md': 'old reference\n',
+            },
+        ),
+        (
+            'writing',
+            'existing',
+            {'SKILL.md': existing_content, 'references/old.md': 'old reference\n'},
+            {
+                'SKILL.md': existing_content,
+                'references/old.md': 'old reference\n',
                 'scripts/check.py': 'print("ok")\n',
             },
         ),
+        (
+            'writing',
+            'existing',
+            {'SKILL.md': existing_content, 'references/old.md': 'old reference\n'},
+            {'SKILL.md': existing_content},
+        ),
     ]
+
+
+def test_skill_editor_identity_accepts_matching_category_key():
+    resolved = skill_editor_mod.resolve_skill_editor_identity(
+        'research/web-research',
+        'research',
+        'create_file',
+    )
+    omitted_category = skill_editor_mod.resolve_skill_editor_identity(
+        'research/web-research',
+        None,
+        'create_file',
+    )
+    conflict = skill_editor_mod.resolve_skill_editor_identity(
+        'research/web-research',
+        'writing',
+        'create_file',
+    )
+
+    assert resolved == {'category': 'research', 'name': 'web-research'}
+    assert omitted_category == {'category': 'research', 'name': 'web-research'}
+    assert conflict['error'] == (
+        "Skill key 'research/web-research' conflicts with category 'writing'; "
+        'they must refer to the same category.'
+    )
 
 
 def test_skill_remote_store_create_mkdirs_and_remove_trashes():
@@ -232,27 +285,113 @@ def test_skill_editor_rejects_missing_skill_without_write(monkeypatch):
     calls = []
 
     monkeypatch.setattr(skill_editor_mod.lazyllm, 'globals', {'agentic_config': {}})
-    monkeypatch.setattr(skill_editor_mod, 'replace_skill_package_files', lambda *args, **kwargs: calls.append(args))
+    monkeypatch.setattr(skill_operations_mod, '_replace_skill_package_files', lambda *args, **kwargs: calls.append(args))
 
     def raise_missing_skill(*args, **kwargs):
         raise FileNotFoundError('skill not found')
 
-    monkeypatch.setattr(skill_editor_mod, 'list_skill_files', raise_missing_skill)
+    monkeypatch.setattr(skill_operations_mod, '_list_skill_files', raise_missing_skill)
 
-    result = skill_editor_mod.SkillEditorToolGroup().modify_skill(
+    result = skill_editor_mod.SkillEditorToolGroup().patch_file(
         'missing',
         category='writing',
-        operations=[{'op': 'patch_file', 'old_text': 'old', 'new_text': 'new'}],
+        path='SKILL.md',
+        old_text='old',
+        new_text='new',
     )
 
     assert result == {
         'success': False,
-        'tool': 'modify_skill',
+        'tool': 'patch_file',
         'error': {
             'reason': 'Failed to load or edit skill package: skill not found',
         },
     }
     assert calls == []
+
+
+def test_skill_editor_create_and_delete_file_reject_skill_md(monkeypatch):
+    replace_calls = []
+    existing_content = (
+        '---\n'
+        'name: existing\n'
+        'category: writing\n'
+        'description: Existing skill.\n'
+        '---\n'
+        'Use this skill for tests.\n'
+    )
+    monkeypatch.setattr(skill_editor_mod.lazyllm, 'globals', {'agentic_config': {}})
+    monkeypatch.setattr(
+        skill_operations_mod,
+        '_list_skill_files',
+        lambda category, name, **kwargs: {'SKILL.md': existing_content, 'references/doc.md': 'doc\n'},
+    )
+    monkeypatch.setattr(skill_operations_mod, '_replace_skill_package_files', lambda *args, **kwargs: replace_calls.append(args))
+
+    tool_group = skill_editor_mod.SkillEditorToolGroup()
+
+    create_result = tool_group.create_file('existing', category='writing', path='SKILL.md', content='content')
+    create_existing_result = tool_group.create_file(
+        'existing',
+        category='writing',
+        path='references/doc.md',
+        content='new doc\n',
+    )
+    delete_result = tool_group.delete_file('existing', category='writing', path='SKILL.md')
+
+    assert create_result['success'] is False
+    assert create_result['error']['reason'] == (
+        'create_file cannot create or overwrite SKILL.md; use edit_file or patch_file instead.'
+    )
+    assert create_existing_result['success'] is False
+    assert create_existing_result['error']['reason'] == 'File already exists; use edit_file or patch_file to modify it.'
+    assert delete_result['success'] is False
+    assert delete_result['error']['reason'] == (
+        'SKILL.md cannot be deleted with delete_file; use remove_skill to remove the whole skill package.'
+    )
+    assert replace_calls == []
+
+
+def test_skill_editor_validates_skill_md_edits(monkeypatch):
+    replace_calls = []
+    existing_content = (
+        '---\n'
+        'name: existing\n'
+        'category: writing\n'
+        'description: Existing skill.\n'
+        '---\n'
+        'Use this skill for tests.\n'
+    )
+    renamed_content = existing_content.replace('name: existing', 'name: renamed')
+    monkeypatch.setattr(skill_editor_mod.lazyllm, 'globals', {'agentic_config': {}})
+    monkeypatch.setattr(
+        skill_operations_mod,
+        '_list_skill_files',
+        lambda category, name, **kwargs: {'SKILL.md': existing_content},
+    )
+    monkeypatch.setattr(skill_operations_mod, '_replace_skill_package_files', lambda *args, **kwargs: replace_calls.append(args))
+
+    tool_group = skill_editor_mod.SkillEditorToolGroup()
+
+    invalid_result = tool_group.edit_file('existing', category='writing', path='SKILL.md', content='not a skill')
+    rename_result = tool_group.edit_file('existing', category='writing', path='SKILL.md', content=renamed_content)
+    patch_rename_result = tool_group.patch_file(
+        'existing',
+        category='writing',
+        path='SKILL.md',
+        old_text='name: existing',
+        new_text='name: renamed',
+    )
+
+    assert invalid_result['success'] is False
+    assert invalid_result['error']['reason'] == 'SKILL.md must contain YAML frontmatter.'
+    assert rename_result['success'] is False
+    assert rename_result['error']['reason'] == 'SKILL.md frontmatter name/category cannot be changed; use rename_skill.'
+    assert patch_rename_result['success'] is False
+    assert patch_rename_result['error']['reason'] == (
+        'SKILL.md frontmatter name/category cannot be changed; use rename_skill.'
+    )
+    assert replace_calls == []
 
 
 def test_skill_editor_renames_package(monkeypatch):
