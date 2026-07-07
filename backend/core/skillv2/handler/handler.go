@@ -1761,6 +1761,8 @@ func skillSummaryDTO(item skillservice.SkillSummary) map[string]any {
 		"tags":             item.Tags,
 		"head_revision_id": item.HeadRevisionID,
 		"file_content":     item.FileContent,
+		"auto_evo":         item.AutoEvo,
+		"is_enabled":       item.IsEnabled,
 		"draft":            draftSummaryDTO(item.Draft),
 	}
 }
