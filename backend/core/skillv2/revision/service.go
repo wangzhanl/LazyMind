@@ -14,6 +14,7 @@ import (
 	"github.com/google/uuid"
 	"gorm.io/gorm"
 
+	skillreview "lazymind/core/skillv2/review"
 	skillsearch "lazymind/core/skillv2/search"
 )
 
@@ -269,6 +270,9 @@ func (s *Service) CommitDraft(ctx context.Context, req CommitDraftRequest) (Comm
 			"updated_at":       s.clock.Now(),
 			"draft_updated_at": nil,
 		}).Error; err != nil {
+			return err
+		}
+		if err := skillreview.MarkSkillReviews(ctx, tx, req.SkillID, "committed", req.UserID, s.clock.Now()); err != nil {
 			return err
 		}
 		if err := s.enforceRevisionLimit(ctx, tx, req.SkillID, protectedIDs(revisionID, valueOrEmpty(baseRevisionID))); err != nil {

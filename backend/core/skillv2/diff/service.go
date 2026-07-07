@@ -59,13 +59,23 @@ type SkillDiff struct {
 }
 
 type DiffFile struct {
-	Path           string
-	Type           string
-	Status         string
-	Binary         bool
-	TooLarge       bool
-	CacheWritten   bool
-	DiffEntryLines []DiffEntryLine
+	Path              string
+	Type              string
+	Status            string
+	Binary            bool
+	TooLarge          bool
+	CacheWritten      bool
+	ReviewID          string
+	ReviewVersion     int64
+	DraftVersion      int64
+	BaseRevisionID    string
+	DraftSnapshotHash string
+	CanUndo           bool
+	HunkCount         int
+	PendingCount      int
+	AcceptedCount     int
+	RejectedCount     int
+	DiffEntryLines    []DiffEntryLine
 }
 
 type DiffEntryLine struct {
@@ -75,6 +85,12 @@ type DiffEntryLine struct {
 	OldLine                 int
 	NewLine                 int
 	DisplayNoNewLineWarning bool
+	HunkID                  string
+	Decision                string
+	OldStart                int
+	OldLines                int
+	NewStart                int
+	NewLines                int
 }
 
 func NewService(deps ServiceDeps) *Service {

@@ -25,6 +25,7 @@ import (
 	skillhttperr "lazymind/core/skillv2/httperr"
 	skillmarket "lazymind/core/skillv2/market"
 	skillremotefs "lazymind/core/skillv2/remotefs"
+	skillreview "lazymind/core/skillv2/review"
 	skillrevision "lazymind/core/skillv2/revision"
 	skillsearch "lazymind/core/skillv2/search"
 	skillservice "lazymind/core/skillv2/service"
@@ -727,7 +728,7 @@ func DeleteRevision(w http.ResponseWriter, r *http.Request) {
 }
 
 func DiffTree(w http.ResponseWriter, r *http.Request) {
-	db, userID, oldFS, newFS, opts, ok := resolveDiffRequest(w, r)
+	db, userID, oldFS, newFS, opts, _, ok := resolveDiffRequest(w, r)
 	_ = db
 	if !ok {
 		return
@@ -745,7 +746,7 @@ func DiffTree(w http.ResponseWriter, r *http.Request) {
 }
 
 func DiffFile(w http.ResponseWriter, r *http.Request) {
-	_, _, oldFS, newFS, opts, ok := resolveDiffRequest(w, r)
+	db, userID, oldFS, newFS, opts, diffReq, ok := resolveDiffRequest(w, r)
 	if !ok {
 		return
 	}
@@ -758,7 +759,119 @@ func DiffFile(w http.ResponseWriter, r *http.Request) {
 		replyServiceError(w, err)
 		return
 	}
+	if isDraftReviewDiff(diffReq) && strings.TrimSpace(opts.Mode) == "" {
+		resp, err = newReviewService(db).PrepareFile(r.Context(), skillreview.PrepareFileRequest{
+			SkillID: strings.TrimSpace(diffReq.New.SkillID),
+			UserID:  userID,
+			File:    resp,
+		})
+		if err != nil {
+			replyServiceError(w, err)
+			return
+		}
+	}
 	common.ReplyOK(w, diffFileDTO(resp))
+}
+
+func DraftReviewAction(w http.ResponseWriter, r *http.Request) {
+	db, skillID, userID, ok := requireOwnedSkill(w, r)
+	if !ok {
+		return
+	}
+	reviewID := strings.TrimSpace(common.PathVar(r, "review_id"))
+	if reviewID == "" {
+		replyError(w, "missing review_id", http.StatusBadRequest)
+		return
+	}
+	var req struct {
+		ExpectedReviewVersion int64 `json:"expected_review_version"`
+		Items                 []struct {
+			Path     string `json:"path"`
+			HunkID   string `json:"hunk_id"`
+			Decision string `json:"decision"`
+		} `json:"items"`
+	}
+	if !decodeJSON(w, r, &req) {
+		return
+	}
+	items := make([]skillreview.ActionItem, 0, len(req.Items))
+	for _, item := range req.Items {
+		items = append(items, skillreview.ActionItem{Path: strings.TrimSpace(item.Path), HunkID: strings.TrimSpace(item.HunkID), Decision: strings.TrimSpace(item.Decision)})
+	}
+	resp, err := newReviewService(db).Action(r.Context(), skillreview.ActionRequest{
+		SkillID:               skillID,
+		UserID:                userID,
+		ReviewID:              reviewID,
+		ExpectedReviewVersion: req.ExpectedReviewVersion,
+		Items:                 items,
+	})
+	if err != nil {
+		replyServiceError(w, err)
+		return
+	}
+	common.ReplyOK(w, map[string]any{"review_version": resp.ReviewVersion, "batch_id": resp.BatchID, "can_undo": resp.CanUndo})
+}
+
+func DraftReviewUndo(w http.ResponseWriter, r *http.Request) {
+	db, skillID, userID, ok := requireOwnedSkill(w, r)
+	if !ok {
+		return
+	}
+	reviewID := strings.TrimSpace(common.PathVar(r, "review_id"))
+	if reviewID == "" {
+		replyError(w, "missing review_id", http.StatusBadRequest)
+		return
+	}
+	var req struct {
+		ExpectedReviewVersion int64 `json:"expected_review_version"`
+	}
+	if !decodeJSON(w, r, &req) {
+		return
+	}
+	resp, err := newReviewService(db).Undo(r.Context(), skillreview.UndoRequest{
+		SkillID:               skillID,
+		UserID:                userID,
+		ReviewID:              reviewID,
+		ExpectedReviewVersion: req.ExpectedReviewVersion,
+	})
+	if err != nil {
+		replyServiceError(w, err)
+		return
+	}
+	items := make([]map[string]any, 0, len(resp.Items))
+	for _, item := range resp.Items {
+		items = append(items, map[string]any{"path": item.Path, "hunk_id": item.HunkID, "decision": item.Decision})
+	}
+	common.ReplyOK(w, map[string]any{"review_version": resp.ReviewVersion, "undone_batch_id": resp.UndoneBatchID, "items": items, "can_undo": resp.CanUndo})
+}
+
+func DraftReviewCommit(w http.ResponseWriter, r *http.Request) {
+	db, skillID, userID, ok := requireOwnedSkill(w, r)
+	if !ok {
+		return
+	}
+	reviewID := strings.TrimSpace(common.PathVar(r, "review_id"))
+	if reviewID == "" {
+		replyError(w, "missing review_id", http.StatusBadRequest)
+		return
+	}
+	var req struct {
+		ExpectedReviewVersion int64 `json:"expected_review_version"`
+	}
+	if !decodeJSON(w, r, &req) {
+		return
+	}
+	resp, err := newReviewService(db).Commit(r.Context(), skillreview.CommitRequest{
+		SkillID:               skillID,
+		UserID:                userID,
+		ReviewID:              reviewID,
+		ExpectedReviewVersion: req.ExpectedReviewVersion,
+	})
+	if err != nil {
+		replyServiceError(w, err)
+		return
+	}
+	common.ReplyOK(w, map[string]any{"revision_id": resp.RevisionID, "revision_no": resp.RevisionNo})
 }
 
 func RemoteFSList(w http.ResponseWriter, r *http.Request) {
@@ -1281,6 +1394,10 @@ func newRevisionService(db *gorm.DB) *skillrevision.Service {
 	return skillrevision.NewService(skillrevision.ServiceDeps{DB: db, BlobStore: skillrevision.NewBlobStore(db, skillrevision.NewLocalObjectStore(skillObjectRoot()))})
 }
 
+func newReviewService(db *gorm.DB) *skillreview.Service {
+	return skillreview.NewService(skillreview.ServiceDeps{DB: db, BlobStore: skillservice.NewBlobStore(db, skillservice.NewLocalObjectStore(skillObjectRoot()))})
+}
+
 func newRemoteFSHandler() *skillremotefs.Handler {
 	db := store.DB()
 	return skillremotefs.NewHandler(skillremotefs.HandlerDeps{DB: db, BlobStore: skillremotefs.NewBlobStore(db, skillremotefs.NewLocalObjectStore(skillObjectRoot()))})
@@ -1446,36 +1563,36 @@ type diffRefRequest struct {
 	UploadID   string `json:"upload_id"`
 }
 
-func resolveDiffRequest(w http.ResponseWriter, r *http.Request) (*gorm.DB, string, skilldiff.ReadOnlySkillFS, skilldiff.ReadOnlySkillFS, skilldiff.DiffOptions, bool) {
+func resolveDiffRequest(w http.ResponseWriter, r *http.Request) (*gorm.DB, string, skilldiff.ReadOnlySkillFS, skilldiff.ReadOnlySkillFS, skilldiff.DiffOptions, diffRequest, bool) {
 	db, ok := requireDB(w)
 	if !ok {
-		return nil, "", nil, nil, skilldiff.DiffOptions{}, false
+		return nil, "", nil, nil, skilldiff.DiffOptions{}, diffRequest{}, false
 	}
 	userID, _, ok := requireUser(w, r)
 	if !ok {
-		return nil, "", nil, nil, skilldiff.DiffOptions{}, false
+		return nil, "", nil, nil, skilldiff.DiffOptions{}, diffRequest{}, false
 	}
 	var req diffRequest
 	if !decodeJSON(w, r, &req) {
-		return nil, "", nil, nil, skilldiff.DiffOptions{}, false
+		return nil, "", nil, nil, skilldiff.DiffOptions{}, diffRequest{}, false
 	}
 	if err := authorizeDiffRef(r.Context(), db, userID, req.Old); err != nil {
 		replyServiceError(w, err)
-		return nil, "", nil, nil, skilldiff.DiffOptions{}, false
+		return nil, "", nil, nil, skilldiff.DiffOptions{}, diffRequest{}, false
 	}
 	if err := authorizeDiffRef(r.Context(), db, userID, req.New); err != nil {
 		replyServiceError(w, err)
-		return nil, "", nil, nil, skilldiff.DiffOptions{}, false
+		return nil, "", nil, nil, skilldiff.DiffOptions{}, diffRequest{}, false
 	}
 	if req.Old.SkillID != "" && req.New.SkillID != "" && req.Old.SkillID != req.New.SkillID {
 		replyError(w, "diff refs must belong to the same skill", http.StatusUnprocessableEntity)
-		return nil, "", nil, nil, skilldiff.DiffOptions{}, false
+		return nil, "", nil, nil, skilldiff.DiffOptions{}, diffRequest{}, false
 	}
 	resolver := skilldiff.NewRefResolver(skilldiff.RefResolverDeps{DB: db, UploadStore: dbUploadStore{db: db}})
 	oldFS, newFS, err := resolver.ResolvePair(r.Context(), skilldiff.ResolvePairRequest{UserID: userID, Old: req.Old.toDiffRef(), New: req.New.toDiffRef()})
 	if err != nil {
 		replyServiceError(w, err)
-		return nil, "", nil, nil, skilldiff.DiffOptions{}, false
+		return nil, "", nil, nil, skilldiff.DiffOptions{}, diffRequest{}, false
 	}
 	return db, userID, oldFS, newFS, skilldiff.DiffOptions{
 		Path:         strings.TrimSpace(req.Path),
@@ -1484,7 +1601,18 @@ func resolveDiffRequest(w http.ResponseWriter, r *http.Request) (*gorm.DB, strin
 		OldStart:     req.OldStart,
 		NewStart:     req.NewStart,
 		Lines:        req.Lines,
-	}, true
+	}, req, true
+}
+
+func isDraftReviewDiff(req diffRequest) bool {
+	if !strings.EqualFold(strings.TrimSpace(req.New.Type), "draft") || strings.TrimSpace(req.New.SkillID) == "" {
+		return false
+	}
+	if req.Old.SkillID != "" && req.Old.SkillID != req.New.SkillID {
+		return false
+	}
+	oldType := strings.ToLower(strings.TrimSpace(req.Old.Type))
+	return oldType == "head" || oldType == "revision"
 }
 
 func authorizeDiffRef(ctx context.Context, db *gorm.DB, userID string, ref diffRefRequest) error {
@@ -1710,7 +1838,7 @@ func revisionDTO(item skillrevision.Revision) map[string]any {
 func diffFileDTO(file skilldiff.DiffFile) map[string]any {
 	lines := make([]map[string]any, 0, len(file.DiffEntryLines))
 	for _, line := range file.DiffEntryLines {
-		lines = append(lines, map[string]any{
+		item := map[string]any{
 			"type":                        line.Type,
 			"text":                        line.Text,
 			"html":                        line.HTML,
@@ -1720,9 +1848,43 @@ func diffFileDTO(file skilldiff.DiffFile) map[string]any {
 			"display_no_new_line_warning": line.DisplayNoNewLineWarning,
 			"old_line":                    line.OldLine,
 			"new_line":                    line.NewLine,
-		})
+		}
+		if line.HunkID != "" {
+			item["hunk_id"] = line.HunkID
+		}
+		if line.Decision != "" {
+			item["decision"] = line.Decision
+		}
+		if line.OldStart > 0 {
+			item["old_start"] = line.OldStart
+		}
+		if line.OldLines > 0 {
+			item["old_lines"] = line.OldLines
+		}
+		if line.NewStart > 0 {
+			item["new_start"] = line.NewStart
+		}
+		if line.NewLines > 0 {
+			item["new_lines"] = line.NewLines
+		}
+		lines = append(lines, item)
 	}
-	return map[string]any{"path": file.Path, "type": file.Type, "status": file.Status, "binary": file.Binary, "too_large": file.TooLarge, "cache_written": file.CacheWritten, "diffEntryLines": lines, "diff_entry_lines": lines}
+	out := map[string]any{"path": file.Path, "type": file.Type, "status": file.Status, "binary": file.Binary, "too_large": file.TooLarge, "cache_written": file.CacheWritten, "diffEntryLines": lines, "diff_entry_lines": lines}
+	if file.ReviewID != "" {
+		out["review_id"] = file.ReviewID
+		out["review_version"] = file.ReviewVersion
+		out["draft_version"] = file.DraftVersion
+		out["base_revision_id"] = file.BaseRevisionID
+		out["draft_snapshot_hash"] = file.DraftSnapshotHash
+		out["can_undo"] = file.CanUndo
+	}
+	if file.HunkCount > 0 {
+		out["hunk_count"] = file.HunkCount
+		out["pending_count"] = file.PendingCount
+		out["accepted_count"] = file.AcceptedCount
+		out["rejected_count"] = file.RejectedCount
+	}
+	return out
 }
 
 type shareRecord struct {
