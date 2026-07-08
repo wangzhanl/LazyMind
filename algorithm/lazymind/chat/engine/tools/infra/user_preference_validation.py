@@ -4,13 +4,8 @@ import re
 from typing import Any, Optional
 
 _FRONTMATTER_RE = re.compile(r'^---\s*\n(.*?)\n---\s*(\n(.*))?$', re.DOTALL)
-_RESPONSE_STYLES_ZH = ('简洁', '详细', '幽默', '正式')
-_RESPONSE_STYLES_EN = ('concise', 'detailed', 'humorous', 'formal')
-_RESPONSE_STYLES = (
-    *_RESPONSE_STYLES_ZH,
-    *_RESPONSE_STYLES_EN,
-    '',
-)
+_FRONTMATTER_FIELDS = {'agent_persona', 'preferred_name', 'response_style'}
+_MAX_FRONTMATTER_VALUE_LENGTH = 100
 
 
 def parse_user_preference_frontmatter(content: str) -> tuple[dict[str, Any], str]:
@@ -44,9 +39,19 @@ def validate_user_preference_content(content: str) -> Optional[str]:
         return "Frontmatter must include 'preferred_name'."
     if 'response_style' not in frontmatter:
         return "Frontmatter must include 'response_style'."
-    if frontmatter.get('response_style') not in _RESPONSE_STYLES:
-        return (
-            "Frontmatter 'response_style' must be one of: "
-            '简洁/详细/幽默/正式 or concise/detailed/humorous/formal or "".'
-        )
+    extra_fields = set(frontmatter) - _FRONTMATTER_FIELDS
+    if extra_fields:
+        fields = ', '.join(sorted(extra_fields))
+        return f'Frontmatter contains unsupported fields: {fields}.'
+    for field in sorted(_FRONTMATTER_FIELDS):
+        value = frontmatter.get(field)
+        if not isinstance(value, str):
+            return f"Frontmatter '{field}' must be a string."
+        if len(value) > _MAX_FRONTMATTER_VALUE_LENGTH:
+            return (
+                f"Frontmatter '{field}' must be "
+                f'{_MAX_FRONTMATTER_VALUE_LENGTH} characters or less.'
+            )
+    if not body.strip():
+        return 'user_preference must have Markdown body content after frontmatter.'
     return None

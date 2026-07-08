@@ -36,8 +36,10 @@ def memory_editor(
     later sessions, and other concise session-history facts from the agent's
     perspective.
 
-    Never save workflows, procedures, lessons learned, tool usage patterns,
-    implementation recipes, SOPs, or general task conventions to memory or user
+    Save stable personal preferences and habits to target='user_preference',
+    including stable workflow preferences. Never save step-by-step SOPs,
+    troubleshooting procedures, lessons learned, tool usage patterns,
+    implementation recipes, or task-specific conventions to memory or user
     profile; those belong in reusable skills. Do not save obvious facts
     derivable from the codebase or raw transcript dumps. Do not use memory for
     explicit user-specific vocabulary or terminology mappings; use the

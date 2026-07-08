@@ -217,29 +217,24 @@ def test_memory_review_prompt_excludes_preferences_and_workflows():
     assert 'Current agent working memory' in prompt
     assert 'Current user profile' in prompt
     assert 'Environment context' not in prompt
-    assert 'Do NOT save multi-step reusable workflows' in prompt
-    assert 'reusable workflows' in prompt
+    assert 'Do NOT save step-by-step SOPs' in prompt
+    assert 'stable preference' in prompt
+    assert 'currently doing is not necessarily something the user likes or prefers' in prompt
+    assert 'consider saving it to memory instead' in prompt
     assert 'skill_editor' not in prompt
-    assert '# User Profile Format' in prompt
-    assert 'agent_persona' in prompt
-    assert 'preferred_name' in prompt
-    assert 'response_style' in prompt
-    assert '智能体角色' in prompt  # still present in Chinese parenthetical notes
-    assert '用户称谓' in prompt
-    assert '回复风格' in prompt
-    assert 'role the user wants the agent to play' in prompt
-    assert 'how the user wants the agent to address them' in prompt
-    assert 'display/use exactly one of 简洁, 详细, 幽默, 正式' in prompt
-    assert '简洁, 详细, 幽默, 正式' in prompt
-    assert 'concise, detailed, humorous, formal' in prompt
-    assert '100 characters or less' in prompt
-    assert 'existing valid response_style in either language' in prompt
-    assert 'Do not put language preferences' in prompt
-    assert 'verbs, or full instructions' in prompt
-    assert 'response_style is unknown' in prompt
-    assert 'use ""' in prompt
-    assert 'never use generic acknowledgement text' in prompt
-    assert 'only when the user explicitly asks to change that specific field' in prompt
+    assert '# User Profile Notes' in prompt
+    assert "follow memory_editor's user_preference contract" in prompt
+    assert 'agent_persona' not in prompt
+    assert 'preferred_name' not in prompt
+    assert 'response_style' not in prompt
+    assert '智能体角色' not in prompt
+    assert '用户称谓' not in prompt
+    assert '回复风格' not in prompt
+    assert 'role the user wants the agent to play' not in prompt
+    assert '100 characters or less' not in prompt
+    assert 'explicit stable agent persona' in prompt
+    assert 'ordinary preferences in the Markdown body' in prompt
+    assert 'keep existing frontmatter values unchanged' in prompt
     assert 'do not rewrite it wholesale with memory_editor' in prompt
 
 

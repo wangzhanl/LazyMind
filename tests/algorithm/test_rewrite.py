@@ -24,6 +24,17 @@ def _load_rewrite_module():
 
     fake_lazyllm = ModuleType('lazyllm')
     fake_lazyllm.AutoModel = lambda *args, **kwargs: object()
+    fake_lazyllm.config = {}
+    fake_lazyllm_configs = ModuleType('lazyllm.configs')
+
+    class FakeConfig(dict):
+        def __init__(self, *args, **kwargs):
+            super().__init__()
+
+        def add(self, name, _type, default, *_args, **_kwargs):
+            self[name] = default
+
+    fake_lazyllm_configs.Config = FakeConfig
 
     fake_tool_infra = ModuleType('lazymind.chat.engine.tools.infra')
     fake_tool_infra.parse_user_preference_frontmatter = (
@@ -39,12 +50,14 @@ def _load_rewrite_module():
 
     original_modules = {
         'lazyllm': sys.modules.get('lazyllm'),
+        'lazyllm.configs': sys.modules.get('lazyllm.configs'),
         'lazymind.chat.engine.tools.infra': sys.modules.get('lazymind.chat.engine.tools.infra'),
         'lazymind.model_config': sys.modules.get('lazymind.model_config'),
     }
 
     try:
         sys.modules['lazyllm'] = fake_lazyllm
+        sys.modules['lazyllm.configs'] = fake_lazyllm_configs
         sys.modules['lazymind.chat.engine.tools.infra'] = fake_tool_infra
         sys.modules['lazymind.model_config'] = fake_load_config
 
@@ -58,6 +71,7 @@ def _load_rewrite_module():
         ns._apply_memory_edit_operations = memory._apply_memory_edit_operations
         ns._apply_user_preference_edit_operations = preference._apply_user_preference_edit_operations
         ns._PROMPT_BUILDERS = base._PROMPT_BUILDERS
+        ns.RewriteTaskType = base.RewriteTaskType
         ns._compact_memory_to_recent_week = memory._compact_memory_to_recent_week
         ns._format_inputs_block = base._format_inputs_block
         ns.parse_user_preference_frontmatter = (
@@ -149,7 +163,7 @@ def test_rewrite_content_requires_user_instruct():
 
 
 def test_generate_prompts_include_stale_content_governance():
-    for task_type in ('skill', 'memory', 'user_preference'):
+    for task_type in ('skill', 'memory'):
         prompt = _PROMPT_BUILDERS[task_type](
             content='old content that may now be stale',
             user_instruct='Outdated=TRUE: replace old KB failure diagnosis with the current service-level cause.',
@@ -186,17 +200,16 @@ def test_user_preference_prompt_requires_yaml_frontmatter():
     assert 'agent_persona' in prompt
     assert 'preferred_name' in prompt
     assert 'response_style' in prompt
-    assert '智能体角色' in prompt  # still present in Chinese parenthetical notes
-    assert '用户称谓' in prompt
-    assert '回复风格' in prompt
-    assert 'legacy/free-form' in prompt
+    assert '智能体角色' not in prompt
+    assert '用户称谓' not in prompt
+    assert '回复风格' not in prompt
+    assert '技术助理' not in prompt
+    assert 'free-form without any YAML frontmatter' in prompt
     assert 'frontmatter-plus-body format' in prompt
-    assert 'role the user wants the agent to play' in prompt
-    assert 'how the user wants the agent to address them' in prompt
-    assert 'display/use exactly one of 简洁, 详细, 幽默, 正式' in prompt
-    assert '简洁, 详细, 幽默, 正式' in prompt
-    assert 'concise, detailed, humorous, formal' in prompt
-    assert 'existing valid response_style in either language' in prompt
+    assert 'explicit stable agent persona' in prompt
+    assert 'preferred name/address' in prompt
+    assert 'short response style' in prompt
+    assert 'existing response_style' in prompt
     assert 'Do not put language preferences' in prompt
     assert 'verbs, or full instructions' in prompt
     assert 'response_style is unknown' in prompt
@@ -240,13 +253,36 @@ def test_user_preference_validation_requires_yaml_frontmatter():
             '- Prefer manual git commits.'
         ),
     )
+    assert _validate_generated_content(
+        'user_preference',
+        (
+            '---\n'
+            'agent_persona: "algorithm collaborator"\n'
+            'preferred_name: ""\n'
+            'response_style: "concise, direct"\n'
+            '---\n'
+            '- Prefer manual git commits.'
+        ),
+    )
+    assert _validate_generated_content(
+        'user_preference',
+        (
+            '---\n'
+            'agent_persona: "algorithm collaborator"\n'
+            'preferred_name: ""\n'
+            'response_style: "轻松"\n'
+            '---\n'
+            '- 偏好轻松风格。'
+        ),
+    )
 
     invalid_cases = [
         'agent_persona: "x"\npreferred_name: ""\nresponse_style: "concise"\n\nbody',
         '---\nagent_persona: "x"\nresponse_style: "concise"\n---\nbody',
         '---\nagent_persona: "x"\npreferred_name: ""\nresponse_style: "concise"\n---\n',
-        '---\nagent_persona: "x"\npreferred_name: ""\nresponse_style: "concise, direct"\n---\nbody',
-        '---\nagent_persona: "x"\npreferred_name: ""\nresponse_style: "轻松"\n---\nbody',
+        '---\nagent_persona: "x"\npreferred_name: ""\nresponse_style: "concise"\nextra: "x"\n---\nbody',
+        '---\nagent_persona: ["x"]\npreferred_name: ""\nresponse_style: "concise"\n---\nbody',
+        f'---\nagent_persona: "{"x" * 101}"\npreferred_name: ""\nresponse_style: "concise"\n---\nbody',
         '- not: a mapping',
     ]
     for invalid in invalid_cases:
