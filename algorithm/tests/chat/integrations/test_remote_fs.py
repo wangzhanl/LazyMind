@@ -219,6 +219,32 @@ def test_materialize_dir_recursively_downloads_files(captured_requests, tmp_path
     assert os.path.isdir(tmp_path / 'scripts')
 
 
+@pytest.mark.parametrize(
+    'remote_name',
+    [
+        'skills/coding/pkg/..',
+        'skills/coding/pkg/../escape.py',
+        'skills/coding/pkg/..\\escape.py',
+    ],
+)
+def test_materialize_dir_rejects_paths_outside_local_dir(captured_requests, tmp_path, remote_name):
+    calls, responses = captured_requests
+    responses.append(FakeResponse({
+        'items': [
+            {'name': remote_name, 'type': 'file', 'size': 12},
+        ],
+    }))
+
+    with pytest.raises(RuntimeError, match='invalid relative path'):
+        RemoteFS(base_url='http://core').materialize_dir(
+            'remote://skills/coding/pkg',
+            str(tmp_path),
+        )
+
+    assert len(calls) == 1
+    assert not (tmp_path.parent / 'escape.py').exists()
+
+
 def test_task_id_falls_back_to_session_id(captured_requests):
     calls, responses = captured_requests
     lazyllm.globals['agentic_config'] = {'user_id': 'user-1', 'session_id': 'session-fallback'}

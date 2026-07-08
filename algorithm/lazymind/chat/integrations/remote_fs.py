@@ -284,9 +284,13 @@ class RemoteFS(LazyLLMFSBase):
                     rel_path = remote_name[len(prefix):]
                 else:
                     rel_path = remote_name.rsplit('/', 1)[-1]
-                if not rel_path or rel_path.startswith('../') or '/..' in rel_path:
+                rel_parts = [part for part in rel_path.replace('\\', '/').split('/') if part]
+                if not rel_parts or any(part in ('.', '..') for part in rel_parts):
                     raise RuntimeError(f'remote-fs materialize got invalid relative path: {rel_path!r}')
-                destination = os.path.join(local_dir, *rel_path.split('/'))
+                local_root = os.path.abspath(local_dir)
+                destination = os.path.abspath(os.path.join(local_root, *rel_parts))
+                if os.path.commonpath([local_root, destination]) != local_root:
+                    raise RuntimeError(f'remote-fs materialize got invalid relative path: {rel_path!r}')
                 os.makedirs(os.path.dirname(destination), exist_ok=True)
                 with self.open(remote_name, 'rb') as src, open(destination, 'wb') as dst:
                     dst.write(src.read())
