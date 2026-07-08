@@ -254,6 +254,11 @@ def _task_card(plan: Mapping[str, Any], workspace: Mapping[str, Any], attempt: i
                base_mode: str = 'baseline') -> dict[str, Any]:
     brief = plan.get('brief') if isinstance(plan.get('brief'), Mapping) else {}
     memory = repair_memory(attempts, base_profile)
+    public_memory = {
+        key: memory[key]
+        for key in ('attempt_count', 'failure_reason_counts', 'recent_attempts', 'repeat_failures')
+        if key in memory
+    }
     return {
         'mode': 'lazyrag_trace_driven_repair_v1',
         'attempt': attempt,
@@ -262,14 +267,14 @@ def _task_card(plan: Mapping[str, Any], workspace: Mapping[str, Any], attempt: i
         'workspace': {'path': workspace.get('workspace_ref'), 'source_dir': workspace.get('source_dir')},
         'selected_base': {
             'mode': base_mode,
-            'patch_profile': base_profile.as_dict() if base_profile and base_profile.normalized_hash else {},
+            'workspace_contains_prior_patch': bool(base_profile and base_profile.normalized_hash),
         },
-        'repair_memory': memory,
+        'repair_memory': public_memory,
         'previous_attempts': memory['recent_attempts'][-2:],
         'hard_constraints': [
-            'Preserve selected_base.patch_profile when mode is not baseline.',
-            'Do not repeat forbidden_patch_fingerprints or forbidden_strategy_keys outside selected_base.',
-            'If continuing from a selected base patch, add a new repair hypothesis; do not only retune carried edits.',
+            'Use the current workspace state as the repair starting point.',
+            'Do not resubmit an unchanged or previously failed patch.',
+            'When continuing from a prior patch, refine or replace it only when the evidence supports the change.',
         ],
         'instructions': [
             'Patch exactly the selected function block. Do not choose another group.',
