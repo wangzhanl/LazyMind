@@ -9,6 +9,7 @@ from typing import Any
 
 from fastapi import HTTPException
 
+from evo.artifact_flow.state import FlowRunState
 from evo.artifact_runtime.evo import catalog as C
 from evo.artifact_runtime.kernel import ArtifactKey, ArtifactRef
 from evo.operations.abtest.materializers import compare_eval_detail_for_repair
@@ -46,7 +47,6 @@ EVENT_TYPE_BY_ARTIFACT = {
 REPAIR_TRACE_TYPES = {
     'repair.attempt_started': 'repair.attempt',
     'repair.base_selected': 'repair.attempt',
-    'repair.decision_completed': 'repair.loop',
     'repair.loop_completed': 'repair.loop',
     'repair.patch_verified': 'repair.verify',
     'opencode.setup': 'repair.opencode',
@@ -83,6 +83,12 @@ STEP_BY_ARTIFACT = {
     for spec in specs
 }
 STEP_ID_NAMESPACE = uuid.uuid5(uuid.NAMESPACE_URL, 'lazyrag:evo:step-events:v1')
+GATE_BOUNDARY_BY_STATUS = {
+    'paused': ('paused', 'pause'),
+    'failed': ('failed', 'failed'),
+    'cancelled': ('canceled', 'cancel'),
+}
+GATE_BOUNDARY_ACTIONS = tuple(action for _, action in GATE_BOUNDARY_BY_STATUS.values())
 SECRET = re.compile(r'(api[_-]?key|token|secret|password|authorization|llm_config)', re.I)
 AUTH_SECRET = re.compile(
     r'(?i)\bauthorization\s*[:=]\s*(?:bearer|basic|token)?\s*[^\s,;)\]}]+'
@@ -140,12 +146,13 @@ class ProjectionService:
 
     def steps(self, thread_id: str) -> dict[str, Any]:
         self._require_thread(thread_id)
+        state = self.runtime.gate_state(thread_id)
         store = self.runtime.store()
         try:
             rows = _source_event_rows(thread_id, store)
         finally:
             store.close()
-        items = _step_items(thread_id, rows)
+        items = _step_items(thread_id, rows, state)
         active = next((item['step_id'] for item in reversed(items) if item['active']), '')
         return {
             'thread_id': thread_id,
@@ -159,18 +166,20 @@ class ProjectionService:
         store = self.runtime.store()
         try:
             rows = _source_event_rows(thread_id, store)
+            state = self.runtime.gate_state(thread_id)
             step_id = _normalized_step_id(step_id)
             if step_id and step_id not in {row['step_id'] for row in rows}:
                 raise HTTPException(422, 'unknown step_id for thread')
             items = _display_events(
                 [row for row in rows if not step_id or row['step_id'] == step_id],
                 _num_case(config),
+                state,
             )
             if after_event_id:
-                ids = [str(item['event_id']) for item in items]
-                if after_event_id not in ids:
+                sliced = _events_after_id(items, after_event_id)
+                if sliced is None:
                     raise HTTPException(422, 'unknown event_id for event scope')
-                items = items[ids.index(after_event_id) + 1:]
+                items = sliced
         finally:
             store.close()
         return {
@@ -641,7 +650,7 @@ def _refs_by_step(refs: Iterable[ArtifactRef]) -> dict[str, list[ArtifactRef]]:
     return {step: grouped[step] for step in C.STEPS if grouped[step]}
 
 
-def _display_events(rows: list[dict[str, Any]], num_case: int) -> list[dict[str, Any]]:
+def _display_events(rows: list[dict[str, Any]], num_case: int, state: FlowRunState) -> list[dict[str, Any]]:
     items: list[dict[str, Any]] = []
     case_counts: dict[str, int] = {}
     ordered = sorted(rows, key=lambda item: item['order'])
@@ -652,12 +661,21 @@ def _display_events(rows: list[dict[str, Any]], num_case: int) -> list[dict[str,
         item = _artifact_event(row, num_case, case_counts)
         if item:
             items.append(item)
+        if _is_root_row(row):
+            _append_step_event(
+                items,
+                row,
+                action='finish',
+                status='completed',
+                progress={'percent': 100},
+            )
         if row['order'] == last_order_by_step[row['step_id']]:
             _append_transition(items, row)
+    _append_gate_boundary(items, ordered, state)
     return items
 
 
-def _step_items(thread_id: str, rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def _step_items(thread_id: str, rows: list[dict[str, Any]], state: FlowRunState) -> list[dict[str, Any]]:
     by_id: dict[str, dict[str, Any]] = {}
     for row in sorted(rows, key=lambda item: item['order']):
         step_id = row['step_id']
@@ -672,23 +690,23 @@ def _step_items(thread_id: str, rows: list[dict[str, Any]]) -> list[dict[str, An
                 'event_count': 0,
                 'next_step_id': row.get('next_step_id') or '',
                 'version': None,
-                '_completed': False,
+                'status': 'running',
             },
         )
         item['event_count'] += 1
         item['next_step_id'] = row.get('next_step_id') or ''
         ref = row['ref']
         if ref.key.artifact_id == C.ROOTS[row['stage']]:
-            item['_completed'] = True
             item['version'] = ref.version
+            item['status'] = 'completed'
     result = []
     for item in by_id.values():
-        completed = bool(item.pop('_completed'))
-        item['status'] = 'completed' if completed else 'running'
+        completed = item['status'] == 'completed'
         item['active'] = not completed and not item['next_step_id']
         if not item['next_step_id']:
             item['next_step_id'] = ''
         result.append(item)
+    _apply_gate_step_status(result, state)
     return result
 
 
@@ -708,6 +726,131 @@ def _append_transition(items: list[dict[str, Any]], row: Mapping[str, Any]) -> N
         'action': 'completed',
         'summary': {'next_stage': next_row['stage']},
     })
+
+
+def _append_gate_boundary(
+    items: list[dict[str, Any]],
+    rows: list[dict[str, Any]],
+    state: FlowRunState,
+) -> None:
+    status, action = _gate_boundary(state.status)
+    if not action:
+        return
+    row = _gate_boundary_row(rows, state)
+    if row is None:
+        return
+    summary = {'status': status, 'flow_status': state.status}
+    if state.last_error:
+        summary['message'] = state.last_error
+    if state.pending_checkpoint is not None:
+        summary['checkpoint'] = {
+            'step': state.pending_checkpoint.step,
+            'ref': _ref_text(state.pending_checkpoint.ref),
+        }
+    _append_step_event(
+        items,
+        row,
+        action=action,
+        status=status,
+        summary=summary,
+    )
+
+
+def _append_step_event(
+    items: list[dict[str, Any]],
+    row: Mapping[str, Any],
+    *,
+    action: str,
+    status: str,
+    progress: Mapping[str, Any] | None = None,
+    summary: Mapping[str, Any] | None = None,
+) -> None:
+    event_id = _step_event_id(str(row['step_id']), action)
+    if any(item['event_id'] == event_id for item in items):
+        return
+    item = _base_event(row, f'step.{action}', action)
+    item['event_id'] = event_id
+    item['status'] = status
+    if progress:
+        item['progress'] = dict(progress)
+    if summary:
+        item['summary'] = dict(summary)
+    items.append(_clean_empty(item))
+
+
+def _apply_gate_step_status(items: list[dict[str, Any]], state: FlowRunState) -> None:
+    status, _ = _gate_boundary(state.status)
+    if not status:
+        return
+    item = _gate_step_item(items, state)
+    if item is None:
+        return
+    item['status'] = status
+    item['active'] = True
+
+
+def _gate_step_item(items: list[dict[str, Any]], state: FlowRunState) -> dict[str, Any] | None:
+    if state.pending_checkpoint is not None:
+        step = state.pending_checkpoint.step
+        version = state.pending_checkpoint.ref.version
+        match = next(
+            (
+                item for item in reversed(items)
+                if item.get('stage') == step and item.get('version') == version
+            ),
+            None,
+        )
+        if match is not None:
+            return match
+    return next((item for item in reversed(items) if item.get('status') == 'running'), None) or (
+        items[-1] if items else None
+    )
+
+
+def _gate_boundary_row(rows: list[dict[str, Any]], state: FlowRunState) -> dict[str, Any] | None:
+    if state.pending_checkpoint is not None:
+        checkpoint = state.pending_checkpoint
+        match = next(
+            (
+                row for row in reversed(rows)
+                if row['stage'] == checkpoint.step and row['ref'] == checkpoint.ref
+            ),
+            None,
+        )
+        if match is not None:
+            return match
+    return next(
+        (row for row in reversed(rows) if not _is_root_row(row)),
+        None,
+    ) or (rows[-1] if rows else None)
+
+
+def _events_after_id(items: list[dict[str, Any]], after_event_id: str) -> list[dict[str, Any]] | None:
+    for index, item in enumerate(items):
+        if str(item['event_id']) == after_event_id:
+            return items[index + 1:]
+    # A gate boundary event can disappear after resume/retry; resume from the end of that step.
+    for index in range(len(items) - 1, -1, -1):
+        item_step_id = str(items[index].get('step_id') or '')
+        if item_step_id and any(
+            _step_event_id(item_step_id, action) == after_event_id
+            for action in GATE_BOUNDARY_ACTIONS
+        ):
+            return items[index + 1:]
+    return None
+
+
+def _is_root_row(row: Mapping[str, Any]) -> bool:
+    ref = row['ref']
+    return ref.key.artifact_id == C.ROOTS[row['stage']]
+
+
+def _step_event_id(step_id: str, action: str) -> str:
+    return str(uuid.uuid5(STEP_ID_NAMESPACE, f'{step_id}:step:{action}'))
+
+
+def _gate_boundary(status: str) -> tuple[str, str]:
+    return GATE_BOUNDARY_BY_STATUS.get(status, ('', ''))
 
 
 def _artifact_event(row: Mapping[str, Any], num_case: int, case_counts: dict[str, int]) -> dict[str, Any] | None:
