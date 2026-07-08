@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import hashlib
-import ast
 import json
 import keyword
 import re
@@ -13,7 +12,6 @@ from typing import Any
 from unidiff import PatchSet
 
 IDENT = re.compile(r'\b[A-Za-z_][A-Za-z0-9_]*\b')
-ASSIGN = re.compile(r'\b([A-Za-z_][A-Za-z0-9_]*)\s*=')
 
 
 @dataclass(frozen=True)
@@ -22,7 +20,6 @@ class PatchProfile:
     edit_shape_hash: str = ''
     edit_locations: tuple[str, ...] = ()
     normalized_edits: tuple[str, ...] = ()
-    strategy_keys: tuple[str, ...] = ()
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -30,7 +27,6 @@ class PatchProfile:
             'edit_shape_hash': self.edit_shape_hash,
             'edit_locations': list(self.edit_locations),
             'normalized_edits': list(self.normalized_edits),
-            'strategy_keys': list(self.strategy_keys),
         }
 
 
@@ -46,17 +42,12 @@ def patch_profile(diff: str) -> PatchProfile:
         for path, loc, op, line in changes
         if _normalize_line(line)
     )
-    strategy_lines = [(path, loc, line) for path, loc, op, line in changes if op == '+' and line.strip()]
-    if not strategy_lines:
-        strategy_lines = [(path, loc, line) for path, loc, _op, line in changes if line.strip()]
-    strategies = tuple(sorted({key for path, loc, line in strategy_lines for key in _strategy_keys(path, loc, line)}))
     shape = tuple(f'{path}:{loc}:{_line_shape(line)}' for path, loc, _op, line in changes if _line_shape(line))
     return PatchProfile(
         normalized_hash=_hash(json.dumps(normalized, sort_keys=True, ensure_ascii=False)),
         edit_shape_hash=_hash(json.dumps(shape, sort_keys=True, ensure_ascii=False)),
         edit_locations=tuple(sorted({f'{path}@{loc}' for path, loc, _op, _line in changes})),
         normalized_edits=normalized,
-        strategy_keys=strategies,
     )
 
 
@@ -71,26 +62,16 @@ def patch_policy_check(
     memory = repair_memory(attempts, base)
     forbidden_hashes = set(memory['forbidden_patch_fingerprints'])
     forbidden_shapes = set(memory['forbidden_edit_shape_hashes'])
-    current_strategies = set(profile.strategy_keys)
-    base_strategies = set(base.strategy_keys)
-    current_edits = set(profile.normalized_edits)
-    base_edits = set(base.normalized_edits)
     reason = ''
     detail: dict[str, Any] = {}
     if base.normalized_hash and profile.normalized_hash == base.normalized_hash:
         reason = 'no_incremental_change_from_selected_base'
-    elif base_edits and not base_edits <= current_edits:
-        reason = 'selected_base_not_preserved'
-        detail = {'missing_base_edits': sorted(base_edits - current_edits)[:8]}
     elif profile.normalized_hash in forbidden_hashes and profile.normalized_hash != base.normalized_hash:
         reason = 'repeated_forbidden_patch'
         detail = {'patch_fingerprint': profile.normalized_hash}
     elif profile.edit_shape_hash in forbidden_shapes and profile.edit_shape_hash != base.edit_shape_hash:
         reason = 'repeated_forbidden_edit_shape'
         detail = {'edit_shape_hash': profile.edit_shape_hash}
-    elif base_strategies and current_strategies and current_strategies <= base_strategies:
-        reason = 'repeated_carried_strategy_without_new_hypothesis'
-        detail = {'strategy_keys': sorted(current_strategies)[:8]}
     return {
         'status': 'failed' if reason else 'passed',
         'reason': reason,
@@ -122,12 +103,10 @@ def repair_memory(attempts: list[Mapping[str, Any]], selected_base: PatchProfile
         'repeat_failures': [reason for reason, count in reasons.items() if count >= 2],
         'forbidden_patch_fingerprints': sorted(forbidden_hashes),
         'forbidden_edit_shape_hashes': sorted(forbidden_shapes),
-        'forbidden_strategy_keys': [],
     }
 
 
 def _attempt_summary(attempt: Mapping[str, Any]) -> dict[str, Any]:
-    profile = _attempt_profile(attempt)
     return {
         'attempt': attempt.get('attempt'),
         'action': _decision_field(attempt, 'action'),
@@ -136,8 +115,6 @@ def _attempt_summary(attempt: Mapping[str, Any]) -> dict[str, Any]:
         'target_remaining_delta': _nested(attempt, 'analysis_delta', 'target_remaining_delta'),
         'new_group_count': _nested(attempt, 'analysis_delta', 'new_group_count'),
         'files_changed': attempt.get('files_changed') or [],
-        'patch_fingerprint': profile.normalized_hash,
-        'strategy_keys': list(profile.strategy_keys)[:8],
     }
 
 
@@ -149,7 +126,6 @@ def _attempt_profile(attempt: Mapping[str, Any]) -> PatchProfile:
             edit_shape_hash=str(raw.get('edit_shape_hash') or ''),
             edit_locations=tuple(str(item) for item in raw.get('edit_locations') or ()),
             normalized_edits=tuple(str(item) for item in raw.get('normalized_edits') or ()),
-            strategy_keys=tuple(str(item) for item in raw.get('strategy_keys') or ()),
         )
     return patch_profile(str(attempt.get('diff') or ''))
 
@@ -175,29 +151,6 @@ def _patch_path(source: str, target: str) -> str:
 
 def _normalize_line(line: str) -> str:
     return ' '.join(str(line or '').split())
-
-
-def _strategy_keys(path: str, loc: str, line: str) -> tuple[str, ...]:
-    try:
-        tree = ast.parse(line.strip())
-    except SyntaxError:
-        tree = None
-    if tree is not None:
-        keywords = {
-            keyword.arg for node in ast.walk(tree)
-            if isinstance(node, ast.Call)
-            for keyword in node.keywords
-            if keyword.arg
-        }
-        if keywords:
-            return tuple(f'{path}@{loc}:assign:{name}' for name in sorted(keywords))
-    names = [name for name in ASSIGN.findall(line) if not keyword.iskeyword(name)]
-    if names:
-        return tuple(f'{path}@{loc}:assign:{name}' for name in sorted(set(names)))
-    names = [name for name in IDENT.findall(line) if not keyword.iskeyword(name)]
-    if names:
-        return (f'{path}@{loc}:ids:{",".join(sorted(set(names))[:6])}',)
-    return (f'{path}@{loc}:shape:{_hash(_normalize_line(line))[:12]}',)
 
 
 def _line_shape(line: str) -> str:
