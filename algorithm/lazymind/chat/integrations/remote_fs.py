@@ -41,7 +41,7 @@ class RemoteFS(LazyLLMFSBase):
     def _raw_request(self, method: str, endpoint: str, **kwargs) -> requests.Response:
         agentic_config = lazyllm.globals.get('agentic_config') or {}
         user_id = agentic_config.get('user_id')
-        task_id = agentic_config.get('session_id')
+        task_id = agentic_config.get('session_id') or agentic_config.get('task_id')
         params = kwargs.pop('params', {})
         if user_id:
             params['user_id'] = user_id
