@@ -197,27 +197,22 @@ def test_memory_review_prompt_excludes_preferences_and_workflows():
         user='',
     )
 
-    assert "memory_editor(target='memory'" in prompt
-    assert "memory_editor(target='user_preference'" in prompt
     assert 'operations' not in prompt
     assert '# Task' in prompt
     assert '# Available Targets' in prompt
     assert '# What to Save or Skip' in prompt
     assert '# Existing State and Conflict Rules' in prompt
-    assert '# Tool Contract' in prompt
+    assert '# Tool Contract' not in prompt
     assert 'Make at most one memory_editor call' in prompt
     assert 'When in doubt, do not save memory' in prompt
-    assert "op='patch', old_text='...', new_text='...'" in prompt
-    assert "op='append', content='...'" in prompt
+    assert "memory_editor(target='memory'" not in prompt
+    assert "memory_editor(target='user_preference'" not in prompt
+    assert "op='patch', old_text='...', new_text='...'" not in prompt
+    assert "op='append', content='...'" not in prompt
     assert '{"op": "replace_all"' not in prompt
-    assert 'Prefer patch when modifying existing content' in prompt
-    assert 'Use append only for adding new facts or entries' in prompt
     assert 'Determine the language of new or rewritten memory/user profile content from the selected target' in prompt
     assert "use the dominant language of the user's messages in the conversation history" in prompt
     assert 'do not switch to English just because these instructions are written in English' in prompt
-    assert 'memory_editor takes flat arguments' in prompt
-    assert "read_memory(target='memory')" in prompt
-    assert 'written back through RemoteFS' in prompt
     assert 'memory_review table' not in prompt
     assert 'Current agent working memory' in prompt
     assert 'Current user profile' in prompt
@@ -259,7 +254,7 @@ def test_user_review_prompt_excludes_session_history():
     assert '旧记忆' in prompt
     assert '旧用户画像' in prompt
     assert 'Choose the single most appropriate target' in prompt
-    assert "memory_editor(target='user_preference'" in prompt
+    assert "memory_editor(target='user_preference'" not in prompt
     assert "Do not call memory_editor with target='memory'" not in prompt
 
 
