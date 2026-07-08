@@ -20,7 +20,10 @@ from lazyllm.tools.tools.search import (
 
 from lazymind.chat.engine.tools import (
     KBToolGroup,
+    ExternalDBToolGroup,
     LocalFSToolGroup,
+    SystemQueryToolGroup,
+    WriterToolGroup,
     calculator,
     image_editor,
     image_generator,
@@ -91,6 +94,24 @@ DEFAULT_TOOLS: list[ToolGroupConfig] = [
         description='从用户上传的临时文件中搜索相关内容',
         instance=kb_tmp_search,
         key_source=_temp_kb_key_source,
+    ),
+    ToolGroupConfig(
+        name='system_query',
+        label='系统数据查询',
+        description='只读查询 LazyMind 知识库、文档、数据源和关联统计',
+        instance=SystemQueryToolGroup(),
+    ),
+    ToolGroupConfig(
+        name='external_db',
+        label='外部数据库查询',
+        description='只读查看已配置外部数据库 schema，并执行只读 SELECT/WITH 查询',
+        instance=ExternalDBToolGroup(),
+    ),
+    ToolGroupConfig(
+        name='writer',
+        label='AI 写作',
+        description='构建写作任务、资料画像、写作上下文、大纲、章节草稿、审阅报告和最终成稿',
+        instance=WriterToolGroup(),
     ),
     ToolGroupConfig(
         name='calculator',
