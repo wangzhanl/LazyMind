@@ -70,59 +70,69 @@ EvoMutation: TypeAlias = EditArtifact | RerunCaseStage | RerunStep | InvalidateF
 
 
 def dispatch_evo_query(adapter: EvoArtifactReader, spec: EvoFlowSpec, run_id: str, query: EvoQuery):
-    match query:
-        case ReadStepRoot(step):
-            return read_step_root(adapter, spec, run_id, step)
-        case ReadCaseArtifact(case_id, kind):
-            return read_case_artifact(adapter, spec, run_id, case_id, kind)
-        case ReadProgressSnapshot():
-            return progress_view(adapter, spec, run_id)
+    if isinstance(query, ReadStepRoot):
+        return read_step_root(adapter, spec, run_id, query.step)
+    if isinstance(query, ReadCaseArtifact):
+        return read_case_artifact(adapter, spec, run_id, query.case_id, query.kind)
+    if isinstance(query, ReadProgressSnapshot):
+        return progress_view(adapter, spec, run_id)
     raise TypeError(f'unsupported EvoQuery: {type(query).__name__}')
 
 
 def dispatch_evo_mutation(adapter: EvoArtifactAccess, spec: EvoFlowSpec,
                           run_id: str, mutation: EvoMutation) -> StoreResult:
-    match mutation:
-        case EditArtifact(ref, pointer, value, idempotency_key):
-            return edit_artifact(adapter, spec, run_id, ref, pointer, value, idempotency_key=idempotency_key)
-        case RerunCaseStage(case_id, stage, idempotency_key):
-            return rerun_case_stage(adapter, spec, run_id, case_id, stage, idempotency_key=idempotency_key)
-        case RerunStep(step, idempotency_key):
-            return rerun_step(adapter, spec, run_id, step, idempotency_key=idempotency_key)
-        case InvalidateFromStep(step, idempotency_key):
-            return jump_to_step(adapter, spec, run_id, step, idempotency_key=idempotency_key)
+    if isinstance(mutation, EditArtifact):
+        return edit_artifact(
+            adapter,
+            spec,
+            run_id,
+            mutation.ref,
+            mutation.pointer,
+            mutation.value,
+            idempotency_key=mutation.idempotency_key,
+        )
+    if isinstance(mutation, RerunCaseStage):
+        return rerun_case_stage(
+            adapter,
+            spec,
+            run_id,
+            mutation.case_id,
+            mutation.stage,
+            idempotency_key=mutation.idempotency_key,
+        )
+    if isinstance(mutation, RerunStep):
+        return rerun_step(adapter, spec, run_id, mutation.step, idempotency_key=mutation.idempotency_key)
+    if isinstance(mutation, InvalidateFromStep):
+        return jump_to_step(adapter, spec, run_id, mutation.step, idempotency_key=mutation.idempotency_key)
     raise TypeError(f'unsupported EvoMutation: {type(mutation).__name__}')
 
 
 def mutation_idempotency_key(mutation: EvoMutation) -> str:
-    match mutation:
-        case EditArtifact(_, _, _, idempotency_key):
-            return idempotency_key
-        case RerunCaseStage(_, _, idempotency_key):
-            return idempotency_key
-        case RerunStep(_, idempotency_key):
-            return idempotency_key
-        case InvalidateFromStep(_, idempotency_key):
-            return idempotency_key
+    if isinstance(mutation, (EditArtifact, RerunCaseStage, RerunStep, InvalidateFromStep)):
+        return mutation.idempotency_key
     raise TypeError(f'unsupported EvoMutation: {type(mutation).__name__}')
 
 
 def mutation_request_fingerprint(mutation: EvoMutation) -> Mapping[str, object]:
-    match mutation:
-        case EditArtifact(ref, pointer, value, idempotency_key):
-            return {
-                'idempotency_key': idempotency_key,
-                'kind': 'EditArtifact',
-                'pointer': pointer,
-                'ref': _ref_json(ref),
-                'value_pickle_sha256': sha256(dumps(value, protocol=HIGHEST_PROTOCOL)).hexdigest(),
-            }
-        case RerunCaseStage(case_id, stage, idempotency_key):
-            return {'case_id': case_id, 'idempotency_key': idempotency_key, 'kind': 'RerunCaseStage', 'stage': stage}
-        case RerunStep(step, idempotency_key):
-            return {'idempotency_key': idempotency_key, 'kind': 'RerunStep', 'step': step}
-        case InvalidateFromStep(step, idempotency_key):
-            return {'idempotency_key': idempotency_key, 'kind': 'InvalidateFromStep', 'step': step}
+    if isinstance(mutation, EditArtifact):
+        return {
+            'idempotency_key': mutation.idempotency_key,
+            'kind': 'EditArtifact',
+            'pointer': mutation.pointer,
+            'ref': _ref_json(mutation.ref),
+            'value_pickle_sha256': sha256(dumps(mutation.value, protocol=HIGHEST_PROTOCOL)).hexdigest(),
+        }
+    if isinstance(mutation, RerunCaseStage):
+        return {
+            'case_id': mutation.case_id,
+            'idempotency_key': mutation.idempotency_key,
+            'kind': 'RerunCaseStage',
+            'stage': mutation.stage,
+        }
+    if isinstance(mutation, RerunStep):
+        return {'idempotency_key': mutation.idempotency_key, 'kind': 'RerunStep', 'step': mutation.step}
+    if isinstance(mutation, InvalidateFromStep):
+        return {'idempotency_key': mutation.idempotency_key, 'kind': 'InvalidateFromStep', 'step': mutation.step}
     raise TypeError(f'unsupported EvoMutation: {type(mutation).__name__}')
 
 

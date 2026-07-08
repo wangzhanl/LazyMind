@@ -93,19 +93,18 @@ class FlowService:
 
     def handle(self, run_id: str, command: FlowCommand) -> FlowCommandResult:
         _require_text(run_id, 'run_id')
-        match command:
-            case ContinueFlow():
-                return self._continue(run_id, command)
-            case ApplyArtifactMutation():
-                return self._mutation(run_id, command)
-            case PauseFlow():
-                return self._gate_command(run_id, command.command_id, 'pause')
-            case ResumeFlow():
-                return self._gate_command(run_id, command.command_id, 'resume')
-            case CancelFlow():
-                return self._gate_command(run_id, command.command_id, 'cancel')
-            case RetryFlow():
-                return self._gate_command(run_id, command.command_id, 'retry')
+        if isinstance(command, ContinueFlow):
+            return self._continue(run_id, command)
+        if isinstance(command, ApplyArtifactMutation):
+            return self._mutation(run_id, command)
+        if isinstance(command, PauseFlow):
+            return self._gate_command(run_id, command.command_id, 'pause')
+        if isinstance(command, ResumeFlow):
+            return self._gate_command(run_id, command.command_id, 'resume')
+        if isinstance(command, CancelFlow):
+            return self._gate_command(run_id, command.command_id, 'cancel')
+        if isinstance(command, RetryFlow):
+            return self._gate_command(run_id, command.command_id, 'retry')
         raise TypeError(f'unsupported FlowCommand: {type(command).__name__}')
 
     def _gate_command(self, run_id: str, command_id: str, kind: str) -> FlowCommandResult:

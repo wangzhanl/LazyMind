@@ -48,7 +48,7 @@ def _apply_patch_operation(
         )
     if match_count > 1 and not replace_all_matches:
         raise UnprocessableContentError(
-            "patch old_text matched multiple locations; provide more context or set replace_all_matches=true."
+            'patch old_text matched multiple locations; provide more context or set replace_all_matches=true.'
         )
     return current_content.replace(old_text, new_text, -1 if replace_all_matches else 1)
 
@@ -58,7 +58,7 @@ def _apply_append_operation(current_content: str, *, content: str) -> str:
         raise UnprocessableContentError("append requires a string field 'content'.")
     appended = content.strip()
     if not appended:
-        raise UnprocessableContentError("append requires non-empty content.")
+        raise UnprocessableContentError('append requires non-empty content.')
     if not current_content:
         return appended
     separator = '' if current_content.endswith('\n') else '\n'

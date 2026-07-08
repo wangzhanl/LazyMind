@@ -126,9 +126,9 @@ class SkillEditorToolGroup:
 
         status = skill.get('status')
         if status == 'ambiguous':
-            return {'error': skill.get('error') or f"Ambiguous skill name {name!r}; use the full skill key."}
+            return {'error': skill.get('error') or f'Ambiguous skill name {name!r}; use the full skill key.'}
         if status != 'ok':
-            return {'error': f"Skill {name!r} was not found; provide category or full skill key."}
+            return {'error': f'Skill {name!r} was not found; provide category or full skill key.'}
 
         parts = [part for part in RemoteFS._normalize_path(skill.get('path') or '').split('/') if part]
         if len(parts) < 4 or parts[0] != 'skills' or parts[-1] != 'SKILL.md':
@@ -175,7 +175,8 @@ class SkillEditorToolGroup:
 
         Args:
             name: Skill name, or full "category/name" skill key.
-            category: Skill category directory used for category/name/SKILL.md. Optional when name is a full key or unique.
+            category: Skill category directory used for category/name/SKILL.md.
+                Optional when name is a full key or unique.
             path: Existing package file to replace. May be SKILL.md.
             content: Full replacement file content.
             reason: Short summary of why this file is being edited.
@@ -207,7 +208,8 @@ class SkillEditorToolGroup:
 
         Args:
             name: Skill name, or full "category/name" skill key.
-            category: Skill category directory used for category/name/SKILL.md. Optional when name is a full key or unique.
+            category: Skill category directory used for category/name/SKILL.md.
+                Optional when name is a full key or unique.
             path: Existing package file to patch. Must be explicit; no default target is assumed.
             old_text: Text to find. It must identify a unique match unless replace_all is true.
             new_text: Replacement text. Use an empty string to delete matched text.
@@ -251,7 +253,8 @@ class SkillEditorToolGroup:
 
         Args:
             name: Skill name, or full "category/name" skill key.
-            category: Skill category directory used for category/name/SKILL.md. Optional when name is a full key or unique.
+            category: Skill category directory used for category/name/SKILL.md.
+                Optional when name is a full key or unique.
             path: New supporting file path to create.
             content: File content.
             reason: Short summary of why this file is being created.
@@ -283,7 +286,8 @@ class SkillEditorToolGroup:
 
         Args:
             name: Skill name, or full "category/name" skill key.
-            category: Skill category directory used for category/name/SKILL.md. Optional when name is a full key or unique.
+            category: Skill category directory used for category/name/SKILL.md.
+                Optional when name is a full key or unique.
             path: Existing supporting file path to delete.
             reason: Short summary of why this file is being deleted.
         """

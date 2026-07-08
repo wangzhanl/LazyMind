@@ -28,7 +28,7 @@ def resolve_skill_editor_identity(
     if '/' in raw_name:
         parts = [part for part in raw_name.split('/') if part]
         if len(parts) != 2 or raw_name.startswith('/') or raw_name.endswith('/') or '//' in raw_name:
-            return {'error': f"Skill key {raw_name!r} is invalid; expected category/name."}
+            return {'error': f'Skill key {raw_name!r} is invalid; expected category/name.'}
         key_category, raw_name = parts
         normalized_key_category = normalize_skill_category(key_category)
         if not normalized_key_category:
@@ -52,7 +52,7 @@ def resolve_skill_editor_identity(
             if normalized_category != normalized_key_category:
                 return {
                     'error': (
-                        f"Skill key {name!r} conflicts with category {category!r}; "
+                        f'Skill key {name!r} conflicts with category {category!r}; '
                         'they must refer to the same category.'
                     )
                 }

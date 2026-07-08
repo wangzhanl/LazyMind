@@ -150,7 +150,9 @@ def delete_skill_file(
     normalized_path = normalize_skill_package_path(path)
     current_files = _load_skill_package(category, name, fs=fs)
     if normalized_path == 'SKILL.md':
-        raise ValueError('SKILL.md cannot be deleted with delete_file; use remove_skill to remove the whole skill package.')
+        raise ValueError(
+            'SKILL.md cannot be deleted with delete_file; use remove_skill to remove the whole skill package.'
+        )
     if normalized_path not in current_files:
         raise ValueError(f'delete_file target does not exist: {normalized_path}')
     edited_files = dict(current_files)
