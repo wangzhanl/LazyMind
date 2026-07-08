@@ -1,9 +1,59 @@
 import importlib
+import io
 
 memory_mod = importlib.import_module('lazymind.chat.engine.tools.memory_editor')
 skill_editor_mod = importlib.import_module('lazymind.chat.engine.tools.skill_editor')
 skill_operations_mod = importlib.import_module('lazymind.chat.engine.tools.infra.skill_operations')
 skill_remote_store_mod = importlib.import_module('lazymind.chat.engine.tools.infra.skill_remote_store')
+
+
+class FakeSkillRemoteFS:
+    _fs_protocol_key = 'remote'
+
+    def __init__(self, packages):
+        self.packages = packages
+
+    def ls(self, path, detail=True):
+        normalized = skill_editor_mod.RemoteFS._normalize_path(path)
+        parts = [part for part in normalized.split('/') if part]
+        if parts == ['skills']:
+            categories = sorted({category for category, _name in self.packages})
+            entries = [
+                {'name': f'remote://skills/{category}', 'path': f'skills/{category}', 'type': 'directory'}
+                for category in categories
+            ]
+        elif len(parts) == 2 and parts[0] == 'skills':
+            skills = sorted(name for category, name in self.packages if category == parts[1])
+            entries = [
+                {
+                    'name': f'remote://skills/{parts[1]}/{name}',
+                    'path': f'skills/{parts[1]}/{name}',
+                    'type': 'directory',
+                }
+                for name in skills
+            ]
+        elif len(parts) == 3 and parts[0] == 'skills' and (parts[1], parts[2]) in self.packages:
+            entries = [
+                {
+                    'name': f'remote://skills/{parts[1]}/{parts[2]}/SKILL.md',
+                    'path': f'skills/{parts[1]}/{parts[2]}/SKILL.md',
+                    'type': 'file',
+                }
+            ]
+        else:
+            entries = []
+        return entries if detail else [entry['name'] for entry in entries]
+
+    def info(self, path):
+        normalized = skill_editor_mod.RemoteFS._normalize_path(path)
+        parts = [part for part in normalized.split('/') if part]
+        content = self.packages.get((parts[1], parts[2]), '') if len(parts) >= 4 else ''
+        return {'size': len(content.encode('utf-8'))}
+
+    def open(self, path, *args, **kwargs):
+        normalized = skill_editor_mod.RemoteFS._normalize_path(path)
+        parts = [part for part in normalized.split('/') if part]
+        return io.StringIO(self.packages[(parts[1], parts[2])])
 
 
 def test_memory_editor_operations_write_memory_review(monkeypatch):
@@ -251,6 +301,67 @@ def test_skill_editor_identity_accepts_matching_category_key():
     assert conflict['error'] == (
         "Skill key 'research/web-research' conflicts with category 'writing'; "
         'they must refer to the same category.'
+    )
+
+
+def test_skill_editor_resolves_unique_bare_name_like_skill_manager(monkeypatch):
+    replace_calls = []
+    existing_content = (
+        '---\n'
+        'name: web-research\n'
+        'category: research\n'
+        'description: Research skill.\n'
+        '---\n'
+        'Use this skill for tests.\n'
+    )
+    fs = FakeSkillRemoteFS({('research', 'web-research'): existing_content})
+    monkeypatch.setattr(skill_editor_mod.lazyllm, 'globals', {'agentic_config': {}})
+    monkeypatch.setattr(
+        skill_operations_mod,
+        '_list_skill_files',
+        lambda category, name, **kwargs: {'SKILL.md': existing_content},
+    )
+
+    def fake_replace_skill_package_files(category, name, before, after, **kwargs):
+        replace_calls.append((category, name, before, after))
+        return {'written': ['SKILL.md'], 'deleted': []}
+
+    monkeypatch.setattr(skill_operations_mod, '_replace_skill_package_files', fake_replace_skill_package_files)
+
+    result = skill_editor_mod.SkillEditorToolGroup(remote_fs=fs).patch_file(
+        'web-research',
+        path='SKILL.md',
+        old_text='Use this skill for tests.',
+        new_text='Use this skill for focused tests.',
+    )
+
+    assert result['success'] is True
+    assert replace_calls[0][0:2] == ('research', 'web-research')
+
+
+def test_skill_editor_reports_ambiguous_bare_name_like_skill_manager():
+    content = (
+        '---\n'
+        'name: web-research\n'
+        'description: Research skill.\n'
+        '---\n'
+        'Use this skill for tests.\n'
+    )
+    fs = FakeSkillRemoteFS({
+        ('custom', 'web-research'): content,
+        ('research', 'web-research'): content,
+    })
+
+    result = skill_editor_mod.SkillEditorToolGroup(remote_fs=fs).patch_file(
+        'web-research',
+        path='SKILL.md',
+        old_text='old',
+        new_text='new',
+    )
+
+    assert result['success'] is False
+    assert result['error']['reason'] == (
+        "Ambiguous skill name 'web-research'; use the full skill key such as 'custom/web-research'."
     )
 
 

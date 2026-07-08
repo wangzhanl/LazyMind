@@ -54,7 +54,7 @@ class SkillEditorToolGroup:
     def __init__(self, remote_fs: Optional[RemoteFS] = None):
         self.remote_fs = remote_fs or RemoteFS()
 
-    def create_skill(self, name: str, category: Optional[str], content: str) -> Dict[str, Any]:
+    def create_skill(self, name: str, category: Optional[str] = None, *, content: str) -> Dict[str, Any]:
         """Create a new reusable skill from full SKILL.md content.
 
         The SKILL.md YAML frontmatter must include name, category, and
@@ -66,7 +66,7 @@ class SkillEditorToolGroup:
 
         Args:
             name: Skill name, or full "category/name" skill key.
-            category: Skill category directory used for category/name/SKILL.md.
+            category: Skill category directory used for category/name/SKILL.md. Optional when name is a full key.
             content: Full SKILL.md content, including YAML frontmatter.
         """
         lazyllm.LOG.info(
@@ -102,6 +102,39 @@ class SkillEditorToolGroup:
             'message': 'Skill was created and is now active.',
         })
 
+    def _resolve_existing_skill_identity(
+        self,
+        name: str,
+        category: Optional[str],
+        tool_name: str,
+    ) -> Dict[str, Any]:
+        resolved = resolve_skill_editor_identity(name, category, tool_name)
+        if not resolved.get('error') or category or '/' in str(name or '').strip():
+            return resolved
+        if 'requires category' not in str(resolved.get('error') or ''):
+            return resolved
+
+        try:
+            from lazyllm.tools.agent.skill_manager import SkillManager
+
+            skill = SkillManager(dir='remote://skills', fs=self.remote_fs).get_skill(
+                str(name or '').strip(),
+                allow_large=True,
+            )
+        except Exception as exc:
+            return {'error': f"{resolved['error']} Failed to resolve skill name {name!r}: {exc}"}
+
+        status = skill.get('status')
+        if status == 'ambiguous':
+            return {'error': skill.get('error') or f"Ambiguous skill name {name!r}; use the full skill key."}
+        if status != 'ok':
+            return {'error': f"Skill {name!r} was not found; provide category or full skill key."}
+
+        parts = [part for part in RemoteFS._normalize_path(skill.get('path') or '').split('/') if part]
+        if len(parts) < 4 or parts[0] != 'skills' or parts[-1] != 'SKILL.md':
+            return {'error': f"Resolved skill {name!r} to invalid path {skill.get('path')!r}."}
+        return resolve_skill_editor_identity(f'{parts[1]}/{parts[2]}', None, tool_name)
+
     def _run_file_operation(
         self,
         tool_name: str,
@@ -111,7 +144,7 @@ class SkillEditorToolGroup:
         reason: Optional[str] = None,
         **kwargs: Any,
     ) -> Dict[str, Any]:
-        resolved = resolve_skill_editor_identity(name, category, tool_name)
+        resolved = self._resolve_existing_skill_identity(name, category, tool_name)
         if resolved.get('error'):
             return tool_error(tool_name, resolved['error'])
         normalized_category = resolved['category']
@@ -132,7 +165,8 @@ class SkillEditorToolGroup:
     def edit_file(
         self,
         name: str,
-        category: Optional[str],
+        category: Optional[str] = None,
+        *,
         path: str,
         content: str,
         reason: Optional[str] = None,
@@ -141,7 +175,7 @@ class SkillEditorToolGroup:
 
         Args:
             name: Skill name, or full "category/name" skill key.
-            category: Skill category directory used for category/name/SKILL.md.
+            category: Skill category directory used for category/name/SKILL.md. Optional when name is a full key or unique.
             path: Existing package file to replace. May be SKILL.md.
             content: Full replacement file content.
             reason: Short summary of why this file is being edited.
@@ -161,7 +195,8 @@ class SkillEditorToolGroup:
     def patch_file(
         self,
         name: str,
-        category: Optional[str],
+        category: Optional[str] = None,
+        *,
         path: str,
         old_text: str,
         new_text: str,
@@ -172,7 +207,7 @@ class SkillEditorToolGroup:
 
         Args:
             name: Skill name, or full "category/name" skill key.
-            category: Skill category directory used for category/name/SKILL.md.
+            category: Skill category directory used for category/name/SKILL.md. Optional when name is a full key or unique.
             path: Existing package file to patch. Must be explicit; no default target is assumed.
             old_text: Text to find. It must identify a unique match unless replace_all is true.
             new_text: Replacement text. Use an empty string to delete matched text.
@@ -196,7 +231,8 @@ class SkillEditorToolGroup:
     def create_file(
         self,
         name: str,
-        category: Optional[str],
+        category: Optional[str] = None,
+        *,
         path: str,
         content: str,
         reason: Optional[str] = None,
@@ -208,7 +244,7 @@ class SkillEditorToolGroup:
 
         Args:
             name: Skill name, or full "category/name" skill key.
-            category: Skill category directory used for category/name/SKILL.md.
+            category: Skill category directory used for category/name/SKILL.md. Optional when name is a full key or unique.
             path: New supporting file path to create.
             content: File content.
             reason: Short summary of why this file is being created.
@@ -228,7 +264,8 @@ class SkillEditorToolGroup:
     def delete_file(
         self,
         name: str,
-        category: Optional[str],
+        category: Optional[str] = None,
+        *,
         path: str,
         reason: Optional[str] = None,
     ) -> Dict[str, Any]:
@@ -239,7 +276,7 @@ class SkillEditorToolGroup:
 
         Args:
             name: Skill name, or full "category/name" skill key.
-            category: Skill category directory used for category/name/SKILL.md.
+            category: Skill category directory used for category/name/SKILL.md. Optional when name is a full key or unique.
             path: Existing supporting file path to delete.
             reason: Short summary of why this file is being deleted.
         """
@@ -257,7 +294,8 @@ class SkillEditorToolGroup:
     def rename_skill(
         self,
         name: str,
-        category: Optional[str],
+        category: Optional[str] = None,
+        *,
         new_name: str,
         new_category: Optional[str] = None,
     ) -> Dict[str, Any]:
@@ -268,7 +306,7 @@ class SkillEditorToolGroup:
 
         Args:
             name: Current skill name, or full "category/name" skill key.
-            category: Current skill category.
+            category: Current skill category. Optional when name is a full key or unique.
             new_name: New skill name.
             new_category: New skill category. If omitted, current category is kept.
         """
@@ -276,7 +314,7 @@ class SkillEditorToolGroup:
             '[rename_skill] called '
             f'name={name!r} category={category!r} new_name={new_name!r} new_category={new_category!r}'
         )
-        resolved = resolve_skill_editor_identity(name, category, 'rename_skill')
+        resolved = self._resolve_existing_skill_identity(name, category, 'rename_skill')
         if resolved.get('error'):
             return tool_error('rename_skill', resolved['error'])
         normalized_category = resolved['category']
@@ -329,18 +367,23 @@ class SkillEditorToolGroup:
         result.update(payload)
         return tool_success('rename_skill', result)
 
-    def remove_skill(self, name: str, category: Optional[str], reason: Optional[str] = None) -> Dict[str, Any]:
+    def remove_skill(
+        self,
+        name: str,
+        category: Optional[str] = None,
+        reason: Optional[str] = None,
+    ) -> Dict[str, Any]:
         """Remove an existing reusable skill package.
 
         Use this when a skill is superseded or no longer correct.
 
         Args:
             name: Skill name, or full "category/name" skill key.
-            category: Skill category directory.
+            category: Skill category directory. Optional when name is a full key or unique.
             reason: Why the skill should be removed.
         """
         lazyllm.LOG.info(f'[remove_skill] called name={name!r} category={category!r} reason={reason!r}')
-        resolved = resolve_skill_editor_identity(name, category, 'remove_skill')
+        resolved = self._resolve_existing_skill_identity(name, category, 'remove_skill')
         if resolved.get('error'):
             return tool_error('remove_skill', resolved['error'])
         normalized_category = resolved['category']

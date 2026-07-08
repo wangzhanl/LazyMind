@@ -112,9 +112,9 @@ def test_skill_editor_maps_pending_draft_error_for_package_operations(monkeypatc
     monkeypatch.setattr(skill_editor_mod, 'remove_remote_skill', raise_pending_draft)
 
     if method_name == 'create_skill':
-        result = skill_editor_mod.SkillEditorToolGroup().create_skill('existing', 'coding', content)
+        result = skill_editor_mod.SkillEditorToolGroup().create_skill('existing', 'coding', content=content)
     elif method_name == 'rename_skill':
-        result = skill_editor_mod.SkillEditorToolGroup().rename_skill('existing', 'coding', 'renamed')
+        result = skill_editor_mod.SkillEditorToolGroup().rename_skill('existing', 'coding', new_name='renamed')
     else:
         result = skill_editor_mod.SkillEditorToolGroup().remove_skill('existing', 'coding')
 
@@ -133,8 +133,17 @@ def test_skill_editor_tool_group_exposes_action_specific_schemas():
     assert 'modify_skill' not in group.__public_apis__
     create_fields = set(create_tool.params_schema.model_fields)
     patch_fields = set(patch_tool.params_schema.model_fields)
+    create_required = set(create_tool.params_schema.model_json_schema().get('required', []))
     patch_required = set(patch_tool.params_schema.model_json_schema().get('required', []))
 
     assert create_fields == {'name', 'category', 'content'}
     assert patch_fields == {'name', 'category', 'path', 'old_text', 'new_text', 'replace_all', 'reason'}
-    assert {'name', 'category', 'path', 'old_text', 'new_text'}.issubset(patch_required)
+    assert create_required == {'name', 'content'}
+    assert {'name', 'path', 'old_text', 'new_text'}.issubset(patch_required)
+    assert 'category' not in patch_required
+    assert patch_tool.validate_parameters({
+        'name': 'research/web-research',
+        'path': 'SKILL.md',
+        'old_text': 'old',
+        'new_text': 'new',
+    })
