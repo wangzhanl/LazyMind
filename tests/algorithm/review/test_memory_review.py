@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import importlib.util
 import os
 import sys
@@ -47,6 +48,7 @@ def _load_review_modules():
         'lazymind.chat',
         'lazymind.chat.engine',
         'lazymind.chat.engine.tools',
+        'lazymind.chat.engine.tools.infra',
         'lazymind.chat.service',
         'lazymind.chat.service.component',
         'lazymind.chat.service.component.history',
@@ -81,6 +83,9 @@ def _load_review_modules():
     fake_fs_client.FS = object
     fake_tools_pkg = ModuleType('lazymind.chat.engine.tools')
     fake_tools_pkg.memory_editor = lambda *args, **kwargs: None
+    fake_tools_pkg.read_memory = lambda *args, **kwargs: None
+    fake_infra = ModuleType('lazymind.chat.engine.tools.infra')
+    fake_infra.MemoryRemoteStore = object
     fake_history = ModuleType('lazymind.chat.service.component.history')
     fake_history.normalize_history_for_agent = lambda history: history
     fake_config = ModuleType('lazymind.config')
@@ -94,6 +99,7 @@ def _load_review_modules():
     fake_modules['lazymind.chat'] = _package('lazymind.chat')
     fake_modules['lazymind.chat.engine'] = _package('lazymind.chat.engine')
     fake_modules['lazymind.chat.engine.tools'] = fake_tools_pkg
+    fake_modules['lazymind.chat.engine.tools.infra'] = fake_infra
     fake_modules['lazymind.chat.service'] = _package('lazymind.chat.service')
     fake_modules['lazymind.chat.service.component'] = _package('lazymind.chat.service.component')
     fake_modules['lazymind.chat.service.component.history'] = fake_history
@@ -144,11 +150,25 @@ def _patch_runtime_bindings(
     fs,
     memory_editor,
     config: dict[str, Any],
+    read_memory=None,
+    memory_store=None,
+    uuid4=None,
     inject_model_config=None,
     normalize_history_for_agent=None,
 ) -> None:
     if inject_model_config is None:
         inject_model_config = lambda _config: None
+    if read_memory is None:
+        def read_memory(*_args, **_kwargs):
+            return None
+    if memory_store is None:
+        class MemoryStore:
+            def read(self, target):
+                return ''
+
+        memory_store = MemoryStore
+    if uuid4 is None:
+        uuid4 = lambda: 'uuid-1'
     if normalize_history_for_agent is None:
         def normalize_history_for_agent(history):
             return history
@@ -157,6 +177,9 @@ def _patch_runtime_bindings(
     monkeypatch.setattr(memory_review, 'AutoModel', auto_model)
     monkeypatch.setattr(memory_review, 'FS', fs)
     monkeypatch.setattr(memory_review, 'memory_editor', memory_editor)
+    monkeypatch.setattr(memory_review, 'read_memory', read_memory)
+    monkeypatch.setattr(memory_review, 'MemoryRemoteStore', memory_store)
+    monkeypatch.setattr(memory_review, 'uuid4', uuid4)
     monkeypatch.setattr(memory_review, '_cfg', config)
     monkeypatch.setattr(memory_review, 'inject_model_config', inject_model_config)
     monkeypatch.setattr(
@@ -176,7 +199,7 @@ def test_memory_review_prompt_excludes_preferences_and_workflows():
 
     assert "memory_editor(target='memory'" in prompt
     assert "memory_editor(target='user_preference'" in prompt
-    assert 'operations' in prompt
+    assert 'operations' not in prompt
     assert '# Task' in prompt
     assert '# Available Targets' in prompt
     assert '# What to Save or Skip' in prompt
@@ -184,13 +207,18 @@ def test_memory_review_prompt_excludes_preferences_and_workflows():
     assert '# Tool Contract' in prompt
     assert 'Make at most one memory_editor call' in prompt
     assert 'When in doubt, do not save memory' in prompt
-    assert '{"op": "replace_text", "old": "...", "new": "..."}' in prompt
-    assert '{"op": "replace_all", "content": "..."}' in prompt
-    assert 'Prefer replace_text with exact old text copied from the selected target' in prompt
+    assert "op='patch', old_text='...', new_text='...'" in prompt
+    assert "op='append', content='...'" in prompt
+    assert '{"op": "replace_all"' not in prompt
+    assert 'Prefer patch when modifying existing content' in prompt
+    assert 'Use append only for adding new facts or entries' in prompt
     assert 'Determine the language of new or rewritten memory/user profile content from the selected target' in prompt
     assert "use the dominant language of the user's messages in the conversation history" in prompt
     assert 'do not switch to English just because these instructions are written in English' in prompt
-    assert 'memory_editor requires exactly target and operations' in prompt
+    assert 'memory_editor takes flat arguments' in prompt
+    assert "read_memory(target='memory')" in prompt
+    assert 'written back through RemoteFS' in prompt
+    assert 'memory_review table' not in prompt
     assert 'Current agent working memory' in prompt
     assert 'Current user profile' in prompt
     assert 'Environment context' not in prompt
@@ -209,6 +237,7 @@ def test_memory_review_prompt_excludes_preferences_and_workflows():
     assert 'display/use exactly one of 简洁, 详细, 幽默, 正式' in prompt
     assert '简洁, 详细, 幽默, 正式' in prompt
     assert 'concise, detailed, humorous, formal' in prompt
+    assert '100 characters or less' in prompt
     assert 'existing valid response_style in either language' in prompt
     assert 'Do not put language preferences' in prompt
     assert 'verbs, or full instructions' in prompt
@@ -216,7 +245,7 @@ def test_memory_review_prompt_excludes_preferences_and_workflows():
     assert 'use ""' in prompt
     assert 'never use generic acknowledgement text' in prompt
     assert 'only when the user explicitly asks to change that specific field' in prompt
-    assert 'use replace_all to rewrite the whole user profile into the frontmatter-plus-body format' in prompt
+    assert 'do not rewrite it wholesale with memory_editor' in prompt
 
 
 def test_user_review_prompt_excludes_session_history():
@@ -252,10 +281,42 @@ def test_memory_review_payload_allows_missing_or_null_llm_config():
     assert explicit_null.llm_config is None
 
 
+def test_memory_review_route_returns_task_id(monkeypatch):
+    memory_review_routes = _load_memory_review_routes_module()
+
+    def fake_review_memory(**kwargs):
+        assert kwargs['memory'] == 'ignored request memory'
+        assert kwargs['user'] == 'ignored request user'
+        return memory_review_routes.MemoryReviewResult(status='success', task_id='review_123')
+
+    monkeypatch.setattr(memory_review_routes, 'review_memory', fake_review_memory)
+    payload = memory_review_routes.MemoryReviewPayload(
+        user_id='user-1',
+        history=[{'role': 'user', 'content': '你好'}],
+        memory='ignored request memory',
+        user='ignored request user',
+    )
+
+    result = asyncio.run(memory_review_routes.memory_review(payload))
+
+    assert result == {'status': 'success', 'task_id': 'review_123'}
+
+
 def test_review_memory_runs_agent_with_memory_editor_tool(monkeypatch):
     memory_review = _load_memory_review_module()
 
     calls = {}
+
+    class FakeMemoryStore:
+        def __init__(self):
+            calls['store_created'] = True
+
+        def read(self, target):
+            calls.setdefault('store_reads', []).append(target)
+            return {
+                'memory': 'RemoteFS 记忆',
+                'user_preference': 'RemoteFS 用户画像',
+            }[target]
 
     class FakeModel:
         def __init__(self, *args, **kwargs):
@@ -279,6 +340,9 @@ def test_review_memory_runs_agent_with_memory_editor_tool(monkeypatch):
     def memory_editor(*args, **kwargs):
         return None
 
+    def read_memory(*args, **kwargs):
+        return None
+
     def normalize_history_for_agent(history):
         calls['normalizer_input'] = history
         return [{'role': 'user', 'content': 'normalized'}]
@@ -293,6 +357,9 @@ def test_review_memory_runs_agent_with_memory_editor_tool(monkeypatch):
         auto_model=FakeModel,
         fs=object,
         memory_editor=memory_editor,
+        read_memory=read_memory,
+        memory_store=FakeMemoryStore,
+        uuid4=lambda: 'uuid-1',
         config={'core_api_url': 'http://core', 'review_max_retries': 2},
         inject_model_config=inject_model_config,
         normalize_history_for_agent=normalize_history_for_agent,
@@ -306,13 +373,20 @@ def test_review_memory_runs_agent_with_memory_editor_tool(monkeypatch):
         llm_config={'llm': {'model': 'test'}},
     )
 
-    assert result.model_dump() == {'status': 'success'}
-    assert [tool.__name__ for tool in calls['agent_kwargs']['tools']] == ['memory_editor']
+    assert result.model_dump() == {'status': 'success', 'task_id': 'memory_review_uuid-1'}
+    assert [tool.__name__ for tool in calls['agent_kwargs']['tools']] == ['read_memory', 'memory_editor']
     assert calls['normalizer_input'] == [{'role': 'user', 'content': '以后请用中文简洁回答'}]
     assert calls['history'] == [{'role': 'user', 'content': 'normalized'}]
+    assert 'RemoteFS 记忆' in calls['prompt']
+    assert 'RemoteFS 用户画像' in calls['prompt']
+    assert '旧记忆' not in calls['prompt']
+    assert '旧用户画像' not in calls['prompt']
+    assert calls['store_reads'] == ['memory', 'user_preference']
     assert fake_lazyllm.globals['agentic_config']['user_id'] == 'user-1'
-    assert fake_lazyllm.globals['agentic_config']['memory'] == '旧记忆'
-    assert fake_lazyllm.globals['agentic_config']['user_preference'] == '旧用户画像'
+    assert fake_lazyllm.globals['agentic_config']['task_id'] == 'memory_review_uuid-1'
+    assert 'memory' not in fake_lazyllm.globals['agentic_config']
+    assert 'user_preference' not in fake_lazyllm.globals['agentic_config']
+    assert 'core_api_url' not in fake_lazyllm.globals['agentic_config']
     assert calls['model_config'] == {'llm': {'model': 'test'}}
     assert calls['model_args'] == ((), {'model': 'llm'})
 
@@ -320,6 +394,10 @@ def test_review_memory_runs_agent_with_memory_editor_tool(monkeypatch):
 def test_review_memory_returns_success_when_no_tool_submission(monkeypatch):
     memory_review = _load_memory_review_module()
     calls = {}
+
+    class FakeMemoryStore:
+        def read(self, target):
+            return ''
 
     class FakeModel:
         def __init__(self, *args, **kwargs):
@@ -351,6 +429,8 @@ def test_review_memory_returns_success_when_no_tool_submission(monkeypatch):
         auto_model=FakeModel,
         fs=object,
         memory_editor=memory_editor,
+        memory_store=FakeMemoryStore,
+        uuid4=lambda: 'uuid-2',
         config={'core_api_url': 'http://core', 'review_max_retries': 2},
         inject_model_config=inject_model_config,
     )
@@ -362,5 +442,5 @@ def test_review_memory_returns_success_when_no_tool_submission(monkeypatch):
         user='',
     )
 
-    assert result.model_dump() == {'status': 'success'}
+    assert result.model_dump() == {'status': 'success', 'task_id': 'memory_review_uuid-2'}
     assert calls['model_config'] is None

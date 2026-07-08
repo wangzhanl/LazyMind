@@ -26,6 +26,10 @@ from .skill_remote_store import (
     rename_skill_package,
     replace_skill_package_files,
 )
+from .memory_remote_store import (
+    MEMORY_TARGET_PATHS,
+    MemoryRemoteStore,
+)
 from .skill_validation import (
     normalize_skill_category,
     parse_skill_frontmatter,
@@ -79,6 +83,8 @@ __all__ = [
     'Suggestion',
     'ActionPlanningModule',
     'ChatHistoryRecord',
+    'MEMORY_TARGET_PATHS',
+    'MemoryRemoteStore',
     'SynonymCandidate',
     'VocabSuggestion',
     'VocabEvolutionRequest',

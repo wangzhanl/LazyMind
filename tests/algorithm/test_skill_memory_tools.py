@@ -2,6 +2,7 @@ import importlib
 import io
 
 memory_mod = importlib.import_module('lazymind.chat.engine.tools.memory_editor')
+memory_reader_mod = importlib.import_module('lazymind.chat.engine.tools.memory_reader')
 skill_editor_mod = importlib.import_module('lazymind.chat.engine.tools.skill_editor')
 skill_operations_mod = importlib.import_module('lazymind.chat.engine.tools.infra.skill_operations')
 skill_remote_store_mod = importlib.import_module('lazymind.chat.engine.tools.infra.skill_remote_store')
@@ -56,78 +57,166 @@ class FakeSkillRemoteFS:
         return io.StringIO(self.packages[(parts[1], parts[2])])
 
 
-def test_memory_editor_operations_write_memory_review(monkeypatch):
+class FakeMemoryStore:
+    def __init__(self, contents=None, read_error=None, write_error=None):
+        self.contents = dict(contents or {})
+        self.read_error = read_error
+        self.write_error = write_error
+        self.writes = []
+
+    def read(self, target):
+        if self.read_error:
+            raise self.read_error
+        return self.contents[target]
+
+    def write(self, target, content):
+        if self.write_error:
+            raise self.write_error
+        self.writes.append((target, content))
+        self.contents[target] = content
+
+
+def test_memory_editor_operation_writes_remote_fs(monkeypatch):
     assert not hasattr(memory_mod, 'memory')
+    assert not hasattr(memory_mod, 'insert_memory_review_record')
 
-    class FakeUnprocessableContentError(ValueError):
-        pass
-
-    records = []
-
-    def fake_insert_memory_review_record(**kwargs):
-        records.append(kwargs)
-        return {'id': 'review-1', 'review_status': 'pending'}
-
-    monkeypatch.setattr(memory_mod, 'UnprocessableContentError', FakeUnprocessableContentError)
+    store = FakeMemoryStore({'memory': 'old', 'user_preference': 'old'})
     monkeypatch.setattr(
         memory_mod,
         '_validate_generated_content',
         lambda memory_type, content: content,
     )
-    monkeypatch.setattr(
-        memory_mod,
-        '_apply_memory_edit_operations',
-        lambda current, payload: current.replace('old', payload['operations'][0]['new']),
-    )
-    monkeypatch.setattr(
-        memory_mod,
-        '_apply_user_preference_edit_operations',
-        lambda current, payload: current.replace('old', payload['operations'][0]['new']),
-    )
-    monkeypatch.setattr(memory_mod, 'insert_memory_review_record', fake_insert_memory_review_record)
-    monkeypatch.setattr(
-        memory_mod.lazyllm,
-        'globals',
-        {'agentic_config': {'user_id': 'user-1', 'memory': 'old', 'user_preference': 'old'}},
-    )
+    monkeypatch.setattr(memory_mod, 'MemoryRemoteStore', lambda: store)
 
     memory_result = memory_mod.memory_editor(
         'memory',
-        [{'op': 'replace_text', 'old': 'old', 'new': 'new'}],
+        op='patch',
+        old_text='old',
+        new_text='new',
     )
     user_result = memory_mod.memory_editor(
         'user_preference',
-        [{'op': 'replace_text', 'old': 'old', 'new': 'new'}],
+        op='append',
+        content='newer',
     )
 
     assert memory_result['success'] is True
     assert memory_result['tool'] == 'memory_editor'
     assert memory_result['result']['target'] == 'memory'
     assert memory_result['result']['status'] == 'pending_review'
-    assert memory_result['result']['message'] == '记忆修改已提交，等待审核'
+    assert memory_result['result']['message'] == 'Memory changes were written to draft and are pending review.'
+    assert memory_result['result']['operation_count'] == 1
     assert user_result['success'] is True
     assert user_result['tool'] == 'memory_editor'
     assert user_result['result']['target'] == 'user_preference'
     assert user_result['result']['status'] == 'pending_review'
-    assert user_result['result']['message'] == '记忆修改已提交，等待审核'
-    assert records == [
-        {
-            'target': 'memory',
-            'user_id': 'user-1',
-            'session_id': '',
-            'source_content': 'old',
-            'content': 'new',
-            'operations': [{'op': 'replace_text', 'old': 'old', 'new': 'new'}],
-        },
-        {
-            'target': 'user_preference',
-            'user_id': 'user-1',
-            'session_id': '',
-            'source_content': 'old',
-            'content': 'new',
-            'operations': [{'op': 'replace_text', 'old': 'old', 'new': 'new'}],
-        },
+    assert user_result['result']['message'] == 'Memory changes were written to draft and are pending review.'
+    assert store.writes == [
+        ('memory', 'new'),
+        ('user_preference', 'old\nnewer'),
     ]
+
+
+def test_memory_editor_patch_match_controls(monkeypatch):
+    store = FakeMemoryStore({'memory': 'old and old'})
+    monkeypatch.setattr(memory_mod, 'MemoryRemoteStore', lambda: store)
+    monkeypatch.setattr(memory_mod, '_validate_generated_content', lambda memory_type, content: content)
+
+    ambiguous = memory_mod.memory_editor(
+        'memory',
+        op='patch',
+        old_text='old',
+        new_text='new',
+    )
+    missing = memory_mod.memory_editor(
+        'memory',
+        op='patch',
+        old_text='missing',
+        new_text='new',
+    )
+    empty_old = memory_mod.memory_editor(
+        'memory',
+        op='patch',
+        old_text='',
+        new_text='new',
+    )
+    replace_all = memory_mod.memory_editor(
+        'memory',
+        op='patch',
+        old_text='old',
+        new_text='new',
+        replace_all_matches=True,
+    )
+
+    assert ambiguous['success'] is False
+    assert 'matched multiple locations' in ambiguous['error']['reason']
+    assert missing['success'] is False
+    assert 'could not find' in missing['error']['reason']
+    assert empty_old['success'] is False
+    assert "non-empty 'old_text'" in empty_old['error']['reason']
+    assert replace_all['success'] is True
+    assert store.writes == [('memory', 'new and new')]
+
+
+def test_memory_editor_append_requires_content(monkeypatch):
+    store = FakeMemoryStore({'memory': ''})
+    monkeypatch.setattr(memory_mod, 'MemoryRemoteStore', lambda: store)
+
+    empty_append = memory_mod.memory_editor('memory', op='append', content='  ')
+    unknown = memory_mod.memory_editor('memory', op='replace_all', content='new')
+
+    assert empty_append['success'] is False
+    assert 'append requires non-empty content' in empty_append['error']['reason']
+    assert unknown['success'] is False
+    assert "expected 'patch' or 'append'" in unknown['error']['reason']
+    assert store.writes == []
+
+
+def test_memory_editor_remote_fs_errors_return_tool_error(monkeypatch):
+    monkeypatch.setattr(
+        memory_mod,
+        'MemoryRemoteStore',
+        lambda: FakeMemoryStore({'memory': 'old'}, read_error=RuntimeError('backend down')),
+    )
+    read_result = memory_mod.memory_editor(
+        'memory',
+        op='patch',
+        old_text='old',
+        new_text='new',
+    )
+
+    monkeypatch.setattr(
+        memory_mod,
+        'MemoryRemoteStore',
+        lambda: FakeMemoryStore({'memory': 'old'}, write_error=RuntimeError('draft conflict')),
+    )
+    monkeypatch.setattr(memory_mod, '_validate_generated_content', lambda memory_type, content: content)
+    write_result = memory_mod.memory_editor(
+        'memory',
+        op='patch',
+        old_text='old',
+        new_text='new',
+    )
+
+    assert read_result['success'] is False
+    assert 'Failed to read memory via RemoteFS: backend down' in read_result['error']['reason']
+    assert write_result['success'] is False
+    assert 'Failed to write memory via RemoteFS: draft conflict' in write_result['error']['reason']
+
+
+def test_read_memory_reads_remote_fs(monkeypatch):
+    store = FakeMemoryStore({'memory': 'remote memory'})
+    monkeypatch.setattr(memory_reader_mod, 'MemoryRemoteStore', lambda: store)
+
+    result = memory_reader_mod.read_memory('memory')
+
+    assert result['success'] is True
+    assert result['tool'] == 'read_memory'
+    assert result['result'] == {
+        'target': 'memory',
+        'content': 'remote memory',
+        'content_length': len('remote memory'),
+    }
 
 
 def test_skill_editor_create_file_tools_remove_core_paths(monkeypatch):
