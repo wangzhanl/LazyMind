@@ -12,14 +12,14 @@ import (
 	"gorm.io/gorm"
 	"lazymind/core/common"
 	"lazymind/core/common/orm"
-	"lazymind/core/doc"
 	"lazymind/core/store"
+	"lazymind/core/subagent"
 )
 
 // resolveValuePaths normalises a human-uploaded value by ensuring it carries a stable
 // absolute path when the value contains a local file path.
 // Signed URL generation is intentionally NOT done here — signed URLs expire and must
-// be generated fresh on every API response (see signArtifactImagePath called from
+// be generated fresh on every API response (see enrichArtifactValue called from
 // enrichSlots and GetSlotItemVersionsByIndex).
 // Values that are not JSON objects with a path field are returned unchanged.
 func resolveValuePaths(raw json.RawMessage) json.RawMessage {
@@ -43,52 +43,9 @@ func resolveValuePaths(raw json.RawMessage) json.RawMessage {
 	return out
 }
 
-// signArtifactImagePath enriches an artifact value with a signed URL when it contains
-// a local file path. Works for both AI-generated artifacts and human-uploaded snapshots.
-// External http(s) URLs stored in the path field are moved to the url field for consistent
-// frontend handling. Local paths are signed fresh (avoiding stale signed URLs in the DB).
-// The path field is preserved alongside url so the algorithm layer can still read the file.
-// Values without a path field, or that already have a url field, are returned unchanged.
-// The contentType parameter is used only to skip non-image processing; pass "image" when
-// the content type is known, or pass "" to attempt signing for any path-bearing value.
-func signArtifactImagePath(raw json.RawMessage, contentType string) json.RawMessage {
-	if len(raw) == 0 {
-		return raw
-	}
-	if contentType != "" && contentType != "image" {
-		return raw
-	}
-	var m map[string]any
-	if err := json.Unmarshal(raw, &m); err != nil {
-		return raw
-	}
-	pathVal, _ := m["path"].(string)
-	if pathVal == "" {
-		return raw
-	}
-	// Always re-sign regardless of existing url — stored urls may have expired.
-	// External or inline URL stored in path field — move it to url for consistent frontend handling.
-	if strings.HasPrefix(pathVal, "http://") || strings.HasPrefix(pathVal, "https://") ||
-		strings.HasPrefix(pathVal, "data:") {
-		m["url"] = pathVal
-		delete(m, "path")
-		out, err := json.Marshal(m)
-		if err != nil {
-			return raw
-		}
-		return out
-	}
-	// Local path: generate signed URL and keep path for algorithm access.
-	signed := doc.StaticFileURLFromFullPath(pathVal)
-	if signed == "" {
-		return raw
-	}
-	m["url"] = signed
-	out, err := json.Marshal(m)
-	if err != nil {
-		return raw
-	}
-	return out
+// enrichArtifactValue enriches artifact values with fresh browser-accessible signed URLs.
+func enrichArtifactValue(raw json.RawMessage, contentType string) json.RawMessage {
+	return subagent.SignArtifactImageValue(contentType, raw)
 }
 
 // sessionDTO is the frontend shape for a PluginSession.
@@ -122,19 +79,19 @@ type slotDTO struct {
 	ListIndex     *int            `json:"list_index,omitempty"`
 	SortOrder     *int            `json:"sort_order,omitempty"`
 	Selected      bool            `json:"selected"`
-	ArtifactKey   string          `json:"artifact_key"`
+	Slot          string          `json:"slot"`
 	CreatedAt     time.Time       `json:"created_at"`
 	ContentType   string          `json:"content_type,omitempty"`
 	ArtifactValue json.RawMessage `json:"artifact_value,omitempty"`
 	Caption       *string         `json:"caption,omitempty"`
 	ChangeSource  string          `json:"change_source,omitempty"`
+	StepID        string          `json:"step_id,omitempty"`
 	RevisionCount int             `json:"revision_count,omitempty"`
 	OrderVersion  *int            `json:"order_version,omitempty"`
 
 	// Internal fields — used by enrichSlots, never serialised to the client.
 	ArtifactSeq     *int            `json:"-"`
 	HumanArtifactID *string         `json:"-"`
-	StepID          string          `json:"-"`
 	Attempt         int             `json:"-"`
 	ContentSnapshot json.RawMessage `json:"-"`
 }
@@ -184,7 +141,7 @@ func toSlotDTO(r *orm.PluginSlotRevision) slotDTO {
 		Revision:        r.Revision,
 		ListIndex:       r.ListIndex,
 		Selected:        r.Selected,
-		ArtifactKey:     r.ArtifactKey,
+		Slot:            r.Slot,
 		ArtifactSeq:     r.ArtifactSeq,
 		HumanArtifactID: r.HumanArtifactID,
 		StepID:          r.StepID,
@@ -199,7 +156,7 @@ func toSlotDTO(r *orm.PluginSlotRevision) slotDTO {
 // and OrderVersion on each slotDTO by querying sub_agent_artifacts, plugin_slot_revisions,
 // and plugin_slot_order.
 // For each revision: look up plugin_session_steps → task_id, then query
-// sub_agent_artifacts(task_id, artifact_key) ordered by seq ASC and pick the
+// sub_agent_artifacts(task_id, slot) ordered by seq ASC and pick the
 // row at position list_index (0-based); for single slots take the latest (seq DESC).
 func enrichSlots(ctx context.Context, db *gorm.DB, sessionID string, slots []slotDTO) {
 	// Step 1: build a map (step_id, attempt) → task_id
@@ -232,10 +189,10 @@ func enrichSlots(ctx context.Context, db *gorm.DB, sessionID string, slots []slo
 		var arts []orm.SubAgentArtifact
 		db.WithContext(ctx).
 			Where("task_id IN ? AND hidden = ?", ids, false).
-			Order("task_id ASC, artifact_key ASC, seq ASC").
+			Order("task_id ASC, slot ASC, seq ASC").
 			Find(&arts)
 		for _, a := range arts {
-			k := a.TaskID + "#" + a.ArtifactKey
+			k := a.TaskID + "#" + a.Slot
 			artifactsByTask[k] = append(artifactsByTask[k], a)
 		}
 	}
@@ -290,7 +247,7 @@ func enrichSlots(ctx context.Context, db *gorm.DB, sessionID string, slots []slo
 			haErr := db.WithContext(ctx).Where("id = ?", *slot.HumanArtifactID).First(&ha).Error
 			if haErr == nil {
 				resolvedContentType = resolveContentType(ha.ContentType, ha.Value)
-				resolved = signArtifactImagePath(ha.Value, resolvedContentType)
+				resolved = enrichArtifactValue(ha.Value, resolvedContentType)
 				resolvedCaption = ha.Caption
 			} else {
 				fmt.Printf("[enrichSlots] WARN: HumanArtifactID=%s not found for slot_id=%s list_index=%v: %v\n",
@@ -302,19 +259,19 @@ func enrichSlots(ctx context.Context, db *gorm.DB, sessionID string, slots []slo
 				fmt.Printf("[enrichSlots] WARN: no task_id for step_id=%s attempt=%d slot_id=%s\n",
 					slot.StepID, slot.Attempt, slot.SlotID)
 			} else {
-				k := tid + "#" + slot.ArtifactKey
+				k := tid + "#" + slot.Slot
 				for j := range artifactsByTask[k] {
 					if artifactsByTask[k][j].Seq == *slot.ArtifactSeq {
 						a := &artifactsByTask[k][j]
 						resolvedContentType = resolveContentType(a.ContentType, a.Value)
-						resolved = signArtifactImagePath(a.Value, resolvedContentType)
+						resolved = enrichArtifactValue(a.Value, resolvedContentType)
 						resolvedCaption = a.Caption
 						break
 					}
 				}
 				if resolved == nil {
-					fmt.Printf("[enrichSlots] WARN: ArtifactSeq=%d not found in task=%s key=%s slot_id=%s\n",
-						*slot.ArtifactSeq, tid, slot.ArtifactKey, slot.SlotID)
+					fmt.Printf("[enrichSlots] WARN: ArtifactSeq=%d not found in task=%s slot=%s slot_id=%s\n",
+						*slot.ArtifactSeq, tid, slot.Slot, slot.SlotID)
 				}
 			}
 		} else {
@@ -324,7 +281,7 @@ func enrichSlots(ctx context.Context, db *gorm.DB, sessionID string, slots []slo
 
 		// Legacy fallback: ContentSnapshot for pre-migration rows.
 		if resolved == nil && len(slot.ContentSnapshot) > 0 {
-			resolved = signArtifactImagePath(slot.ContentSnapshot, "")
+			resolved = enrichArtifactValue(slot.ContentSnapshot, "")
 		}
 
 		if resolved == nil {
@@ -420,19 +377,18 @@ func GetSessionDetail(w http.ResponseWriter, r *http.Request) {
 	}
 	dto := toSessionDTO(s)
 	// Load slots inline.
-	revisions, _ := LoadSelectedSlots(ctx, db, sessionID)
+	revisions, _ := LoadDisplaySlots(ctx, db, sessionID)
 	for i := range revisions {
 		dto.Slots = append(dto.Slots, toSlotDTO(&revisions[i]))
 	}
 	enrichSlots(ctx, db, sessionID, dto.Slots)
 	// Load steps inline (used by Python Layer-2 dependency validation).
 	steps, _ := ListSteps(ctx, db, sessionID)
-	// Build step intent map for fast lookup.
 	intentMap := buildStepIntentMap(ctx, db, sessionID)
 	for i := range steps {
-		sd := toStepDTO(&steps[i])
-		sd.IntentContext = intentMap[steps[i].StepID]
-		dto.Steps = append(dto.Steps, sd)
+		step := toStepDTO(&steps[i])
+		step.IntentContext = intentMap[steps[i].StepID]
+		dto.Steps = append(dto.Steps, step)
 	}
 	common.ReplyOK(w, map[string]any{"session": dto})
 }
@@ -463,7 +419,7 @@ func GetSessionSlots(w http.ResponseWriter, r *http.Request) {
 		common.ReplyErr(w, "session not found", http.StatusNotFound)
 		return
 	}
-	revisions, err := LoadSelectedSlots(ctx, db, sessionID)
+	revisions, err := LoadDisplaySlots(ctx, db, sessionID)
 	if err != nil {
 		common.ReplyErr(w, "query slots failed", http.StatusInternalServerError)
 		return
@@ -538,7 +494,7 @@ func GetSessionSteps(w http.ResponseWriter, r *http.Request) {
 	common.ReplyOK(w, map[string]any{"steps": out})
 }
 
-// Accepts body: {"selected_revision": int} to switch which revision is displayed.
+// PatchSessionSlot handles PATCH /plugin-sessions/{session_id}/slots/{slot_id}.
 func PatchSessionSlot(w http.ResponseWriter, r *http.Request) {
 	sessionID := common.PathVar(r, "session_id")
 	slotID := common.PathVar(r, "slot_id")
@@ -609,8 +565,11 @@ func GetActiveConversationSession(w http.ResponseWriter, r *http.Request) {
 		common.ReplyOK(w, map[string]any{"session": nil})
 		return
 	}
+	if s.Status == SessionStatusActive {
+		healStaleActiveSession(r.Context(), db, s)
+	}
 	dto := toSessionDTO(s)
-	revisions, _ := LoadSelectedSlots(r.Context(), db, s.ID)
+	revisions, _ := LoadDisplaySlots(r.Context(), db, s.ID)
 	for i := range revisions {
 		dto.Slots = append(dto.Slots, toSlotDTO(&revisions[i]))
 	}
@@ -641,15 +600,8 @@ func GetLatestConversationSession(w http.ResponseWriter, r *http.Request) {
 		common.ReplyOK(w, map[string]any{"session": nil})
 		return
 	}
-
-	// Self-healing: if the session appears active but no steps are still running
-	// (e.g. the server crashed before updating statuses), repair the state so
-	// the frontend doesn't get stuck on "executing".
-	if s.Status == SessionStatusActive {
-		healStaleActiveSession(r.Context(), db, s)
-	}
 	dto := toSessionDTO(s)
-	revisions, _ := LoadSelectedSlots(r.Context(), db, s.ID)
+	revisions, _ := LoadDisplaySlots(r.Context(), db, s.ID)
 	for i := range revisions {
 		dto.Slots = append(dto.Slots, toSlotDTO(&revisions[i]))
 	}
@@ -659,7 +611,7 @@ func GetLatestConversationSession(w http.ResponseWriter, r *http.Request) {
 
 // artifactSummaryItem is one entry in the per-step artifact summary list.
 type artifactSummaryItem struct {
-	ArtifactKey string `json:"artifact_key"`
+	Slot        string `json:"slot"`
 	ContentType string `json:"content_type"`
 	Preview     string `json:"preview"` // text snippet (≤30 chars) or filename
 }
@@ -886,17 +838,17 @@ func GetStateGraph(w http.ResponseWriter, r *http.Request) {
 	// 4. Query artifacts for the latest attempt of each step.
 	//    For text artifacts: take first 30 runes of the "text" field.
 	//    For image artifacts: take the filename from the "path" or "url" field.
-	//    De-duplicate by artifact_key, keeping the row with the highest seq.
+	//    De-duplicate by slot, keeping the row with the highest seq.
 	type artifactRow struct {
 		StepID      string `gorm:"column:step_id"`
 		Attempt     int    `gorm:"column:attempt"`
-		ArtifactKey string `gorm:"column:artifact_key"`
+		Slot        string `gorm:"column:slot"`
 		ContentType string `gorm:"column:content_type"`
 		Value       []byte `gorm:"column:value"`
 	}
 	var artifactRows []artifactRow
 	if artifactQueryErr := db.WithContext(ctx).Raw(`
-		SELECT a.artifact_key, a.content_type, a.value, s.step_id, s.attempt
+		SELECT a.slot, a.content_type, a.value, s.step_id, s.attempt
 		FROM sub_agent_artifacts a
 		JOIN plugin_session_steps s ON s.task_id = a.task_id
 		WHERE s.session_id = ?
@@ -905,7 +857,7 @@ func GetStateGraph(w http.ResponseWriter, r *http.Request) {
 			SELECT MAX(a2.seq)
 			FROM sub_agent_artifacts a2
 			WHERE a2.task_id = a.task_id
-			  AND a2.artifact_key = a.artifact_key
+			  AND a2.slot = a.slot
 		  )
 		  AND s.attempt = (
 			SELECT MAX(s2.attempt)
@@ -913,24 +865,24 @@ func GetStateGraph(w http.ResponseWriter, r *http.Request) {
 			WHERE s2.session_id = s.session_id
 			  AND s2.step_id = s.step_id
 		  )
-		ORDER BY s.step_id, a.artifact_key
+		ORDER BY s.step_id, a.slot
 	`, sessionID).Scan(&artifactRows).Error; artifactQueryErr != nil {
 		common.ReplyErr(w, "query artifact rows failed", http.StatusInternalServerError)
 		return
 	}
 
-	// Group artifact items by step_id, de-dup by artifact_key.
+	// Group artifact items by step_id, de-dup by slot.
 	stepArtifacts := make(map[string][]artifactSummaryItem)
-	seen := make(map[string]bool) // "step_id:artifact_key"
+	seen := make(map[string]bool) // "step_id:slot"
 	for _, r := range artifactRows {
-		k := r.StepID + ":" + r.ArtifactKey
+		k := r.StepID + ":" + r.Slot
 		if seen[k] {
 			continue
 		}
 		seen[k] = true
 		preview := buildArtifactPreview(r.ContentType, r.Value)
 		stepArtifacts[r.StepID] = append(stepArtifacts[r.StepID], artifactSummaryItem{
-			ArtifactKey: r.ArtifactKey,
+			Slot:        r.Slot,
 			ContentType: r.ContentType,
 			Preview:     preview,
 		})
@@ -1106,6 +1058,9 @@ func GetPluginInfo(w http.ResponseWriter, r *http.Request) {
 		common.ReplyErr(w, "build upstream request failed", http.StatusInternalServerError)
 		return
 	}
+	if lang := r.Header.Get("Accept-Language"); lang != "" {
+		req.Header.Set("Accept-Language", lang)
+	}
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		common.ReplyErr(w, "upstream request failed", http.StatusBadGateway)
@@ -1145,6 +1100,9 @@ func ListPlugins(w http.ResponseWriter, r *http.Request) {
 		common.ReplyErr(w, "build upstream request failed", http.StatusInternalServerError)
 		return
 	}
+	if lang := r.Header.Get("Accept-Language"); lang != "" {
+		req.Header.Set("Accept-Language", lang)
+	}
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		common.ReplyErr(w, "upstream request failed", http.StatusBadGateway)
@@ -1167,6 +1125,46 @@ func ListPlugins(w http.ResponseWriter, r *http.Request) {
 			break
 		}
 	}
+}
+
+// SyncSessionSearchConfig handles POST /plugin-sessions/{session_id}:sync-search-config.
+// Persists the current UI knowledge-base selection onto the parent conversation so
+// analyze_subject KB prefetch can read filters.kb_id.
+// Body: {"search_config": {"dataset_list": [{"id": "..."}], "creators": [], "tags": []}}
+func SyncSessionSearchConfig(w http.ResponseWriter, r *http.Request) {
+	sessionID := common.PathVar(r, "session_id")
+	if sessionID == "" {
+		common.ReplyErr(w, "session_id required", http.StatusBadRequest)
+		return
+	}
+	var body struct {
+		SearchConfig map[string]any `json:"search_config"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || len(body.SearchConfig) == 0 {
+		common.ReplyErr(w, "search_config required", http.StatusBadRequest)
+		return
+	}
+	db := store.DB()
+	if db == nil {
+		common.ReplyErr(w, "store not initialized", http.StatusInternalServerError)
+		return
+	}
+	ctx := r.Context()
+	session, err := GetSession(ctx, db, sessionID)
+	if err != nil {
+		if IsNotFound(err) {
+			common.ReplyErr(w, "session not found", http.StatusNotFound)
+			return
+		}
+		common.ReplyErr(w, "query session failed", http.StatusInternalServerError)
+		return
+	}
+	userID := store.UserID(r)
+	if err := persistConversationSearchConfig(db, session.ConversationID, userID, body.SearchConfig); err != nil {
+		common.ReplyErr(w, "persist search_config failed", http.StatusInternalServerError)
+		return
+	}
+	common.ReplyOK(w, map[string]any{"conversation_id": session.ConversationID})
 }
 
 // ReorderSlotItems handles PATCH /plugin-sessions/{session_id}/slots/{slot_id}/order.
@@ -1315,18 +1313,18 @@ func CreateSlotItem(w http.ResponseWriter, r *http.Request) {
 		common.ReplyErr(w, "session is dismissed", http.StatusConflict)
 		return
 	}
-	// Get an existing selected revision to borrow its artifact_key and step info.
+	// Get an existing selected revision to borrow its slot and step info.
 	var anyRev orm.PluginSlotRevision
 	if err := db.WithContext(ctx).
 		Where("session_id = ? AND slot_id = ? AND selected = ?", sessionID, slotID, true).
 		First(&anyRev).Error; err != nil {
-		common.ReplyErr(w, "slot has no existing items; cannot infer artifact_key", http.StatusBadRequest)
+		common.ReplyErr(w, "slot has no existing items; cannot infer slot", http.StatusBadRequest)
 		return
 	}
 	// Write new list revision via WriteSlotRevisionWithHumanArtifact so that
 	// content_type is persisted correctly (required for image rendering).
 	newRev, err := WriteSlotRevisionWithHumanArtifact(ctx, db,
-		sessionID, slotID, anyRev.ArtifactKey, anyRev.StepID, anyRev.Attempt,
+		sessionID, slotID, anyRev.Slot, anyRev.StepID, anyRev.Attempt,
 		"list", nil,
 		body.ContentType, resolveValuePaths(body.Value), body.Caption,
 	)
@@ -1361,7 +1359,7 @@ func CreateSlotItem(w http.ResponseWriter, r *http.Request) {
 			First(&step).Error; err == nil {
 			cap := *body.Caption
 			db.WithContext(ctx).Model(&orm.SubAgentArtifact{}).
-				Where("task_id = ? AND artifact_key = ?", step.TaskID, anyRev.ArtifactKey).
+				Where("task_id = ? AND slot = ?", step.TaskID, anyRev.Slot).
 				Update("caption", &cap)
 		}
 	}
@@ -1374,10 +1372,10 @@ func CreateSlotItem(w http.ResponseWriter, r *http.Request) {
 }
 
 // SaveArtifactByKey handles POST /plugin-sessions/{session_id}/artifacts.
-// Allows ChatAgent to write a plugin artifact directly by artifact_key without
+// Allows ChatAgent to write a plugin artifact directly by slot without
 // going through a SubAgent task. Looks up the slot binding via the Python API,
-// then writes a new AI slot revision for the given artifact_key.
-// Body: { artifact_key: string, value: {...}, content_type?: string,
+// then writes a new AI slot revision for the given slot.
+// Body: { slot: string, value: {...}, content_type?: string,
 //
 //	sort_order?: int, caption?: string, step_id?: string }
 func SaveArtifactByKey(w http.ResponseWriter, r *http.Request) {
@@ -1387,15 +1385,15 @@ func SaveArtifactByKey(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var body struct {
-		ArtifactKey string          `json:"artifact_key"`
+		Slot        string          `json:"slot"`
 		Value       json.RawMessage `json:"value"`
 		ContentType string          `json:"content_type,omitempty"`
 		SortOrder   *int            `json:"sort_order,omitempty"`
 		Caption     *string         `json:"caption,omitempty"`
 		StepID      string          `json:"step_id,omitempty"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.ArtifactKey == "" {
-		common.ReplyErr(w, "invalid body: artifact_key and value required", http.StatusBadRequest)
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.Slot == "" {
+		common.ReplyErr(w, "invalid body: slot and value required", http.StatusBadRequest)
 		return
 	}
 	if len(body.Value) == 0 {
@@ -1423,10 +1421,10 @@ func SaveArtifactByKey(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Resolve slot binding for the artifact_key via Python plugin API.
-	slotID, cardinality := resolveSlotBinding(sess.PluginID, body.ArtifactKey)
+	// Resolve slot binding for the slot via Python plugin API.
+	slotID, cardinality := resolveSlotBinding(sess.PluginID, body.Slot)
 	if slotID == "" {
-		common.ReplyErr(w, fmt.Sprintf("no slot binding for artifact_key %q in plugin %q", body.ArtifactKey, sess.PluginID), http.StatusBadRequest)
+		common.ReplyErr(w, fmt.Sprintf("no slot binding for slot %q in plugin %q", body.Slot, sess.PluginID), http.StatusBadRequest)
 		return
 	}
 
@@ -1456,18 +1454,18 @@ func SaveArtifactByKey(w http.ResponseWriter, r *http.Request) {
 	}
 
 	rev, err := WriteSlotRevisionWithHumanArtifact(ctx, db,
-		sessionID, slotID, body.ArtifactKey, stepID, attempt, cardinality, listIndex,
+		sessionID, slotID, body.Slot, stepID, attempt, cardinality, listIndex,
 		body.ContentType, body.Value, body.Caption)
 	if err != nil {
 		common.ReplyErr(w, "write slot revision failed", http.StatusInternalServerError)
 		return
 	}
 	common.ReplyJSON(w, map[string]any{
-		"status":       "ok",
-		"session_id":   sessionID,
-		"slot_id":      slotID,
-		"artifact_key": body.ArtifactKey,
-		"revision":     rev.Revision,
+		"status":     "ok",
+		"session_id": sessionID,
+		"slot_id":    slotID,
+		"slot":       body.Slot,
+		"revision":   rev.Revision,
 	})
 }
 

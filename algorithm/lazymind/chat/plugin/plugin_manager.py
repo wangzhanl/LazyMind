@@ -19,6 +19,7 @@ remember to list them explicitly.
 """
 from __future__ import annotations
 
+import json
 import uuid
 from typing import Any, Dict, List, Optional
 
@@ -89,6 +90,20 @@ def _agentic_config() -> Dict[str, Any]:
         return {}
 
 
+def _export_parent_agentic_config(config: Dict[str, Any]) -> Dict[str, Any]:
+    """Return the JSON-safe request context a plugin SubAgent should inherit."""
+    exported: Dict[str, Any] = {}
+    for key, value in (config or {}).items():
+        if key == 'citation_state':
+            continue
+        try:
+            json.dumps(value)
+        except (TypeError, ValueError):
+            continue
+        exported[key] = value
+    return exported
+
+
 def _render_step_objective(
     step_config: Dict[str, Any],
     user_input: str,
@@ -128,7 +143,7 @@ def _trigger_plugin_step(
             objective for this execution only.  Used for retries where the user
             wants to refine or partially regenerate the output.
             Not persisted to session state.
-        partial_indices: Maps artifact_key → list_index values that should overwrite
+        partial_indices: Maps slot → list_index values that should overwrite
             existing list-slot entries rather than appending. None means full write.
     """
     cfg = _agentic_config()
@@ -187,33 +202,58 @@ def _trigger_plugin_step(
                     if isinstance(s, dict)
                 }
                 for inp in inputs:
-                    artifact_id = inp['artifact_id']
+                    slot = inp['slot']
                     required = inp.get('required', True)
-                    producer_step = plugin_loader.find_producer_step(plugin_id, artifact_id)
-                    if not producer_step:
+                    producer_steps = plugin_loader.find_producer_steps(plugin_id, slot)
+                    if not producer_steps:
                         continue
-                    step_status = steps_data.get(producer_step)
+                    producer_statuses = {
+                        producer_step: steps_data.get(producer_step)
+                        for producer_step in producer_steps
+                    }
+                    if any(status == 'succeeded' for status in producer_statuses.values()):
+                        continue
+
+                    preferred_producer = (
+                        current_step if current_step in producer_steps else producer_steps[0]
+                    )
+                    step_status = producer_statuses.get(preferred_producer)
                     if step_status is None:
                         if required:
                             return (
-                                f'Error: required artifact {artifact_id!r} not available. '
-                                f'Please trigger {producer_step!r} first.'
+                                f'Error: required artifact {slot!r} not available. '
+                                f'Please trigger {preferred_producer!r} first.'
                             )
                         continue
-                    if step_status in ('running', 'failed', 'interrupted'):
+                    if step_status in ('running', 'interrupted'):
                         return (
-                            f'Error: artifact {artifact_id!r} not ready '
-                            f'(producer step {producer_step!r} status: {step_status!r}).'
+                            f'Error: artifact {slot!r} not ready '
+                            f'(producer step {preferred_producer!r} status: {step_status!r}).'
+                        )
+                    if step_status == 'failed':
+                        if not required:
+                            continue
+                        return (
+                            f'Error: artifact {slot!r} not ready '
+                            f'(producer step {preferred_producer!r} status: {step_status!r}).'
                         )
         except Exception:
             pass  # Defensive: skip DB check on error; Go will re-validate
 
     # --- Emit task_created signal ---
     task_id = str(uuid.uuid4())
-    output_keys = [o['artifact_id'] for o in step_config.get('outputs', [])]
-    input_keys = [i['artifact_id'] for i in inputs]
+    output_defs = step_config.get('outputs', [])
+    output_keys = [o['slot'] for o in output_defs if o.get('slot')]
+    required_output_keys = [
+        o['slot']
+        for o in output_defs
+        if o.get('slot') and o.get('required', True)
+    ]
+    input_keys = [i['slot'] for i in inputs]
 
     # Framework tools are always present regardless of plugin declaration.
+    # Domain tools (e.g. kb) come only from state.yml — Go does not forward this
+    # list to the SubAgent runner; runner re-resolves tools from plugin_loader.
     declared_tools: List[str] = step_config.get('tools', [])
     merged_tools = _merge_tools(declared_tools)
 
@@ -224,15 +264,27 @@ def _trigger_plugin_step(
         'user_input': user_input,
         'is_cold_start': is_cold_start,
     }
+    parent_agentic_config = _export_parent_agentic_config(cfg)
+    if parent_agentic_config:
+        params['parent_agentic_config'] = parent_agentic_config
     # Map Python-side runtime_instruction to Go-side retry_hint field name.
     if runtime_instruction:
         params['retry_hint'] = runtime_instruction
     if partial_indices:
         params['partial_indices'] = partial_indices
+    params['required_output_artifact_keys'] = required_output_keys
     # Propagate full per-turn attachment index so SubAgent can access user files.
     history_files_per_turn: dict = cfg.get('history_files_per_turn') or {}
     if history_files_per_turn:
         params['history_files_per_turn'] = history_files_per_turn
+
+    # Propagate KB filters and user_id so plugin SubAgents can call kb_search.
+    filters: dict = dict(cfg.get('filters') or {})
+    if filters:
+        params['filters'] = filters
+    user_id: str = str(cfg.get('user_id') or '').strip()
+    if user_id:
+        params['user_id'] = user_id
 
     # Inject focused_tab (UI context hint) into the objective.
     # focused_sort_order is NOT injected — it is the UI scroll position,
@@ -253,8 +305,8 @@ def _trigger_plugin_step(
         mode='manual',          # Plugin steps always async; Go controls auto-advance
         objective=_render_step_objective(step_config, user_input, enriched_instruction),
         params=params,
-        input_artifact_keys=input_keys,
-        output_artifact_keys=output_keys,
+        input_slots=input_keys,
+        output_slots=output_keys,
         tools=merged_tools,
         resume=False,
     )
@@ -287,8 +339,8 @@ def _trigger_plugin_end(plugin_id: str) -> str:
             'user_input': '',
             'is_cold_start': False,
         },
-        input_artifact_keys=[],
-        output_artifact_keys=[],
+        input_slots=[],
+        output_slots=[],
         tools=[],
         resume=False,
     )
@@ -299,8 +351,16 @@ def _build_step_choices_doc(
     forward_steps: List[str],
     rewind_steps: List[str],
     step_labels: Dict[str, str],
+    plugin_id: str = '',
+    current_step: str = '',
 ) -> str:
-    """Return a formatted string listing available step choices for the LLM."""
+    """Return a formatted string listing available step choices for the LLM.
+
+    When plugin_id and current_step are supplied, each forward step is annotated
+    with the condition (if any) under which it should be taken, derived from the
+    expanded transitions (skipif bypass conditions are already inlined).
+    """
+    sm = plugin_loader.get_state_machine(plugin_id) if plugin_id else None
     lines = [
         '## Available steps at this moment (authoritative — state machine computed)',
         '--------------------------------------------------------------------------',
@@ -308,11 +368,32 @@ def _build_step_choices_doc(
         'Do NOT infer step names from scenario descriptions or chat history.',
     ]
     if forward_steps:
+        # Build a condition map from the expanded transitions so each step shows
+        # the condition (if any) under which it should be taken.
+        condition_map: Dict[str, str] = {}
+        if sm and current_step is not None:
+            for edge in sm.get_expanded_transitions(current_step):
+                tgt = edge['to']
+                cond = edge.get('condition', '').strip()
+                if tgt not in condition_map and cond:
+                    condition_map[tgt] = cond
+
         lines.append('Forward (next steps):')
         for s in forward_steps:
             label = step_labels.get(s, '')
-            suffix = f'  ({label})' if label else ''
-            lines.append(f'  - {s}{suffix}')
+            label_suffix = f'  ({label})' if label else ''
+            cond = condition_map.get(s, '')
+            cond_note = f'  [when: {cond}]' if cond else ''
+            lines.append(f'  - {s}{label_suffix}{cond_note}')
+
+        if len(forward_steps) > 1 and sm:
+            lines.append('')
+            lines.append(
+                '  NOTE: If these exits belong to a parallel node (route:all), you MUST trigger\n'
+                '  ALL of them by calling advance_step_and_hand_off once per step_id.\n'
+                '  If they belong to a choice node (route:choice), pick exactly ONE based on conditions.\n'
+                '  For steps annotated with [when: ...], only advance to that step if the condition holds.'
+            )
     if rewind_steps:
         lines.append('Rewind (re-run a past step):')
         for s in rewind_steps:
@@ -388,7 +469,7 @@ def build_advance_step_and_hand_off_tool(
     labels = step_labels or {}
     all_reachable = list(forward) + rewind
 
-    choices_doc = _build_step_choices_doc(forward, rewind, labels)
+    choices_doc = _build_step_choices_doc(forward, rewind, labels, plugin_id=plugin_id, current_step=current_step)
 
     def advance_step_and_hand_off(
         step_id: str,
@@ -458,7 +539,7 @@ def build_advance_step_and_hand_off_tool(
         '    user_input (str): Concise goal statement for the SubAgent — synthesise intent\n'
         '        from the conversation.  Do NOT pass vague phrases like "继续" or "continue".\n'
         '    runtime_instruction (str, optional): Ephemeral directive for this run only.\n'
-        '    partial_indices (dict, optional): Maps artifact_key → list_index values to\n'
+        '    partial_indices (dict, optional): Maps slot → list_index values to\n'
         '        overwrite (list-cardinality slots only).\n\n'
         'Returns:\n'
         '    Confirmation that the step was queued. Exits ReAct immediately after.'
@@ -484,7 +565,7 @@ def build_advance_step_tool(
     labels = step_labels or {}
     all_reachable = list(forward) + rewind
 
-    choices_doc = _build_step_choices_doc(forward, rewind, labels)
+    choices_doc = _build_step_choices_doc(forward, rewind, labels, plugin_id=plugin_id, current_step=current_step)
 
     def advance_step(
         step_id: str,
@@ -517,8 +598,11 @@ def build_advance_step_tool(
 
     advance_step.__doc__ = (
         'Advance the active plugin step synchronously and return the result.\n\n'
-        'ONLY use this when running multiple steps in one turn. Otherwise use\n'
-        '`advance_step_and_hand_off`.\n\n'
+        'ONLY use this for intermediate steps when the user explicitly asks to\n'
+        'run multiple plugin steps in one chat turn. Do NOT use it for ordinary\n'
+        '"continue"/"next step" requests, single-step advancement, or terminal\n'
+        'final-step advancement. If you are going to call only one advancement\n'
+        'tool, use `advance_step_and_hand_off` instead.\n\n'
         + choices_doc + '\n\n'
         'Args:\n'
         '    step_id (str): Step to advance to (see list above).\n'
@@ -539,7 +623,6 @@ def _wait_for_step_done(step_id: str, trigger_result: str, timeout: float = 600.
     message arrives on the step_done queue.
     """
     import time
-    import json
     try:
         from lazyllm.common.queue import FileSystemQueue
         cfg = _agentic_config()
@@ -880,9 +963,6 @@ def resolve_plugin_injection(
             # Read-only query tools (active session required).
             plugin_tools.extend(build_query_tools())
 
-            # find_artifact lets ChatAgent look up plugin step outputs by key.
-            from lazymind.chat.engine.subagent.tools import find_artifact
-            plugin_tools.append(find_artifact)
             # save_plugin_artifact lets ChatAgent write an artifact directly.
             from lazymind.chat.engine.tools.subagent_chat_tools import save_plugin_artifact
             plugin_tools.append(save_plugin_artifact)
@@ -929,7 +1009,12 @@ def resolve_plugin_injection(
                     'internally decided is part of a larger multi-step plan. If the user\'s '
                     'request involves multiple steps and only one of those steps would use a '
                     'plugin, do NOT trigger the plugin. Never infer plugin intent from '
-                    'indirect or implicit cues.\n\n'
+                    'indirect or implicit cues.\n'
+                    'When a plugin does match the user\'s primary and direct intent, call '
+                    'the matching `trigger_<plugin>_plugin` tool before using `ask_user`. '
+                    'Do not ask clarification questions first just because optional details '
+                    'are missing; pass the user\'s exact original request to the plugin so its '
+                    'workflow can collect context or proceed with sensible defaults.\n\n'
                 ) + '\n\n---\n\n'.join(s for s in scenarios if s)
     else:
         # No plugin_context provided: still inject cold-start triggers
@@ -948,7 +1033,12 @@ def resolve_plugin_injection(
                 'internally decided is part of a larger multi-step plan. If the user\'s '
                 'request involves multiple steps and only one of those steps would use a '
                 'plugin, do NOT trigger the plugin. Never infer plugin intent from '
-                'indirect or implicit cues.\n\n'
+                'indirect or implicit cues.\n'
+                'When a plugin does match the user\'s primary and direct intent, call '
+                'the matching `trigger_<plugin>_plugin` tool before using `ask_user`. '
+                'Do not ask clarification questions first just because optional details '
+                'are missing; pass the user\'s exact original request to the plugin so its '
+                'workflow can collect context or proceed with sensible defaults.\n\n'
             ) + '\n\n---\n\n'.join(s for s in scenarios if s)
 
     return plugin_tools, plugin_system_prompt, plugin_stop_tools, agentic_config_patch, plugin_artifact_context
@@ -1013,7 +1103,12 @@ def _build_step_status_section(
         lines.append('> Any step-status information in the conversation history is OUTDATED. Use only this section.')
 
         if current_step:
-            lines.append(f'\nCurrent step (pending execution this turn): **{_label(current_step)}**')
+            lines.append(f'\nCurrent plugin step state: **{_label(current_step)}**')
+            lines.append(
+                'This is the step the session is currently positioned at; it is not automatically '
+                'the next action target. If the user clearly wants to proceed and does not modify '
+                'the existing intent, choose from "Next forward steps" below.'
+            )
         else:
             lines.append('\nCurrent step: pipeline not yet started')
 
@@ -1033,7 +1128,7 @@ def _build_step_status_section(
         if sm and current_step:
             forward = [s for s in sm.get_reachable_steps(current_step) if s not in sm._RESERVED]
             if forward:
-                lines.append('Next forward steps (after current_step succeeds): '
+                lines.append('Next forward steps (valid targets for continuing): '
                              + ', '.join(_label(s) for s in forward))
 
         return '\n'.join(lines)
@@ -1065,10 +1160,17 @@ def _build_mode_guidance(
         'step becomes available only AFTER `current_step` succeeds.\n'
         'Never skip steps — do not call a downstream step while an upstream step is\n'
         'still pending.\n\n'
-        '### Rule 3 — "继续" interpretation\n'
-        'When the user says "继续" (or similar) with no other context, advance\n'
-        '`current_step` (the pending step shown in the step-status block). Do NOT\n'
-        'jump ahead to a later step, even if earlier steps already have artifacts.\n'
+        '### Rule 3 — Workflow advancement requests\n'
+        'If the user clearly asks to proceed with the existing plugin workflow and\n'
+        'does not add new requirements, corrections, or dissatisfaction signals,\n'
+        'you MUST advance the workflow by calling `advance_step_and_hand_off`.\n'
+        'Select the target from "Next forward steps (valid targets for continuing)"\n'
+        'in the step-status block. If multiple forward targets are listed, choose\n'
+        'the target whose transition condition best matches the current artifacts\n'
+        'and user intent; if the choice is genuinely ambiguous, ask the user.\n'
+        'Do NOT reply only with prose such as "正在生成..." without calling a tool.\n'
+        'Do NOT pass the current plugin step state unless it is explicitly listed\n'
+        'as a valid forward or rewind target.\n'
     )
     common = (
         '\n\n## Plugin execution guidance\n\n'
@@ -1087,23 +1189,25 @@ def _build_mode_guidance(
             terminal_hint = (
                 f'\n\n## Terminal steps (last steps before pipeline completion)\n\n'
                 f'The following steps lead directly to the end of the pipeline: {names}.\n'
-                'After one of these steps **succeeds**, immediately call '
-                '`advance_step_and_hand_off(step_id="__end__")` in the same turn '
-                'using `advance_step` (synchronous) so the pipeline completes without '
-                'requiring the user to click "继续" after the final step.\n\n'
-                'Concretely: use `advance_step(step_id=<terminal_step>, ...)` to run the '
-                'terminal step and wait for its result, then call '
-                '`advance_step_and_hand_off(step_id="__end__")` to close the session.\n'
-                'Only do this when the terminal step is the **last** planned step — '
-                'if the user wants to review results first, revert to `advance_step_and_hand_off`.'
+                'Treat terminal steps like any other single-step advancement: call '
+                '`advance_step_and_hand_off(step_id=<terminal_step>, ...)` and stop. '
+                'Do NOT use synchronous `advance_step` just because a step is terminal, '
+                'and do NOT keep the main chat turn open just to close `__end__`.\n\n'
+                'Pipeline completion is handled after the terminal step result is produced. '
+                'If another tool call is needed later to close `__end__`, it must be driven '
+                'by the normal plugin event loop or a later explicit user action, not by '
+                'blocking the current chat stream.'
             )
         common += (
             '- `advance_step`: Queue a step and WAIT for result (dynamic mode only). '
-            'Use only when running multiple steps in one turn '
-            '(e.g. user said "re-run steps 1 to 3" — use advance_step for steps 1..N-1, '
-            'then advance_step_and_hand_off for the last step).\n\n'
-            'After each step in dynamic mode, default to advance_step_and_hand_off so the user '
-            'can review the result and decide the next action.\n\n'
+            'Use only when the user explicitly asks to run multiple plugin steps in one '
+            'chat turn (for example, "连续执行后面三步" or "run steps 1 through 3 without '
+            'stopping"). In that case, use `advance_step` only for intermediate steps, '
+            'then use `advance_step_and_hand_off` for the final step of that turn.\n'
+            'For ordinary "继续", "下一步", single-step requests, and terminal/final-step '
+            'requests, you MUST call `advance_step_and_hand_off` and stop after the call.\n\n'
+            'After each step in dynamic mode, default to `advance_step_and_hand_off` so '
+            'the user can review the result and decide the next action.\n\n'
             'When a step is interrupted and user says "继续": call advance_step_and_hand_off with '
             'runtime_instruction="Previous attempt was interrupted. Check existing artifacts '
             'and only produce missing outputs (resume from checkpoint)."\n'

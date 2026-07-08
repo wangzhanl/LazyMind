@@ -62,7 +62,6 @@ func UpdateTaskStatus(ctx context.Context, db *gorm.DB, id, status string) error
 
 // UpdateTaskStatusBySession updates the TaskCenter record whose plugin_session_id matches.
 // Used by the plugin EventLoop to sync task status when a session completes or fails.
-// Terminal status is unified as "completed" (not "succeeded").
 func UpdateTaskStatusBySession(ctx context.Context, db *gorm.DB, sessionID, status string) error {
 	updates := map[string]any{
 		"status":     status,
@@ -73,7 +72,7 @@ func UpdateTaskStatusBySession(ctx context.Context, db *gorm.DB, sessionID, stat
 		updates["finished_at"] = now
 	}
 	return db.WithContext(ctx).Model(&orm.TaskCenterTask{}).
-		Where("plugin_session_id = ? AND status NOT IN ('completed','failed','canceled')", sessionID).
+		Where("plugin_session_id = ? AND status NOT IN ('succeeded','failed','canceled')", sessionID).
 		Updates(updates).Error
 }
 
@@ -90,7 +89,7 @@ func CancelTask(ctx context.Context, db *gorm.DB, userID, id string) error {
 
 func isTerminal(status string) bool {
 	switch status {
-	case "completed", "succeeded", "failed", "canceled":
+	case "succeeded", "failed", "canceled":
 		return true
 	}
 	return false
@@ -176,17 +175,17 @@ func loadStepsForPluginSession(ctx context.Context, db *gorm.DB, sessionID strin
 	artifactByTask := map[string]string{}
 	if len(taskIDs) > 0 {
 		type artRow struct {
-			TaskID      string `gorm:"column:task_id"`
-			ArtifactKey string `gorm:"column:artifact_key"`
+			TaskID string `gorm:"column:task_id"`
+			Slot   string `gorm:"column:slot"`
 		}
 		var arts []artRow
 		_ = db.WithContext(ctx).
 			Table("sub_agent_artifacts").
-			Select("task_id, artifact_key").
+			Select("task_id, slot").
 			Where("task_id IN ? AND seq = (SELECT MAX(seq) FROM sub_agent_artifacts sa2 WHERE sa2.task_id = sub_agent_artifacts.task_id)", taskIDs).
 			Find(&arts).Error
 		for _, a := range arts {
-			artifactByTask[a.TaskID] = a.ArtifactKey
+			artifactByTask[a.TaskID] = a.Slot
 		}
 	}
 	steps := make([]stepInfo, 0, len(rows))
@@ -203,14 +202,14 @@ func loadStepsForPluginSession(ctx context.Context, db *gorm.DB, sessionID strin
 // loadStepsForConversation loads steps from sub_agent_tasks for a given conversation (no plugin).
 func loadStepsForConversation(ctx context.Context, db *gorm.DB, convID string) []stepInfo {
 	type satRow struct {
-		Title              string `gorm:"column:title"`
-		Status             string `gorm:"column:status"`
-		OutputArtifactKeys string `gorm:"column:output_artifact_keys"`
+		Title       string `gorm:"column:title"`
+		Status      string `gorm:"column:status"`
+		OutputSlots string `gorm:"column:output_slots"`
 	}
 	var rows []satRow
 	if err := db.WithContext(ctx).
 		Table("sub_agent_tasks").
-		Select("title, status, output_artifact_keys").
+		Select("title, status, output_slots").
 		Where("conversation_id = ?", convID).
 		Order("seq_in_conversation ASC").
 		Find(&rows).Error; err != nil {
@@ -220,7 +219,7 @@ func loadStepsForConversation(ctx context.Context, db *gorm.DB, convID string) [
 	for _, r := range rows {
 		s := stepInfo{StepID: r.Title, Status: r.Status}
 		var keys []string
-		if json.Unmarshal([]byte(r.OutputArtifactKeys), &keys) == nil && len(keys) > 0 {
+		if json.Unmarshal([]byte(r.OutputSlots), &keys) == nil && len(keys) > 0 {
 			s.Artifact = &keys[0]
 		}
 		steps = append(steps, s)
@@ -235,7 +234,7 @@ func loadStepsForConversation(ctx context.Context, db *gorm.DB, convID string) [
 //
 //  1. Plugin task (plugin_session_id set): derive from plugin_sessions.status.
 //  2. No plugin: check whether chat_histories has a row for this conversation.
-//     - Row exists  → SSE finished and was persisted → "completed".
+//     - Row exists  → SSE finished and was persisted → "succeeded".
 //     - No row, task is older than 2 h → timed out with no output → "failed".
 //     - No row, task is recent → still running → keep "running".
 func resolveTaskStatus(ctx context.Context, db *gorm.DB, t orm.TaskCenterTask) string {
@@ -257,7 +256,7 @@ func resolveTaskStatus(ctx context.Context, db *gorm.DB, t orm.TaskCenterTask) s
 			case "waiting":
 				return "waiting"
 			case "completed":
-				return "completed"
+				return "succeeded"
 			case "failed":
 				return "failed"
 			}
@@ -275,7 +274,7 @@ func resolveTaskStatus(ctx context.Context, db *gorm.DB, t orm.TaskCenterTask) s
 		Where("conversation_id = ?", t.ConversationID).
 		Count(&histCount)
 	if histCount > 0 {
-		return "completed"
+		return "succeeded"
 	}
 	if time.Since(t.CreatedAt) > 2*time.Hour {
 		return "failed"

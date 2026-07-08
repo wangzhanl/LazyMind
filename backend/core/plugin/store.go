@@ -418,7 +418,7 @@ func WriteSlotRevision(ctx context.Context, db *gorm.DB,
 	var finalListIndex *int
 
 	// Resolve artifact_seq: find the task_id for this step attempt, then pick
-	// the latest seq from sub_agent_artifacts for (task_id, artifact_key).
+	// the latest seq from sub_agent_artifacts for (task_id, slot).
 	// This is best-effort; a nil artifactSeq causes enrichSlots to fall back
 	// to content_snapshot (written later by OnSubAgentDoneSnapshot).
 	var artifactSeq *int
@@ -428,7 +428,7 @@ func WriteSlotRevision(ctx context.Context, db *gorm.DB,
 		First(&step).Error == nil {
 		var art orm.SubAgentArtifact
 		if db.WithContext(ctx).
-			Where("task_id = ? AND artifact_key = ?", step.TaskID, artifactKey).
+			Where("task_id = ? AND slot = ?", step.TaskID, artifactKey).
 			Order("seq DESC").
 			First(&art).Error == nil {
 			seq := art.Seq
@@ -497,7 +497,7 @@ func WriteSlotRevision(ctx context.Context, db *gorm.DB,
 			Selected:     true,
 			ChangeSource: "ai",
 			ArtifactSeq:  artifactSeq,
-			ArtifactKey:  artifactKey,
+			Slot:         artifactKey,
 			StepID:       stepID,
 			Attempt:      attempt,
 			CreatedAt:    now,
@@ -601,7 +601,7 @@ func WriteSlotRevisionWithSnapshot(ctx context.Context, db *gorm.DB,
 			Selected:        true,
 			ChangeSource:    src,
 			ContentSnapshot: contentSnapshot,
-			ArtifactKey:     artifactKey,
+			Slot:            artifactKey,
 			StepID:          stepID,
 			Attempt:         attempt,
 			CreatedAt:       now,
@@ -731,7 +731,7 @@ func ReorderSlot(ctx context.Context, db *gorm.DB,
 }
 
 // HideSlotItem logically deletes the revision at list_index and removes it from order_list.
-// It sets hidden=TRUE on all sub_agent_artifacts rows that share the same (task_id, artifact_key)
+// It sets hidden=TRUE on all sub_agent_artifacts rows that share the same (task_id, slot)
 // and are associated with this session/slot/list_index, and deselects all plugin_slot_revisions rows.
 func HideSlotItem(ctx context.Context, db *gorm.DB, sessionID, slotID string, listIndex int) error {
 	now := time.Now().UTC()
@@ -745,14 +745,14 @@ func HideSlotItem(ctx context.Context, db *gorm.DB, sessionID, slotID string, li
 
 		// Mark the corresponding sub_agent_artifacts rows as hidden.
 		// We collect the artifact_seq values recorded in plugin_slot_revisions for this
-		// list_index, then hide exactly those sub_agent_artifacts rows by (task_id, artifact_key, seq).
+		// list_index, then hide exactly those sub_agent_artifacts rows by (task_id, slot, seq).
 		// This avoids the old value-JSON matching approach which could incorrectly hide artifacts
 		// whose value happened to carry the same list_index number (a write-time ordinal, not the
 		// stable DB list_index).
 		type artifactRef struct {
-			taskID      string
-			artifactKey string
-			seq         int
+			taskID string
+			slot   string
+			seq    int
 		}
 		var refs []artifactRef
 		var revRows []orm.PluginSlotRevision
@@ -777,11 +777,11 @@ func HideSlotItem(ctx context.Context, db *gorm.DB, sessionID, slotID string, li
 			if tid == "" {
 				continue
 			}
-			refs = append(refs, artifactRef{taskID: tid, artifactKey: rev.ArtifactKey, seq: *rev.ArtifactSeq})
+			refs = append(refs, artifactRef{taskID: tid, slot: rev.Slot, seq: *rev.ArtifactSeq})
 		}
 		for _, ref := range refs {
 			if err := tx.Model(&orm.SubAgentArtifact{}).
-				Where("task_id = ? AND artifact_key = ? AND seq = ?", ref.taskID, ref.artifactKey, ref.seq).
+				Where("task_id = ? AND slot = ? AND seq = ?", ref.taskID, ref.slot, ref.seq).
 				Updates(map[string]any{"hidden": true}).Error; err != nil {
 				return err
 			}
@@ -933,12 +933,15 @@ func LoadSelectedSlots(ctx context.Context, db *gorm.DB, sessionID string) ([]or
 		Find(&rows).Error; err != nil {
 		return nil, err
 	}
+	return orderSlotRevisions(ctx, db, sessionID, rows), nil
+}
 
+func orderSlotRevisions(ctx context.Context, db *gorm.DB, sessionID string, rows []orm.PluginSlotRevision) []orm.PluginSlotRevision {
 	// Re-sort each slot's items by their position in plugin_slot_order.order_list.
 	var orders []orm.PluginSlotOrder
 	if err := db.WithContext(ctx).Where("session_id = ?", sessionID).Find(&orders).Error; err != nil {
 		// On error fall back to the already-loaded list_index order.
-		return rows, nil
+		return rows
 	}
 	orderListBySlot := map[string][]int{}
 	for i := range orders {
@@ -948,7 +951,7 @@ func LoadSelectedSlots(ctx context.Context, db *gorm.DB, sessionID string) ([]or
 		}
 	}
 	if len(orderListBySlot) == 0 {
-		return rows, nil
+		return rows
 	}
 
 	// Build position map: slotID + list_index → sort_order (1-based).
@@ -1004,7 +1007,60 @@ func LoadSelectedSlots(ctx context.Context, db *gorm.DB, sessionID string) ([]or
 	for _, g := range groups {
 		result = append(result, g.items...)
 	}
-	return result, nil
+	return result
+}
+
+// LoadDisplaySlots returns the selected slot revisions plus the latest revision written
+// by each step attempt. The selected rows still define the current artifact value; the
+// extra step-scoped rows let the UI render each step tab as it looked when that step ran.
+func LoadDisplaySlots(ctx context.Context, db *gorm.DB, sessionID string) ([]orm.PluginSlotRevision, error) {
+	selected, err := LoadSelectedSlots(ctx, db, sessionID)
+	if err != nil {
+		return nil, err
+	}
+
+	var revisions []orm.PluginSlotRevision
+	if err := db.WithContext(ctx).
+		Where("session_id = ?", sessionID).
+		Order("step_id ASC, slot_id ASC, list_index ASC, attempt DESC, revision DESC").
+		Find(&revisions).Error; err != nil {
+		return nil, err
+	}
+
+	result := make([]orm.PluginSlotRevision, 0, len(selected)+len(revisions))
+	seenIDs := make(map[string]bool, len(selected)+len(revisions))
+	seenDisplayItem := map[string]bool{}
+	for _, row := range selected {
+		result = append(result, row)
+		seenIDs[row.ID] = true
+		seenDisplayItem[slotDisplayKey(row)] = true
+	}
+
+	for _, row := range revisions {
+		if row.StepID == "__end__" {
+			continue
+		}
+		key := slotDisplayKey(row)
+		if seenDisplayItem[key] {
+			continue
+		}
+		seenDisplayItem[key] = true
+		if seenIDs[row.ID] {
+			continue
+		}
+		result = append(result, row)
+		seenIDs[row.ID] = true
+	}
+
+	return orderSlotRevisions(ctx, db, sessionID, result), nil
+}
+
+func slotDisplayKey(row orm.PluginSlotRevision) string {
+	key := row.StepID + "|" + row.SlotID + "|"
+	if row.ListIndex != nil {
+		key += fmt.Sprint(*row.ListIndex)
+	}
+	return key
 }
 
 // IsNotFound reports whether err is a gorm record-not-found error.
@@ -1063,7 +1119,7 @@ func WriteSlotRevisionWithHumanArtifact(
 	humanArt := &orm.PluginHumanArtifact{
 		ID:          artifactID,
 		SessionID:   sessionID,
-		ArtifactKey: artifactKey,
+		Slot:        artifactKey,
 		ContentType: contentType,
 		Value:       value,
 		Caption:     caption,
@@ -1128,7 +1184,7 @@ func WriteSlotRevisionWithHumanArtifact(
 			Selected:        true,
 			ChangeSource:    "human",
 			HumanArtifactID: &artifactID,
-			ArtifactKey:     artifactKey,
+			Slot:            artifactKey,
 			StepID:          stepID,
 			Attempt:         attempt,
 			CreatedAt:       now,

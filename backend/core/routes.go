@@ -40,6 +40,13 @@ func registerAllRoutes(r *mux.Router) {
 	handleAPI(r, "POST", "/datasets/{dataset}:unsetDefault", []string{"document.write"}, doc.UnsetDefault)
 	handleAPI(r, "GET", "/data-sources/local-fs-chat-setting", []string{"document.read"}, datasource.GetLocalFSChatSetting)
 	handleAPI(r, "PUT", "/data-sources/local-fs-chat-setting", []string{"document.write"}, datasource.SetLocalFSChatSetting)
+	handleAPI(r, "GET", "/data-sources/database-connections", []string{"document.read"}, datasource.ListDatabaseConnections)
+	handleAPI(r, "POST", "/data-sources/database-connections", []string{"document.write"}, datasource.CreateDatabaseConnection)
+	handleAPI(r, "POST", "/data-sources/database-connections/{connection}:check", []string{"document.write"}, datasource.CheckDatabaseConnection)
+	handleAPI(r, "GET", "/data-sources/database-connections/{connection}:secret", []string{"document.read"}, datasource.GetDatabaseConnectionSecret)
+	handleAPI(r, "GET", "/data-sources/database-connections/{connection}", []string{"document.read"}, datasource.GetDatabaseConnection)
+	handleAPI(r, "PATCH", "/data-sources/database-connections/{connection}", []string{"document.write"}, datasource.UpdateDatabaseConnection)
+	handleAPI(r, "DELETE", "/data-sources/database-connections/{connection}", []string{"document.write"}, datasource.DeleteDatabaseConnection)
 
 	// ----- Eval set metadata -----
 	handleAPI(r, "GET", "/eval-sets", []string{"document.read"}, evalset.ListEvalSets)
@@ -75,6 +82,7 @@ func registerAllRoutes(r *mux.Router) {
 	handleAPI(r, "POST", "/datasets/{dataset}/documents:batchUpdateTags", []string{"document.write"}, doc.BatchUpdateDocumentTags)
 	handleAPI(r, "POST", "/documents:listByDatasets", []string{"document.read"}, doc.ListDocumentsByDatasets)
 	handleAPI(r, "POST", "/documents:search", []string{"document.read"}, doc.SearchAllDocuments)
+	handleAPI(r, "POST", "/system-query/documents:aggregate", []string{"document.read"}, doc.AggregateDocuments)
 	handleAPI(r, "POST", "/datasets/{dataset}:batchDelete", []string{"document.write"}, doc.BatchDeleteDocument)
 	handleAPI(r, "GET", "/document/creators", []string{"document.read"}, doc.AllDocumentCreators)
 	handleAPI(r, "GET", "/document/tags", []string{"document.read"}, doc.AllDocumentTags)
@@ -154,26 +162,20 @@ func registerAllRoutes(r *mux.Router) {
 	handleAPI(r, "DELETE", "/agent/threads/{thread_id}:history", []string{"qa.write"}, agent.DeleteThreadHistory)
 	handleAPI(r, "GET", "/agent/threads/{thread_id}/rounds", []string{"qa.read"}, agent.ListThreadRounds)
 	handleAPI(r, "GET", "/agent/threads/{thread_id}/records", []string{"qa.read"}, agent.ListThreadRecords)
+	handleAPI(r, "GET", "/agent/threads/{thread_id}/results/{kind}:download", []string{"qa.read"}, agent.DownloadThreadResult)
 	handleAPI(r, "GET", "/agent/threads/{thread_id}/results/datasets", []string{"qa.read"}, agent.GetThreadResultDatasets)
 	handleAPI(r, "GET", "/agent/threads/{thread_id}/results/eval-reports", []string{"qa.read"}, agent.GetThreadResultEvalReports)
-	handleAPI(r, "GET", "/agent/threads/{thread_id}/results/eval-reports/{report_id}/bad-cases", []string{"qa.read"}, agent.GetThreadEvalReportBadCases)
 	handleAPI(r, "GET", "/agent/threads/{thread_id}/results/analysis-reports", []string{"qa.read"}, agent.GetThreadResultAnalysisReports)
 	handleAPI(r, "GET", "/agent/threads/{thread_id}/results/diffs", []string{"qa.read"}, agent.GetThreadResultDiffs)
 	handleAPI(r, "GET", "/agent/threads/{thread_id}/results/abtests", []string{"qa.read"}, agent.GetThreadResultAbtests)
-	handleAPI(r, "GET", "/agent/threads/{thread_id}/results/abtests/{abtest_id}/case-details", []string{"qa.read"}, agent.GetThreadABTestCaseDetails)
 	handleAPI(r, "GET", "/agent/threads/{thread_id}/flow-status", []string{"qa.read"}, agent.GetThreadFlowStatus)
 	handleAPI(r, "GET", "/agent/threads/{thread_id}/artifacts/{artifact_id}", []string{"qa.read"}, agent.GetThreadArtifact)
-	handleAPI(r, "GET", "/agent/threads/{thread_id}/results/traces/{trace_id}", []string{"qa.read"}, agent.GetThreadResultTrace)
-	handleAPI(r, "GET", "/agent/threads/{thread_id}/results/traces-compare", []string{"qa.read"}, agent.GetThreadResultTraceCompare)
 	handleAPI(r, "POST", "/agent/threads/{thread_id}:messages", []string{"qa.write"}, agent.StreamThreadMessages)
 	handleAPI(r, "POST", "/agent/threads/{thread_id}:start", []string{"qa.write"}, agent.StartThread)
 	handleAPI(r, "POST", "/agent/threads/{thread_id}:pause", []string{"qa.write"}, agent.PauseThread)
 	handleAPI(r, "POST", "/agent/threads/{thread_id}:cancel", []string{"qa.write"}, agent.CancelThread)
 	handleAPI(r, "POST", "/agent/threads/{thread_id}:retry", []string{"qa.write"}, agent.RetryThread)
 	handleAPI(r, "POST", "/agent/threads/{thread_id}:continue", []string{"qa.write"}, agent.ContinueThread)
-	handleAPI(r, "GET", "/agent/reports/{report_id}:content", []string{"qa.read"}, agent.GetReportContent)
-	handleAPI(r, "GET", "/agent/diffs/{apply_id}/{filename:.*}", []string{"qa.read"}, agent.GetDiffContent)
-	handleAPI(r, "POST", "/agent/files:content", []string{"qa.read"}, agent.GetAgentFileContent)
 
 	// ----- Conversation -----
 	handleAPI(r, "POST", "/conversations:chat", []string{"qa.write"}, chat.ChatConversations)
@@ -195,6 +197,14 @@ func registerAllRoutes(r *mux.Router) {
 	// ----- Plugin Info -----
 	handleAPI(r, "GET", "/plugins", []string{"qa.read"}, plugin.ListPlugins)
 	handleAPI(r, "GET", "/plugins/{plugin_id}", []string{"qa.read"}, plugin.GetPluginInfo)
+
+	// ----- Plugin Drafts (user-created plugin authoring) -----
+	handleAPI(r, "GET", "/plugin-drafts", []string{"qa.read"}, plugin.ListPluginDrafts)
+	handleAPI(r, "POST", "/plugin-drafts", []string{"qa.write"}, plugin.CreatePluginDraft)
+	handleAPI(r, "GET", "/plugin-drafts/{draft_id}", []string{"qa.read"}, plugin.GetPluginDraft)
+	handleAPI(r, "POST", "/plugin-drafts/{draft_id}:save", []string{"qa.write"}, plugin.SavePluginDraft)
+	handleAPI(r, "POST", "/plugin-drafts/{draft_id}:ai-generate", []string{"qa.write"}, plugin.AIGeneratePluginDraft)
+	handleAPI(r, "DELETE", "/plugin-drafts/{draft_id}", []string{"qa.write"}, plugin.DeletePluginDraft)
 
 	// ----- Task Center -----
 	handleAPI(r, "GET", "/task-center/tasks", []string{"qa.read"}, taskcenter.ListTasks)
@@ -219,7 +229,8 @@ func registerAllRoutes(r *mux.Router) {
 	handleAPI(r, "PATCH", "/user/ui-preferences", []string{"qa.write"}, userprefs.PatchUIPreferences)
 	handleAPI(r, "PATCH", "/conversations/{conversation_id}/plugin-settings", []string{"qa.write"}, chat.PatchConversationPluginSettings)
 
-	// ----- Plugin Sessions -----	handleAPI(r, "GET", "/conversations/{conversation_id}/plugin-sessions", []string{"qa.read"}, plugin.ListConversationSessions)
+	// ----- Plugin Sessions -----
+	handleAPI(r, "GET", "/conversations/{conversation_id}/plugin-sessions", []string{"qa.read"}, plugin.ListConversationSessions)
 	handleAPI(r, "GET", "/conversations/{conversation_id}/plugin-sessions:active", []string{"qa.read"}, plugin.GetActiveConversationSession)
 	handleAPI(r, "GET", "/conversations/{conversation_id}/plugin-sessions:latest", []string{"qa.read"}, plugin.GetLatestConversationSession)
 	handleAPI(r, "GET", "/plugin-sessions/{session_id}", []string{"qa.read"}, plugin.GetSessionDetail)
@@ -227,6 +238,7 @@ func registerAllRoutes(r *mux.Router) {
 	handleAPI(r, "GET", "/plugin-sessions/{session_id}/steps", []string{"qa.read"}, plugin.GetSessionSteps)
 	handleAPI(r, "GET", "/plugin-sessions/{session_id}/state-graph", []string{"qa.read"}, plugin.GetStateGraph)
 	handleAPI(r, "PATCH", "/plugin-sessions/{session_id}/slots/{slot_id}", []string{"qa.write"}, plugin.PatchSessionSlot)
+	handleAPI(r, "POST", "/plugin-sessions/{session_id}:sync-search-config", []string{"qa.write"}, plugin.SyncSessionSearchConfig)
 	// Phase 3: slot item management.
 	// Stable list_index-based routes (preferred).
 	handleAPI(r, "DELETE", "/plugin-sessions/{session_id}/slots/{slot_id}/items/idx/{list_index}", []string{"qa.write"}, plugin.DeleteSlotItemByIndex)

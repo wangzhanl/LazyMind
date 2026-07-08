@@ -204,14 +204,18 @@ def test_user_preference_prompt_requires_yaml_frontmatter():
     assert '用户称谓' not in prompt
     assert '回复风格' not in prompt
     assert '技术助理' not in prompt
+    assert 'legacy/free-form' not in prompt
     assert 'free-form without any YAML frontmatter' in prompt
     assert 'frontmatter-plus-body format' in prompt
+    assert 'containing exactly agent_persona, preferred_name, and response_style fields' in prompt
     assert 'explicit stable agent persona' in prompt
     assert 'preferred name/address' in prompt
     assert 'short response style' in prompt
+    assert '100 characters or less' in prompt
     assert 'existing response_style' in prompt
     assert 'Do not put language preferences' in prompt
     assert 'verbs, or full instructions' in prompt
+    assert 'keep existing frontmatter values unchanged' in prompt
     assert 'response_style is unknown' in prompt
     assert 'use ""' in prompt
     assert 'never use generic acknowledgement text' in prompt
@@ -276,13 +280,16 @@ def test_user_preference_validation_requires_yaml_frontmatter():
         ),
     )
 
+    too_long = 'x' * 101
     invalid_cases = [
         'agent_persona: "x"\npreferred_name: ""\nresponse_style: "concise"\n\nbody',
         '---\nagent_persona: "x"\nresponse_style: "concise"\n---\nbody',
-        '---\nagent_persona: "x"\npreferred_name: ""\nresponse_style: "concise"\n---\n',
         '---\nagent_persona: "x"\npreferred_name: ""\nresponse_style: "concise"\nextra: "x"\n---\nbody',
+        '---\nagent_persona: "x"\npreferred_name: ""\nresponse_style: "concise"\nwork_email: "me@example.com"\n---\nbody',
         '---\nagent_persona: ["x"]\npreferred_name: ""\nresponse_style: "concise"\n---\nbody',
-        f'---\nagent_persona: "{"x" * 101}"\npreferred_name: ""\nresponse_style: "concise"\n---\nbody',
+        f'---\nagent_persona: "{too_long}"\npreferred_name: ""\nresponse_style: ""\n---\nbody',
+        f'---\nagent_persona: ""\npreferred_name: "{too_long}"\nresponse_style: ""\n---\nbody',
+        f'---\nagent_persona: ""\npreferred_name: ""\nresponse_style: "{too_long}"\n---\nbody',
         '- not: a mapping',
     ]
     for invalid in invalid_cases:

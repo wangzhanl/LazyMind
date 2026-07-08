@@ -1556,8 +1556,8 @@ func handleTaskCreated(
 		mode = "auto"
 	}
 	paramsJSON, _ := json.Marshal(ev.Params)
-	inputKeysJSON, _ := json.Marshal(ev.InputArtifactKeys)
-	outputKeysJSON, _ := json.Marshal(ev.OutputArtifactKeys)
+	inputKeysJSON, _ := json.Marshal(ev.InputSlots)
+	outputKeysJSON, _ := json.Marshal(ev.OutputSlots)
 	workspacePath := subagent.WorkspacePath(userID, ev.TaskID)
 
 	// Resume path: reuse an existing task record (e.g. interrupted) instead of creating a new one.
@@ -1591,18 +1591,18 @@ func handleTaskCreated(
 	}
 
 	task, err := subagent.CreateTask(chatCtx, db, subagent.CreateTaskInput{
-		TaskID:             ev.TaskID,
-		ConversationID:     convID,
-		TriggerHistoryID:   historyID,
-		AgentType:          ev.AgentType,
-		Title:              ev.Title,
-		Objective:          ev.Objective,
-		Mode:               mode,
-		Params:             paramsJSON,
-		InputArtifactKeys:  inputKeysJSON,
-		OutputArtifactKeys: outputKeysJSON,
-		WorkspacePath:      workspacePath,
-		CreateUserID:       strings.TrimSpace(userID),
+		TaskID:           ev.TaskID,
+		ConversationID:   convID,
+		TriggerHistoryID: historyID,
+		AgentType:        ev.AgentType,
+		Title:            ev.Title,
+		Objective:        ev.Objective,
+		Mode:             mode,
+		Params:           paramsJSON,
+		InputSlots:       inputKeysJSON,
+		OutputSlots:      outputKeysJSON,
+		WorkspacePath:    workspacePath,
+		CreateUserID:     strings.TrimSpace(userID),
 	})
 	if err != nil {
 		fmt.Println("[Core] [SUBAGENT_CREATE_TASK_FAILED] err=", err)
@@ -1697,6 +1697,12 @@ func handlePluginStepCreated(
 			}
 			params.HistoryFilesPerTurn = parsed
 		}
+		if flt, ok := ev.Params["filters"].(map[string]any); ok && len(flt) > 0 {
+			params.Filters = flt
+		}
+		if uid, ok := ev.Params["user_id"].(string); ok && uid != "" {
+			params.UserID = uid
+		}
 	}
 	// Carry the resolved plugin_mode into params so it is persisted with the task
 	// and available when OnSubAgentDone reconstructs PluginChatContext from DB.
@@ -1714,7 +1720,7 @@ func handlePluginStepCreated(
 		ctx, db, stateStore, convID, historyID, userID,
 		ev.TaskID, ev.Title, ev.Objective,
 		params,
-		ev.InputArtifactKeys, ev.OutputArtifactKeys,
+		ev.InputSlots, ev.OutputSlots,
 		llmConfig, toolConfig,
 	)
 	if err != nil {

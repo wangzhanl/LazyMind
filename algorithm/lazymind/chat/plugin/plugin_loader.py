@@ -34,22 +34,140 @@ _PLUGINS_DIR = Path(_cfg['plugins_dir'])
 _registry: Dict[str, 'PluginSpec'] = {}
 
 
+def _join_conditions(c1: str, c2: str) -> str:
+    """Combine two natural-language conditions with AND.
+
+    Returns the non-empty side when one is empty, or 'c1 AND c2' when both present.
+    Pure string concatenation — no LLM involved.
+    """
+    c1, c2 = c1.strip(), c2.strip()
+    if not c1:
+        return c2
+    if not c2:
+        return c1
+    return f'{c1} AND {c2}'
+
+
 class StateMachine:
-    """Minimal state machine parsed from state.yml transitions block."""
+    """Minimal state machine parsed from state.yml transitions block.
+
+    Supports extended control-flow fields on each step:
+      route: 'all' | 'choice'  — how to follow outgoing transitions.
+        'all' (default): all matching exits are triggered simultaneously (parallel).
+        'choice': only the first matching exit is taken (conditional routing).
+      skipif: str  — natural-language condition under which this step is skipped entirely.
+        When set, the step is treated as having an implicit bypass transition that the
+        LLM can evaluate; get_reachable_steps returns it as optional.
+    """
 
     _RESERVED = {'__start__', '__end__'}
 
-    def __init__(self, initial: str, transitions: Dict[str, List[Dict[str, Any]]]) -> None:
+    def __init__(
+        self,
+        initial: str,
+        transitions: Dict[str, List[Dict[str, Any]]],
+        steps: Optional[Dict[str, Any]] = None,
+    ) -> None:
         self.initial = initial
-        self._transitions: Dict[str, List[str]] = {}
+        self._raw_transitions: Dict[str, List[Dict[str, Any]]] = {}
         for src, edges in transitions.items():
-            targets = [e['to'] for e in edges if isinstance(e, dict) and 'to' in e]
-            self._transitions[src] = targets
+            valid = [e for e in edges if isinstance(e, dict) and 'to' in e]
+            self._raw_transitions[src] = valid
+        self._transitions: Dict[str, List[str]] = {
+            src: [e['to'] for e in edges]
+            for src, edges in self._raw_transitions.items()
+        }
+        # Per-step route and skipif metadata, keyed by step id.
+        steps_raw: Dict[str, Any] = steps or {}
+        self._route: Dict[str, str] = {}
+        self._skipif: Dict[str, str] = {}
+        for step_id, step_cfg in steps_raw.items():
+            if not isinstance(step_cfg, dict):
+                continue
+            if step_cfg.get('route') in ('all', 'choice'):
+                self._route[step_id] = step_cfg['route']
+            if step_cfg.get('skipif') and isinstance(step_cfg['skipif'], str):
+                self._skipif[step_id] = step_cfg['skipif']
+
+        # Build expanded transitions: skipif on successors are inlined as bypass conditions.
+        self._expanded_transitions: Dict[str, List[Dict[str, Any]]] = {}
+        self._expand_skipif_transitions()
+
+    # ------------------------------------------------------------------
+    # skipif expansion
+    # ------------------------------------------------------------------
+
+    def _expand_skipif_transitions(self) -> None:
+        """Populate _expanded_transitions by inlining skipif as bypass conditions.
+
+        For each source node, in addition to its direct successors, we also emit
+        bypass edges that skip over any successor with a skipif condition.  This
+        lets the LLM see all reachable targets (and the conditions required) in a
+        single flat list, without needing to reason about the skipif chain itself.
+
+        Example: A -> B(skipif=c1) -> C(skipif=c2) -> D
+          A's expanded exits: B (no extra cond), C (cond=c1), D (cond=c1 AND c2)
+          B's expanded exits: C (no extra cond), D (cond=c2)
+          C's expanded exits: D (no extra cond)
+        """
+        for src in self._raw_transitions:
+            self._expanded_transitions[src] = list(self._expand_from(src, frozenset()))
+
+    def _expand_from(self, src: str, visited: frozenset) -> List[Dict[str, Any]]:
+        """Yield expanded {to, condition} edges reachable from src.
+
+        visited prevents re-entering the same node during recursive bypass traversal,
+        guarding against cycles in the graph.
+        """
+        for edge in self._raw_transitions.get(src, []):
+            tgt = edge['to']
+            base_cond = edge.get('condition', '')
+            yield {'to': tgt, 'condition': base_cond}
+            # Only expand bypass if the target has a skipif and we haven't visited it.
+            if tgt in self._RESERVED or tgt in visited:
+                continue
+            skipif = self._skipif.get(tgt)
+            if skipif:
+                new_visited = visited | {src}
+                for bypass in self._expand_from(tgt, new_visited):
+                    yield {
+                        'to': bypass['to'],
+                        'condition': _join_conditions(skipif, bypass['condition']),
+                    }
+
+    def get_route(self, step_id: str) -> str:
+        """Return 'all' or 'choice' for this step (default: 'all')."""
+        return self._route.get(step_id, 'all')
+
+    def get_skipif(self, step_id: str) -> Optional[str]:
+        """Return the skipif condition string, or None if not set."""
+        return self._skipif.get(step_id)
+
+    def get_expanded_transitions(self, step_id: str) -> List[Dict[str, Any]]:
+        """Return expanded {to, condition} edges for step_id.
+
+        Includes bypass edges generated from skipif on successors.
+        Each item: {'to': str, 'condition': str}.
+        """
+        return list(self._expanded_transitions.get(step_id or '__start__', []))
 
     def get_reachable_steps(self, current_step: str) -> List[str]:
-        """Return step IDs reachable from current_step (excluding reserved states)."""
-        targets = self._transitions.get(current_step or '__start__', [])
-        return [t for t in targets if t not in self._RESERVED]
+        """Return step IDs reachable from current_step (excluding reserved states).
+
+        Uses the expanded transitions so that steps reachable via skipif bypass
+        are included alongside normal successors.  For each reachable target the
+        LLM can read the associated condition (via get_expanded_transitions) to
+        decide whether to advance directly or skip.
+        """
+        edges = self._expanded_transitions.get(current_step or '__start__', [])
+        seen: List[str] = []
+        visited: set = set()
+        for e in edges:
+            tgt = e['to']
+            if tgt not in self._RESERVED and tgt not in visited:
+                visited.add(tgt)
+                seen.append(tgt)
+        return seen
 
     def is_reachable(self, current_step: str, target_step: str) -> bool:
         """Return True if target_step is directly reachable from current_step.
@@ -116,22 +234,24 @@ class PluginSpec:
         # Load plugin.yaml
         plugin_yaml_path = plugin_dir / 'plugin.yaml'
         with plugin_yaml_path.open('r', encoding='utf-8') as f:
-            self.yaml: Dict[str, Any] = yaml.safe_load(f) or {}
+            self.plugin_yaml_raw: str = f.read()
+        self.yaml: Dict[str, Any] = yaml.safe_load(self.plugin_yaml_raw) or {}
 
         # Load scenario files
         scenario_dir = plugin_dir / 'scenario'
         self.scenario_md: str = self._read_text(scenario_dir / 'scenario.md')
-        state_raw: Dict[str, Any] = {}
         state_path = scenario_dir / 'state.yml'
         with state_path.open('r', encoding='utf-8') as f:
-            state_raw = yaml.safe_load(f) or {}
-        self.state: Dict[str, Any] = state_raw
+            state_text = f.read()
+        self.state_yaml_raw: str = state_text
+        self.state: Dict[str, Any] = yaml.safe_load(state_text) or {}
         self.driver_md: Optional[str] = self._read_text(scenario_dir / 'driver.md', optional=True)
 
         # Build state machine
         self.state_machine = StateMachine(
             initial=str(self.state.get('initial', '__start__')),
             transitions=self.state.get('transitions', {}),
+            steps=self.state.get('steps'),
         )
 
         # Extract step configs from state.yml
@@ -239,27 +359,17 @@ class PluginSpec:
         return dict(self._steps.get(step_id, {}))
 
     def get_slot_def(self, slot_id: str) -> Optional[Dict[str, Any]]:
-        """Find a slot definition in plugin.yaml ui.tabs by slot_id."""
-        for tab in (self.yaml.get('ui') or {}).get('tabs', []):
-            for slot in tab.get('slots', []):
-                if slot.get('id') == slot_id:
-                    return dict(slot)
+        """Find a slot definition by slot_id from the top-level slots list."""
+        for slot in self.yaml.get('slots', []):
+            if slot.get('id') == slot_id:
+                return dict(slot)
         return None
 
-    def get_slot_for_artifact(self, artifact_id: str) -> Optional[str]:
-        """Return the slot_id bound to artifact_id in any step output, or None."""
-        for step_cfg in self._steps.values():
-            for out in step_cfg.get('outputs', []):
-                if out.get('artifact_id') == artifact_id:
-                    return out.get('slot_id')
-        return None
-
-    def get_slot_for_artifact_key(self, artifact_key: str) -> Optional[Dict[str, Any]]:
-        """Return the slot definition (id, cardinality, ordered, caption_key …) for an artifact_key."""
-        for tab in (self.yaml.get('ui') or {}).get('tabs', []):
-            for slot in tab.get('slots', []):
-                if slot.get('artifact_key') == artifact_key:
-                    return dict(slot)
+    def get_slot(self, slot: str) -> Optional[Dict[str, Any]]:
+        """Return the slot definition (id, type, cardinality, ordered …) for a slot id."""
+        for s in self.yaml.get('slots', []):
+            if s.get('id') == slot:
+                return dict(s)
         return None
 
     def get_i18n_label(self, lang: str, key_path: str, fallback: str = '') -> str:
@@ -343,13 +453,34 @@ def get_plugin_with_i18n(plugin_id: str, lang: str = '') -> Optional[Dict[str, A
     if not spec:
         return None
 
+    import copy
+
+    # Build a slot lookup from the top-level slots[] definition.
+    top_slots: Dict[str, Dict[str, Any]] = {
+        s['id']: s for s in spec.yaml.get('slots', []) if s.get('id')
+    }
+
+    # Expand ui.tabs[].slots[] from id-only references to full slot defs.
+    # Each tab slot entry is merged: top-level slot attrs first, then any
+    # tab-local overrides (currently only 'id' is present, but kept for
+    # forward-compatibility).
+    raw_ui = copy.deepcopy(spec.yaml.get('ui', {}))
+    for tab in raw_ui.get('tabs', []):
+        expanded = []
+        for slot_ref in tab.get('slots', []):
+            slot_id = slot_ref.get('id', '')
+            base = dict(top_slots.get(slot_id, {}))
+            base.update(slot_ref)  # tab-local keys win if ever added
+            expanded.append(base)
+        tab['slots'] = expanded
+
     raw: Dict[str, Any] = {
         'id': spec.plugin_id,
         'name': spec.yaml.get('name', spec.plugin_id),
         'description': spec.yaml.get('description', ''),
         'when_to_use': spec.yaml.get('when_to_use', ''),
         'steps': list(spec.yaml.get('steps', [])),
-        'ui': spec.yaml.get('ui', {}),
+        'ui': raw_ui,
         'i18n': spec.yaml.get('i18n', {}),
     }
 
@@ -357,7 +488,6 @@ def get_plugin_with_i18n(plugin_id: str, lang: str = '') -> Optional[Dict[str, A
         return raw
 
     # Apply i18n overrides to a deep copy so the registry cache is untouched.
-    import copy
     raw = copy.deepcopy(raw)
 
     name_i18n = spec.get_i18n_label(lang, 'name', '')
@@ -430,16 +560,24 @@ def get_plugin_yaml(plugin_id: str) -> Dict[str, Any]:
     return spec.yaml if spec else {}
 
 
-def find_producer_step(plugin_id: str, artifact_id: str) -> Optional[str]:
-    """Return the step_id that produces artifact_id, or None."""
+def find_producer_steps(plugin_id: str, slot: str) -> List[str]:
+    """Return all step_ids that can produce slot, preserving state.yml order."""
     spec = get_plugin(plugin_id)
     if not spec:
-        return None
+        return []
+    producers: List[str] = []
     for step_id, step_cfg in spec._steps.items():
         for out in step_cfg.get('outputs', []):
-            if out.get('artifact_id') == artifact_id:
-                return step_id
-    return None
+            if out.get('slot') == slot:
+                producers.append(step_id)
+                break
+    return producers
+
+
+def find_producer_step(plugin_id: str, slot: str) -> Optional[str]:
+    """Return one step_id that produces slot, or None."""
+    producers = find_producer_steps(plugin_id, slot)
+    return producers[0] if producers else None
 
 
 def get_script_tool(plugin_id: str, tool_name: str) -> Optional[Callable]:

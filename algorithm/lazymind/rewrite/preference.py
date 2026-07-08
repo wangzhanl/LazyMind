@@ -45,11 +45,12 @@ def _build_user_preference_prompt(
         '- Do not write as chat logs or journals; organize as itemized profile entries that the agent can quickly read.\n'  # noqa: E501
         '\n'
         '[Format requirements]\n'
-        '- Must start with YAML frontmatter delimited by `---`, containing only agent_persona, preferred_name, and response_style fields, followed by a blank line and Markdown body content.\n'  # noqa: E501
+        '- Must start with YAML frontmatter delimited by `---`, containing exactly agent_persona, preferred_name, and response_style fields, followed by a blank line and Markdown body content.\n'  # noqa: E501
         '- Use frontmatter only for the explicit stable agent persona, preferred name/address, and short response style.\n'  # noqa: E501
         '- Do not put language preferences, formatting rules, citation rules, workflow constraints, task procedures, verbs, or full instructions in response_style; write those details in the Markdown body.\n'  # noqa: E501
+        '- Each YAML frontmatter value must be a string of 100 characters or less. Use "" when agent_persona, preferred_name, or response_style is unknown.\n'  # noqa: E501
         '- The YAML frontmatter field names (keys) are FIXED. You may ONLY change their values; NEVER add, remove, or rename a frontmatter key. When user_instruct asks to record new information that does not fit an existing frontmatter field, write it in the Markdown body, not as a new frontmatter field.\n'  # noqa: E501
-        '- Use "" when agent_persona, preferred_name, or response_style is unknown. If response_style is missing or invalid during format repair and the user did not specify one, use "".\n'  # noqa: E501
+        '- If response_style is missing or invalid during format repair and the user did not specify one, use "".\n'  # noqa: E501
         '- Modify agent_persona, preferred_name, or response_style only when user_instruct explicitly asks to change that specific field or clearly states the corresponding stable preference.\n'  # noqa: E501
         '- If user_instruct only adds ordinary profile/preferences, keep existing frontmatter values unchanged, including an existing response_style, and write the new information in the Markdown body.\n'  # noqa: E501
         '- Write concrete user profile/preference entries in the Markdown body after the closing `---`; never use generic acknowledgement text such as "preference recorded" as the body.\n'  # noqa: E501

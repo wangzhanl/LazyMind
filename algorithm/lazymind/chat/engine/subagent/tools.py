@@ -4,12 +4,36 @@ import json
 import os
 from typing import Any, Dict, List, Optional
 
-from lazymind.chat.engine.tools.infra import tool_success
+from lazymind.chat.engine.attachment_reader import (
+    is_chat_attachment_file,
+    is_chat_image_file,
+    parse_attachment_content,
+)
+from lazymind.chat.engine.tools.infra import tool_error, tool_success
 
-from .context import require_context, LARGE_ARTIFACT_THRESHOLD
+from .context import get_context, require_context, LARGE_ARTIFACT_THRESHOLD
 
 # Valid artifact content types.
 _CONTENT_TYPES = {'text', 'json', 'image', 'file', 'file_list'}
+
+UPLOAD_MARKER = '/var/lib/lazymind/uploads/'
+SUBAGENT_MARKER = '/data/subagent/'
+
+
+def _is_valid_image_ref(path: str) -> bool:
+    """Return True when *path* looks like a real image URL or filesystem reference."""
+    p = (path or '').strip()
+    if not p:
+        return False
+    if p.startswith(('http://', 'https://', '/static-files/', 'data:image/')):
+        return True
+    if p.startswith('/data/subagent/') or SUBAGENT_MARKER in p:
+        return True
+    if p.startswith(UPLOAD_MARKER) or p.startswith('/var/lib/lazymind/uploads/'):
+        return True
+    if os.path.isabs(p) and os.path.isfile(p):
+        return True
+    return False
 
 
 def _build_artifact_value(value: Any, content_type: str):
@@ -41,7 +65,16 @@ def _build_artifact_value(value: Any, content_type: str):
             return {'type': 'json', 'path': rel, 'size': os.path.getsize(abs_path)}, 'file'
         return {'data': value}, 'json'
     if content_type == 'image':
-        src = str(value)
+        src = str(value).strip()
+        if not _is_valid_image_ref(src):
+            raise ValueError(
+                f'Invalid image reference {src!r}: expected http(s) URL, /static-files/ path, '
+                'or an existing absolute file path — placeholder text is not allowed.'
+            )
+        # '/static-files/...' (possibly with query) is a signed URL path, not a local
+        # filesystem path. Keep it as URL text instead of copying from disk.
+        if src.startswith('/static-files/'):
+            return {'path': src}, 'image'
         if os.path.isabs(src):
             # Copy into workspace; keep absolute path so Go core can sign a URL for it.
             dst_rel = ctx.copy_into_workspace(src)
@@ -55,7 +88,7 @@ def _build_artifact_value(value: Any, content_type: str):
         full = os.path.join(ctx.workspace_path, rel)
         if os.path.exists(full):
             size = os.path.getsize(full)
-        return {'filename': os.path.basename(rel), 'path': rel, 'size': size}, 'file'
+        return {'filename': os.path.basename(rel), 'path': full, 'size': size}, 'file'
     if content_type == 'file_list':
         items = value if isinstance(value, list) else [value]
         paths: List[str] = []
@@ -101,7 +134,7 @@ def save_artifact(key: str, value: Any, content_type: str = 'text',
     a new item and leaves the original untouched, which is wrong.
 
     Args:
-        key (str): Artifact key. Must be one of the declared output_artifact_keys.
+        key (str): Artifact key. Must be one of the declared output_slots.
         value (Any): The artifact value. For text: a string. For json: a dict/list.
             For image/file: a local absolute path. For file_list: a list of absolute paths.
         content_type (str): One of text, json, image, file, file_list. Default text.
@@ -119,6 +152,12 @@ def save_artifact(key: str, value: Any, content_type: str = 'text',
         A confirmation that the artifact was saved.
     """
     ctx = require_context()
+    if ctx.output_slots and key not in ctx.output_slots:
+        return tool_error(
+            'save_artifact',
+            f'Artifact key {key!r} is not declared for this step. '
+            f'Allowed keys: {", ".join(ctx.output_slots)}',
+        )
     ct = content_type if content_type in _CONTENT_TYPES else 'text'
     built, actual_ct = _build_artifact_value(value, ct)
     if source_tool:
@@ -137,7 +176,7 @@ def save_artifact(key: str, value: Any, content_type: str = 'text',
     ctx.record_local_artifact(key, actual_ct, built, seq)
     ctx.emit({
         'type': 'artifact',
-        'artifact_key': key,
+        'slot': key,
         'content_type': actual_ct,
         'seq': seq,
         'value': built,
@@ -184,18 +223,16 @@ def _write_artifact_draft(
 
 
 def _resolve_list_index_from_sort_order(
-    artifact_key: str, sort_order: int
+    slot: str, sort_order: int
 ) -> tuple[Optional[int], Optional[str]]:
-    """Query Go core to translate sort_order → list_index for a list-slot artifact.
+    """Translate sort_order → list_index for a list-slot artifact.
 
     Returns (list_index, None) on success, or (None, error_message) when sort_order
     is out of range. Returns (None, None) on technical errors or non-list slots
     (caller should silently append in those cases).
     """
     try:
-        import httpx
         import lazyllm
-        from lazymind.config import config as _cfg
         cfg = {}
         try:
             cfg = lazyllm.globals.get('agentic_config') or {}
@@ -204,29 +241,8 @@ def _resolve_list_index_from_sort_order(
         session_id: str = cfg.get('plugin_session_id', '')
         if not session_id:
             return None, None
-        # Look up slot_id from plugin_loader via artifact_key.
-        plugin_id: str = cfg.get('plugin_id', '')
-        if not plugin_id:
-            return None, None
-        from lazymind.chat.plugin import plugin_loader
-        spec = plugin_loader.get_plugin(plugin_id)
-        if not spec:
-            return None, None
-        slot_def = spec.get_slot_for_artifact_key(artifact_key)
-        if not slot_def:
-            return None, None
-        slot_id = slot_def.get('id', '')
-        if not slot_id:
-            return None, None
-        core_url = str(_cfg['core_api_url']).rstrip('/')
-        url = (
-            f'{core_url}/plugin-sessions/{session_id}'
-            f'/slots/{slot_id}/order'
-        )
-        resp = httpx.get(url, timeout=3.0)
-        if resp.status_code != 200:
-            return None, None
-        order_list: list = resp.json().get('data', {}).get('order_list', [])
+        ctx = require_context()
+        order_list = ctx.db.load_slot_order_list(session_id, slot)
         if not order_list:
             # Single-cardinality slot — sort_order is meaningless, ignore silently.
             return None, None
@@ -477,7 +493,7 @@ def _get_plugin_artifact_by_sort_order(
         'key': key,
         'sort_order': sort_order,
         'content_type': content_type,
-        'artifacts': [{'artifact_key': key, 'content_type': content_type, 'value': value, 'sort_order': sort_order}],
+        'artifacts': [{'slot': key, 'content_type': content_type, 'value': value, 'sort_order': sort_order}],
     })
 
 
@@ -486,13 +502,13 @@ def _get_plugin_artifact_all(ctx: Any, key: str, session_id: str) -> Dict[str, A
     resolved_rows = ctx.db.load_selected_slot_artifacts_resolved_with_order(session_id)
     artifacts = [
         {
-            'artifact_key': r['artifact_key'],
+            'slot': r['slot'],
             'content_type': r.get('content_type'),
             'value': r['value'],
             'sort_order': r.get('sort_order'),
         }
         for r in resolved_rows
-        if r.get('artifact_key') == key
+        if r.get('slot') == key
     ]
     if not artifacts:
         return tool_success('get_artifact', {
@@ -794,7 +810,7 @@ def list_artifacts(task_ref: Optional[str] = None) -> Dict[str, Any]:
     rows = ctx.local_artifacts() or ctx.db.load_artifacts(ctx.task_id)
     summary: Dict[str, str] = {}
     for r in rows:
-        summary[r['artifact_key']] = r['content_type']
+        summary[r['slot']] = r['content_type']
     parts = [f'{k} ({v})' for k, v in summary.items()]
     msg = '可用成果：' + ('、'.join(parts) if parts else '（暂无）')
     return tool_success('list_artifacts', {'status': 'ok', 'keys': summary, 'message': msg})
@@ -952,11 +968,12 @@ def _resolve_attachment(
 
 
 def read_user_attachment(filename: str, turn: Optional[int] = None) -> Dict[str, Any]:
-    """Read the contents of a file previously uploaded by the user in this conversation.
+    """Extract text from a user-uploaded attachment (on demand only).
 
-    The list of available files is shown in the system prompt under '## User Uploaded Files'.
-    Use this tool to read a file's content when the user asks about it or when the task
-    requires processing the file.
+    Documents (pdf/doc/docx/pptx): OCR reader. Images: vision-model text description.
+    Do NOT call this just because a file is attached. For images used in visual tasks
+    (edit, plugin, image_generator), use find_user_attachment for path/url instead.
+    Call this when the user needs document text or a textual summary of image content.
 
     Args:
         filename (str): The filename (basename) or display name of the attachment to read.
@@ -967,8 +984,7 @@ def read_user_attachment(filename: str, turn: Optional[int] = None) -> Dict[str,
             Omit to search from the current turn first, then historical turns newest-first.
 
     Returns:
-        The file content as text, or a confirmation message with the absolute path for
-        binary/image files that should be passed to other tools (e.g. vision_extractor).
+        Parsed text content for supported documents and images.
     """
     matched, err = _resolve_attachment(filename, turn)
     if err:
@@ -978,39 +994,43 @@ def read_user_attachment(filename: str, turn: Optional[int] = None) -> Dict[str,
             'status': 'error',
             'message': f"File '{os.path.basename(matched)}' was found in the index but is no longer on disk.",
         })
-    # Binary / image files: return path only (caller should use vision_extractor etc.).
-    binary_exts = {'.jpg', '.jpeg', '.png', '.gif', '.webp', '.bmp', '.pdf', '.zip'}
-    ext = os.path.splitext(matched)[1].lower()
-    if ext in binary_exts:
-        return tool_success('read_user_attachment', {
-            'status': 'ok',
-            'filename': os.path.basename(matched),
-            'path': matched,
-            'message': (
-                f"Binary file '{os.path.basename(matched)}' is available at the above path. "
-                'Pass the path to an appropriate tool (e.g. vision_extractor for images).'
-            ),
-        })
-    try:
-        with open(matched, 'r', encoding='utf-8', errors='replace') as fh:
-            content = fh.read()
-    except OSError as e:
+    if not is_chat_attachment_file(matched):
         return tool_success('read_user_attachment', {
             'status': 'error',
-            'message': f"Could not read '{os.path.basename(matched)}': {e}",
+            'message': (
+                f"Unsupported file type '{os.path.splitext(matched)[1].lower() or '(no extension)'}'. "
+                'Supported: png, jpg, jpeg, pdf, doc, docx, pptx.'
+            ),
         })
+
+    try:
+        import lazyllm
+        cfg: Dict[str, Any] = lazyllm.globals.get('agentic_config') or {}
+        priority = int(cfg.get('priority') or 0)
+        content = parse_attachment_content(matched, priority=priority)
+    except Exception as e:
+        return tool_success('read_user_attachment', {
+            'status': 'error',
+            'message': f"Could not parse '{os.path.basename(matched)}': {e}",
+        })
+
+    kind = 'image' if is_chat_image_file(matched) else 'document'
+
     return tool_success('read_user_attachment', {
         'status': 'ok',
         'filename': os.path.basename(matched),
+        'path': matched,
+        'kind': kind,
         'content': content,
     })
 
 
 def find_user_attachment(filename: str, turn: Optional[int] = None) -> Dict[str, Any]:
-    """Return the accessible URL or local path of a file uploaded by the user.
+    """Return path/url of a user-uploaded attachment without parsing it.
 
-    Use this when you need to pass a file to another tool (e.g. super_pdf_reader, image tools)
-    but do not need to read its text content directly.
+    Prefer this over read_user_attachment when you only need the file location: image
+    editing, plugins, vision_extractor, or passing an image path to other tools.
+    Does not run OCR or vision description (fast).
 
     Args:
         filename (str): The filename (basename) or display name of the attachment to locate.
@@ -1061,14 +1081,14 @@ def find_user_attachment(filename: str, turn: Optional[int] = None) -> Dict[str,
     return tool_success('find_user_attachment', result)
 
 
-def find_artifact(artifact_key: str, sort_order: Optional[int] = None) -> Dict[str, Any]:
+def find_artifact(slot: str, sort_order: Optional[int] = None) -> Dict[str, Any]:
     """Return the accessible URL or local path of a plugin artifact.
 
     Analogous to find_user_attachment but for plugin step outputs.
     Reads session_id and plugin_id from agentic_config (same as save_artifact / get_artifact).
 
     Args:
-        artifact_key (str): The artifact key to look up (e.g. 'generated_image_url').
+        slot (str): The slot id to look up (e.g. 'image_output').
         sort_order (int): Optional 1-based display position for list-slot artifacts.
             Omit for single-slot artifacts.
 
@@ -1089,12 +1109,18 @@ def find_artifact(artifact_key: str, sort_order: Optional[int] = None) -> Dict[s
             'message': 'No active plugin session found in agentic_config.',
         })
 
-    ctx = require_context()
-
+    ctx = get_context()
+    if ctx is None:
+        return tool_success('find_artifact', {
+            'status': 'error',
+            'message': 'find_artifact requires an active SubAgent context.',
+        })
     if sort_order is not None:
-        result_dict = _get_plugin_artifact_by_sort_order(ctx, artifact_key, session_id, sort_order)
+        result_dict = _get_plugin_artifact_by_sort_order(
+            ctx, slot, session_id, sort_order,
+        )
     else:
-        result_dict = _get_plugin_artifact_all(ctx, artifact_key, session_id)
+        result_dict = _get_plugin_artifact_all(ctx, slot, session_id)
 
     # Unwrap inner result to extract the path.
     inner = result_dict.get('result', result_dict)
@@ -1105,7 +1131,7 @@ def find_artifact(artifact_key: str, sort_order: Optional[int] = None) -> Dict[s
     if not artifacts:
         return tool_success('find_artifact', {
             'status': 'error',
-            'message': f"No artifact found for key '{artifact_key}'.",
+            'message': f"No artifact found for slot '{slot}'.",
         })
 
     # Use the first (or only) artifact to resolve the path.
@@ -1118,32 +1144,39 @@ def find_artifact(artifact_key: str, sort_order: Optional[int] = None) -> Dict[s
         except Exception:
             value = {}
 
+    signed_url: Optional[str] = None
+    if isinstance(value.get('url'), str) and value.get('url'):
+        signed_url = value['url']
+
     path: Optional[str] = value.get('path') or value.get('url') or value.get('text')
     if not path or not isinstance(path, str):
         return tool_success('find_artifact', {
             'status': 'error',
-            'message': f"Artifact '{artifact_key}' has no resolvable path.",
+            'message': f"Artifact '{slot}' has no resolvable path.",
         })
 
-    # Try to get a signed URL from Go /static-files:sign.
-    signed_url: Optional[str] = None
-    try:
-        import httpx
-        from lazymind.config import config as _cfg
-        core_url = str(_cfg['core_api_url']).rstrip('/')
-        resp = httpx.post(
-            f'{core_url}/static-files:sign',
-            json={'path': path},
-            timeout=3.0,
-        )
-        if resp.status_code == 200:
-            signed_url = resp.json().get('data', {}).get('url') or resp.json().get('url')
-    except Exception:
-        pass
+    # Re-sign local paths when the slots API did not already provide a URL.
+    if not signed_url:
+        try:
+            import httpx
+            from lazymind.config import config as _cfg
+            core_url = str(_cfg['core_api_url']).rstrip('/')
+            resp = httpx.post(
+                f'{core_url}/static-files:sign',
+                json={'paths': [path]},
+                timeout=3.0,
+            )
+            if resp.status_code == 200:
+                payload = resp.json()
+                data = payload.get('data') if isinstance(payload.get('data'), dict) else payload
+                urls = data.get('urls') or {}
+                signed_url = urls.get(path)
+        except Exception:
+            pass
 
     out: Dict[str, Any] = {
         'status': 'ok',
-        'artifact_key': artifact_key,
+        'slot': slot,
         'path': path,
     }
     if sort_order is not None:

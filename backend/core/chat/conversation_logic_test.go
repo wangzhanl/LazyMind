@@ -78,6 +78,24 @@ func TestBuildChatRequestBodyUsesDatasetListFilters(t *testing.T) {
 	}
 }
 
+func TestBuildLazyChatRequestPreservesDatasetListFilters(t *testing.T) {
+	body := buildChatRequestBody(nil, nil, "conv-1", "", "hello", nil, map[string]any{
+		"conversation": map[string]any{
+			"search_config": map[string]any{
+				"dataset_list": []any{
+					map[string]any{"id": "ds_1"},
+				},
+			},
+		},
+	}, nil, "", 1)
+
+	req := buildLazyChatRequest(body)
+
+	if req.Retrieval.Filters == nil || len(req.Retrieval.Filters.DatasetIDs) != 1 || req.Retrieval.Filters.DatasetIDs[0] != "ds_1" {
+		t.Fatalf("unexpected retrieval filters: %#v", req.Retrieval.Filters)
+	}
+}
+
 func TestBuildChatRequestBodyLoadsFiltersFromConversationDB(t *testing.T) {
 	db, err := orm.Connect(orm.DriverSQLite, t.TempDir()+"/chat-filters.db")
 	if err != nil {
@@ -578,6 +596,10 @@ func TestBuildLazyChatRequestMapsAllFields(t *testing.T) {
 		"llm_config": map[string]any{
 			"llm": map[string]any{"source": "openai", "model": "gpt-4o"},
 		},
+		"ocr_config": map[string]any{
+			"ocr_type": "mineru",
+			"ocr_url":  "https://mineru.net/api/v4/",
+		},
 		"tool_config": map[string]any{
 			"bing": "token-1",
 		},
@@ -594,9 +616,6 @@ func TestBuildLazyChatRequestMapsAllFields(t *testing.T) {
 		"enable_subagent": false,
 		"plugin_context": map[string]any{
 			"session_id": "plugin-session-1",
-		},
-		"ask_response": map[string]any{
-			"ask_id": "ask-1",
 		},
 	})
 
@@ -655,13 +674,16 @@ func TestBuildLazyChatRequestMapsAllFields(t *testing.T) {
 	if req.Runtime.LLMConfig == nil || req.Runtime.LLMConfig["llm"] == nil {
 		t.Fatalf("expected llm_config to be forwarded, got %#v", req.Runtime.LLMConfig)
 	}
+	if req.Runtime.OCRConfig == nil || req.Runtime.OCRConfig["ocr_type"] != "mineru" {
+		t.Fatalf("expected ocr_config to be forwarded, got %#v", req.Runtime.OCRConfig)
+	}
 	if req.Runtime.ToolConfig == nil || req.Runtime.ToolConfig["bing"] != "token-1" {
 		t.Fatalf("expected tool_config to be forwarded, got %#v", req.Runtime.ToolConfig)
 	}
 	if len(req.Runtime.MCPConfig) != 1 {
 		t.Fatalf("expected mcp_config to be forwarded, got %#v", req.Runtime.MCPConfig)
 	}
-	if req.Plugin.EnablePlugin == nil || !*req.Plugin.EnablePlugin || req.Plugin.PluginContext["session_id"] != "plugin-session-1" || req.Plugin.AskResponse["ask_id"] != "ask-1" {
+	if req.Plugin.EnablePlugin == nil || !*req.Plugin.EnablePlugin || req.Plugin.PluginContext["session_id"] != "plugin-session-1" {
 		t.Fatalf("unexpected plugin options: %#v", req.Plugin)
 	}
 

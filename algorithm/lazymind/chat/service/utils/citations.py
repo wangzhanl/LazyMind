@@ -31,7 +31,10 @@ def register_image_url(config: dict[str, Any], path_or_url: str) -> None:
     signed = static_file_url_from_any(path_or_url)
     if not signed:
         return
-    registry = config[IMAGE_URL_REGISTRY_KEY]
+    registry = config.get(IMAGE_URL_REGISTRY_KEY)
+    if not isinstance(registry, dict):
+        registry = {}
+        config[IMAGE_URL_REGISTRY_KEY] = registry
     registry[signed] = signed
     base = basename_from_path(signed)
     if base:
@@ -91,6 +94,15 @@ def split_citation_index(index: Any) -> tuple[int | None, int | None]:
 def file_name_from_item(item: dict[str, Any]) -> str:
     metadata = item.get('metadata') if isinstance(item.get('metadata'), dict) else {}
     global_md = item.get('global_metadata') if isinstance(item.get('global_metadata'), dict) else {}
+    group = item.get('group') or item.get('group_name') or ''
+    if group == 'image':
+        return (
+            global_md.get('file_name')
+            or item.get('file_name')
+            or metadata.get('file_name')
+            or metadata.get('source')
+            or 'title_example'
+        )
     return (
         item.get('file_name')
         or global_md.get('file_name')

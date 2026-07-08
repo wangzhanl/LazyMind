@@ -89,6 +89,7 @@ type ChatRuntimeOptions struct {
 	Trace              bool           `json:"trace,omitempty"`
 	EnvironmentContext map[string]any `json:"environment_context,omitempty"`
 	LLMConfig          map[string]any `json:"llm_config,omitempty"`
+	OCRConfig          map[string]any `json:"ocr_config,omitempty"`
 	ToolConfig         map[string]any `json:"tool_config,omitempty"`
 	MCPConfig          []any          `json:"mcp_config,omitempty"`
 }
@@ -127,16 +128,16 @@ type LazyChatData struct {
 // TaskCreatedEvent is emitted by create_subagent (via translator) on the main SSE.
 // seq_in_conversation is NOT included; Go allocates it when creating the record.
 type TaskCreatedEvent struct {
-	TaskID             string         `json:"task_id"`
-	Title              string         `json:"title"`
-	AgentType          string         `json:"agent_type"`
-	Mode               string         `json:"mode"`
-	Objective          string         `json:"objective"`
-	Params             map[string]any `json:"params,omitempty"`
-	InputArtifactKeys  []string       `json:"input_artifact_keys"`
-	OutputArtifactKeys []string       `json:"output_artifact_keys"`
-	Tools              []string       `json:"tools,omitempty"`
-	Resume             bool           `json:"resume,omitempty"`
+	TaskID      string         `json:"task_id"`
+	Title       string         `json:"title"`
+	AgentType   string         `json:"agent_type"`
+	Mode        string         `json:"mode"`
+	Objective   string         `json:"objective"`
+	Params      map[string]any `json:"params,omitempty"`
+	InputSlots  []string       `json:"input_slots"`
+	OutputSlots []string       `json:"output_slots"`
+	Tools       []string       `json:"tools,omitempty"`
+	Resume      bool           `json:"resume,omitempty"`
 }
 
 // AskQuestion is a single question within an AskPendingEvent.
@@ -400,6 +401,9 @@ func buildLazyChatRequest(body map[string]any) *LazyChatRequest {
 	if llmConfig, ok := body["llm_config"].(map[string]any); ok {
 		req.Runtime.LLMConfig = llmConfig
 	}
+	if ocrConfig, ok := body["ocr_config"].(map[string]any); ok {
+		req.Runtime.OCRConfig = ocrConfig
+	}
 	if toolConfig, ok := body["tool_config"].(map[string]string); ok {
 		tc := make(map[string]any, len(toolConfig))
 		for k, v := range toolConfig {
@@ -560,6 +564,13 @@ func filesMapFromAny(v any) map[string][]string {
 }
 
 func stringSlice(v any) []string {
+	if s, ok := v.(string); ok {
+		s = strings.TrimSpace(s)
+		if s == "" {
+			return nil
+		}
+		return []string{s}
+	}
 	if raw, ok := v.([]string); ok {
 		if len(raw) == 0 {
 			return nil

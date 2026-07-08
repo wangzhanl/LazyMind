@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"lazymind/core/chat"
+	"lazymind/core/datasource"
 	"lazymind/core/doc"
 	"lazymind/core/evalset"
 	"lazymind/core/mcp"
@@ -172,12 +173,27 @@ func buildStructParameters(v any, location string, builder *schemaBuilder) []map
 			"required": required,
 			"schema":   schema,
 		}
+		if values := openAPIEnumValues(field.Tag.Get("enum")); len(values) > 0 {
+			schema["enum"] = values
+		}
 		if description := strings.TrimSpace(field.Tag.Get("desc")); description != "" {
 			param["description"] = description
 		}
 		params = append(params, param)
 	}
 	return params
+}
+
+func openAPIEnumValues(raw string) []any {
+	parts := strings.Split(raw, ",")
+	values := make([]any, 0, len(parts))
+	for _, part := range parts {
+		value := strings.TrimSpace(part)
+		if value != "" {
+			values = append(values, value)
+		}
+	}
+	return values
 }
 
 func (b *schemaBuilder) schemaFromSource(source schemaSource) map[string]any {
@@ -397,6 +413,14 @@ type documentPathParams struct {
 	Document string `path:"document"`
 }
 
+type databaseConnectionPathParams struct {
+	Connection string `path:"connection"`
+}
+
+type deleteDatabaseConnectionOpenAPIResponse struct {
+	Deleted bool `json:"deleted"`
+}
+
 type taskPathParams struct {
 	Dataset string `path:"dataset"`
 	Task    string `path:"task"`
@@ -462,29 +486,22 @@ type toolStateOpenAPIResponse struct {
 	Disabled bool   `json:"disabled"`
 }
 
-type agentFileContentOpenAPIRequest struct {
-	Path string `json:"path"`
-}
-
-type agentFileContentOpenAPIResponse struct {
-	Path     string `json:"path"`
-	Filename string `json:"filename"`
-	Content  string `json:"content"`
-	FileSize int64  `json:"file_size"`
-}
-
-type agentTracePathParams struct {
-	ThreadID string `path:"thread_id"`
-	TraceID  string `path:"trace_id"`
-}
-
-type agentTraceCompareQueryParams struct {
-	A string `query:"a" required:"true"`
-	B string `query:"b" required:"true"`
-}
-
 type agentThreadPathParams struct {
 	ThreadID string `path:"thread_id"`
+}
+
+type agentThreadResultDownloadPathParams struct {
+	ThreadID string `path:"thread_id"`
+	Kind     string `path:"kind" enum:"datasets,eval-reports,analysis-reports,diffs,abtests"`
+}
+
+type agentThreadResultQueryParams struct {
+	Version int32 `query:"version"`
+}
+
+type agentThreadResultDownloadQueryParams struct {
+	Format  string `query:"format" enum:"csv"`
+	Version int32  `query:"version"`
 }
 
 type agentThreadListQueryParams struct {
@@ -505,134 +522,6 @@ type agentThreadListOpenAPIResponse struct {
 	Threads       []agentThreadOpenAPIResponse `json:"threads"`
 	TotalSize     int64                        `json:"total_size"`
 	NextPageToken string                       `json:"next_page_token"`
-}
-
-type agentEvalReportTraceCoverageOpenAPIResponse struct {
-	CoveredCount int     `json:"covered_count"`
-	TotalCount   int     `json:"total_count"`
-	Rate         float64 `json:"rate"`
-}
-
-type agentEvalReportResultOpenAPIResponse struct {
-	ArtifactID    string                                       `json:"artifact_id"`
-	ArtifactRef   string                                       `json:"artifact_ref"`
-	Schema        string                                       `json:"schema"`
-	CaseCount     int                                          `json:"case_count"`
-	Data          map[string]any                               `json:"data"`
-	ReportID      string                                       `json:"report_id,omitempty"`
-	BadCaseCount  int                                          `json:"bad_case_count,omitempty"`
-	TraceCoverage *agentEvalReportTraceCoverageOpenAPIResponse `json:"trace_coverage,omitempty"`
-}
-
-type agentABTestResultOpenAPIResponse struct {
-	ArtifactID         string                                  `json:"artifact_id"`
-	ArtifactRef        string                                  `json:"artifact_ref"`
-	Schema             string                                  `json:"schema"`
-	CaseCount          int                                     `json:"case_count,omitempty"`
-	Data               map[string]any                          `json:"data"`
-	ABTestID           string                                  `json:"abtest_id,omitempty"`
-	CaseDetailsSummary *agentCaseDetailsSummaryOpenAPIResponse `json:"case_details_summary,omitempty"`
-	FileURL            string                                  `json:"file_url,omitempty"`
-	RuntimeArtifactID  string                                  `json:"runtime_artifact_id,omitempty"`
-	SourceArtifactID   string                                  `json:"source_artifact_id,omitempty"`
-}
-
-type agentCaseDetailsSummaryOpenAPIResponse struct {
-	TotalCount    int                                           `json:"total_count"`
-	QuestionTypes []agentCaseDetailsQuestionTypeOpenAPIResponse `json:"question_types"`
-}
-
-type agentCaseDetailsQuestionTypeOpenAPIResponse struct {
-	QuestionType     int                                           `json:"question_type"`
-	QuestionTypeKey  string                                        `json:"question_type_key"`
-	QuestionTypeName string                                        `json:"question_type_name"`
-	Count            int                                           `json:"count"`
-	Averages         agentCaseDetailsMetricAveragesOpenAPIResponse `json:"averages"`
-}
-
-type agentCaseDetailsMetricAveragesOpenAPIResponse struct {
-	ContextRecall     *float64 `json:"context_recall,omitempty"`
-	DocRecall         *float64 `json:"doc_recall,omitempty"`
-	AnswerCorrectness *float64 `json:"answer_correctness,omitempty"`
-	Faithfulness      *float64 `json:"faithfulness,omitempty"`
-}
-
-type agentEvalReportBadCaseListPathParams struct {
-	ThreadID string `path:"thread_id"`
-	ReportID string `path:"report_id"`
-}
-
-type agentEvalReportBadCaseListQueryParams struct {
-	PageToken   string `query:"page_token"`
-	PageSize    int32  `query:"page_size"`
-	Keyword     string `query:"keyword"`
-	FailureType string `query:"failure_type"`
-}
-
-type agentEvalReportBadCaseListItemOpenAPIResponse struct {
-	CaseID      string `json:"case_id,omitempty"`
-	Defect      string `json:"Defect,omitempty"`
-	Reason      string `json:"Reason,omitempty"`
-	FailureType string `json:"failure_type,omitempty"`
-	TraceID     string `json:"trace_id,omitempty"`
-}
-
-type agentEvalReportBadCaseListOpenAPIResponse struct {
-	Items         []agentEvalReportBadCaseListItemOpenAPIResponse `json:"items"`
-	TotalSize     int                                             `json:"total_size"`
-	NextPageToken string                                          `json:"next_page_token"`
-}
-
-type agentABTestCaseDetailListPathParams struct {
-	ThreadID string `path:"thread_id"`
-	ABTestID string `path:"abtest_id"`
-}
-
-type agentABTestCaseDetailListQueryParams struct {
-	PageToken string `query:"page_token"`
-	PageSize  int32  `query:"page_size"`
-	Keyword   string `query:"keyword"`
-	Outcome   string `query:"outcome"`
-}
-
-type agentABTestCaseDetailListItemOpenAPIResponse struct {
-	CaseID    string         `json:"case_id,omitempty"`
-	Query     string         `json:"query,omitempty"`
-	Outcome   string         `json:"outcome,omitempty"`
-	Before    map[string]any `json:"before,omitempty"`
-	After     map[string]any `json:"after,omitempty"`
-	Delta     map[string]any `json:"delta,omitempty"`
-	Baseline  map[string]any `json:"baseline,omitempty"`
-	Candidate map[string]any `json:"candidate,omitempty"`
-}
-
-type agentABTestCaseDetailListOpenAPIResponse struct {
-	Items         []agentABTestCaseDetailListItemOpenAPIResponse `json:"items"`
-	TotalSize     int                                            `json:"total_size"`
-	NextPageToken string                                         `json:"next_page_token"`
-}
-
-type agentTraceSummaryOpenAPIResponse struct {
-	Status         string   `json:"status"`
-	LatencyMS      *float64 `json:"latency_ms,omitempty"`
-	RoundCount     int      `json:"round_count"`
-	ToolCallCount  int      `json:"tool_call_count"`
-	RetrievalCount int      `json:"retrieval_count"`
-	RerankCount    int      `json:"rerank_count"`
-}
-
-type agentTraceDetailOpenAPIResponse struct {
-	TraceID     string                           `json:"trace_id"`
-	TraceStatus string                           `json:"trace_status"`
-	Query       string                           `json:"query"`
-	Summary     agentTraceSummaryOpenAPIResponse `json:"summary"`
-	Trace       map[string]any                   `json:"trace,omitempty"`
-}
-
-type agentTraceCompareOpenAPIResponse struct {
-	Query string                          `json:"query"`
-	A     agentTraceDetailOpenAPIResponse `json:"a"`
-	B     agentTraceDetailOpenAPIResponse `json:"b"`
 }
 
 type skillPathParams struct {
@@ -1414,6 +1303,22 @@ func registeredCoreOperations() []openAPIOperation {
 	refResp := func(description, name string) openAPIResponse {
 		return openAPIResponse{Description: description, ContentType: "application/json", Schema: schemaSource{Ref: name}}
 	}
+	evoGateContentResp := openAPIResponse{
+		Description: "Evo gate content",
+		ContentType: "application/json",
+		Schema: schemaSource{Inline: map[string]any{
+			"type":                 "object",
+			"additionalProperties": true,
+		}},
+	}
+	evoGateCSVResp := openAPIResponse{
+		Description: "Evo gate CSV download",
+		ContentType: "text/csv",
+		Schema: schemaSource{Inline: map[string]any{
+			"type":   "string",
+			"format": "binary",
+		}},
+	}
 	return []openAPIOperation{
 		{
 			Method:      "GET",
@@ -1489,6 +1394,62 @@ func registeredCoreOperations() []openAPIOperation {
 			Tags:        []string{"data-sources"},
 			RequestBody: jsonBodyOf(localFSChatSettingOpenAPIRequest{}, true),
 			Responses:   map[int]openAPIResponse{200: resp("Updated local filesystem chat setting", localFSChatSettingOpenAPIResponse{})},
+		},
+		{
+			Method:    "GET",
+			Path:      "/data-sources/database-connections",
+			Summary:   "List database connections",
+			Tags:      []string{"data-sources"},
+			Responses: map[int]openAPIResponse{200: resp("Database connection list", datasource.ListDatabaseConnectionsResponse{})},
+		},
+		{
+			Method:      "POST",
+			Path:        "/data-sources/database-connections",
+			Summary:     "Create database connection",
+			Tags:        []string{"data-sources"},
+			RequestBody: jsonBodyOf(datasource.DatabaseConnectionRequest{}, true),
+			Responses:   map[int]openAPIResponse{200: resp("Created database connection", datasource.DatabaseConnectionResponse{})},
+		},
+		{
+			Method:     "GET",
+			Path:       "/data-sources/database-connections/{connection}",
+			Summary:    "Get database connection",
+			Tags:       []string{"data-sources"},
+			PathParams: databaseConnectionPathParams{},
+			Responses:  map[int]openAPIResponse{200: resp("Database connection", datasource.DatabaseConnectionResponse{})},
+		},
+		{
+			Method:      "PATCH",
+			Path:        "/data-sources/database-connections/{connection}",
+			Summary:     "Update database connection",
+			Tags:        []string{"data-sources"},
+			PathParams:  databaseConnectionPathParams{},
+			RequestBody: jsonBodyOf(datasource.UpdateDatabaseConnectionRequest{}, true),
+			Responses:   map[int]openAPIResponse{200: resp("Updated database connection", datasource.DatabaseConnectionResponse{})},
+		},
+		{
+			Method:     "DELETE",
+			Path:       "/data-sources/database-connections/{connection}",
+			Summary:    "Delete database connection",
+			Tags:       []string{"data-sources"},
+			PathParams: databaseConnectionPathParams{},
+			Responses:  map[int]openAPIResponse{200: resp("Deleted database connection", deleteDatabaseConnectionOpenAPIResponse{})},
+		},
+		{
+			Method:     "POST",
+			Path:       "/data-sources/database-connections/{connection}:check",
+			Summary:    "Check database connection",
+			Tags:       []string{"data-sources"},
+			PathParams: databaseConnectionPathParams{},
+			Responses:  map[int]openAPIResponse{200: resp("Database connection check result", datasource.CheckDatabaseConnectionResponse{})},
+		},
+		{
+			Method:     "GET",
+			Path:       "/data-sources/database-connections/{connection}:secret",
+			Summary:    "Get database connection secret",
+			Tags:       []string{"data-sources"},
+			PathParams: databaseConnectionPathParams{},
+			Responses:  map[int]openAPIResponse{200: resp("Database connection secret", datasource.DatabaseConnectionSecretResponse{})},
 		},
 		{
 			Method:      "GET",
@@ -1721,6 +1682,14 @@ func registeredCoreOperations() []openAPIOperation {
 			Tags:        []string{"documents"},
 			RequestBody: jsonBodyOf(doc.SearchDocumentsRequest{}, false),
 			Responses:   map[int]openAPIResponse{200: resp("textDocument search results", doc.ListDocumentsResponse{})},
+		},
+		{
+			Method:      "POST",
+			Path:        "/system-query/documents:aggregate",
+			Summary:     "Aggregate documents",
+			Tags:        []string{"documents"},
+			RequestBody: jsonBodyOf(doc.AggregateDocumentsRequest{}, false),
+			Responses:   map[int]openAPIResponse{200: resp("Document aggregate results", doc.AggregateDocumentsResponse{})},
 		},
 		{
 			Method:      "POST",
@@ -2490,69 +2459,63 @@ func registeredCoreOperations() []openAPIOperation {
 		},
 		{
 			Method:      "GET",
-			Path:        "/agent/threads/{thread_id}/results/eval-reports",
-			Summary:     "GET /agent/threads/{thread_id}/results/eval-reports",
-			Description: "Returns eval report artifact rows from Evo, with core-added report_id, bad_case_count, and trace_coverage when available. Existing report fields remain under data except bad_cases, which is served by the dedicated bad-case list endpoint.",
+			Path:        "/agent/threads/{thread_id}/results/{kind}:download",
+			Summary:     "Download agent thread gate result as CSV",
+			Description: "Downloads one of datasets, eval-reports, analysis-reports, diffs, or abtests as CSV. Core converts Evo gate JSON content to CSV only on this download path.",
 			Tags:        []string{"agent"},
-			PathParams:  agentThreadPathParams{},
-			Responses:   map[int]openAPIResponse{200: resp("Eval report result rows", []agentEvalReportResultOpenAPIResponse{})},
+			PathParams:  agentThreadResultDownloadPathParams{},
+			QueryParams: agentThreadResultDownloadQueryParams{},
+			Responses:   map[int]openAPIResponse{200: evoGateCSVResp},
 		},
 		{
 			Method:      "GET",
-			Path:        "/agent/threads/{thread_id}/results/eval-reports/{report_id}/bad-cases",
-			Summary:     "GET /agent/threads/{thread_id}/results/eval-reports/{report_id}/bad-cases",
-			Description: "Returns filtered, paginated bad cases for an eval report. keyword matches defect and reason text; failure_type matches exactly.",
+			Path:        "/agent/threads/{thread_id}/results/datasets",
+			Summary:     "GET /agent/threads/{thread_id}/results/datasets",
+			Description: "Returns Evo dataset gate content directly. Core performs no result post-processing on this content path.",
 			Tags:        []string{"agent"},
-			PathParams:  agentEvalReportBadCaseListPathParams{},
-			QueryParams: agentEvalReportBadCaseListQueryParams{},
-			Responses:   map[int]openAPIResponse{200: resp("Eval report bad case list", agentEvalReportBadCaseListOpenAPIResponse{})},
+			PathParams:  agentThreadPathParams{},
+			QueryParams: agentThreadResultQueryParams{},
+			Responses:   map[int]openAPIResponse{200: evoGateContentResp},
+		},
+		{
+			Method:      "GET",
+			Path:        "/agent/threads/{thread_id}/results/eval-reports",
+			Summary:     "GET /agent/threads/{thread_id}/results/eval-reports",
+			Description: "Returns Evo eval gate content directly. Core performs no result post-processing on this content path.",
+			Tags:        []string{"agent"},
+			PathParams:  agentThreadPathParams{},
+			QueryParams: agentThreadResultQueryParams{},
+			Responses:   map[int]openAPIResponse{200: evoGateContentResp},
+		},
+		{
+			Method:      "GET",
+			Path:        "/agent/threads/{thread_id}/results/analysis-reports",
+			Summary:     "GET /agent/threads/{thread_id}/results/analysis-reports",
+			Description: "Returns Evo analysis gate content directly. Core performs no result post-processing on this content path.",
+			Tags:        []string{"agent"},
+			PathParams:  agentThreadPathParams{},
+			QueryParams: agentThreadResultQueryParams{},
+			Responses:   map[int]openAPIResponse{200: evoGateContentResp},
+		},
+		{
+			Method:      "GET",
+			Path:        "/agent/threads/{thread_id}/results/diffs",
+			Summary:     "GET /agent/threads/{thread_id}/results/diffs",
+			Description: "Returns Evo repair gate content directly. Core performs no result post-processing on this content path.",
+			Tags:        []string{"agent"},
+			PathParams:  agentThreadPathParams{},
+			QueryParams: agentThreadResultQueryParams{},
+			Responses:   map[int]openAPIResponse{200: evoGateContentResp},
 		},
 		{
 			Method:      "GET",
 			Path:        "/agent/threads/{thread_id}/results/abtests",
 			Summary:     "GET /agent/threads/{thread_id}/results/abtests",
-			Description: "Returns ABTest artifact rows from Evo, with normalized abtest_id, case details summary, and CSV file URL when available.",
+			Description: "Returns Evo abtest gate content directly. Core performs no result post-processing on this content path.",
 			Tags:        []string{"agent"},
 			PathParams:  agentThreadPathParams{},
-			Responses:   map[int]openAPIResponse{200: resp("ABTest result rows", []agentABTestResultOpenAPIResponse{})},
-		},
-		{
-			Method:      "GET",
-			Path:        "/agent/threads/{thread_id}/results/abtests/{abtest_id}/case-details",
-			Summary:     "GET /agent/threads/{thread_id}/results/abtests/{abtest_id}/case-details",
-			Description: "Returns filtered, paginated case details for an ABTest result. keyword matches case text and identifiers; outcome matches exactly.",
-			Tags:        []string{"agent"},
-			PathParams:  agentABTestCaseDetailListPathParams{},
-			QueryParams: agentABTestCaseDetailListQueryParams{},
-			Responses:   map[int]openAPIResponse{200: resp("ABTest case detail list", agentABTestCaseDetailListOpenAPIResponse{})},
-		},
-		{
-			Method:      "GET",
-			Path:        "/agent/threads/{thread_id}/results/traces/{trace_id}",
-			Summary:     "Get agent trace detail",
-			Description: "Get one trace detail for a thread owned by the current user.",
-			Tags:        []string{"agent"},
-			PathParams:  agentTracePathParams{},
-			Responses:   map[int]openAPIResponse{200: resp("Agent trace detail", agentTraceDetailOpenAPIResponse{})},
-		},
-		{
-			Method:      "GET",
-			Path:        "/agent/threads/{thread_id}/results/traces-compare",
-			Summary:     "Compare agent traces",
-			Description: "Compare two trace details in a thread. Query parameters a and b are trace IDs.",
-			Tags:        []string{"agent"},
-			PathParams:  agentThreadPathParams{},
-			QueryParams: agentTraceCompareQueryParams{},
-			Responses:   map[int]openAPIResponse{200: resp("Agent trace comparison", agentTraceCompareOpenAPIResponse{})},
-		},
-		{
-			Method:      "POST",
-			Path:        "/agent/files:content",
-			Summary:     "Read agent result file content",
-			Description: "Read a local agent result file by path and return its text content. Use JSON body to avoid URL path escaping issues.",
-			Tags:        []string{"agent"},
-			RequestBody: jsonBodyOf(agentFileContentOpenAPIRequest{}, true),
-			Responses:   map[int]openAPIResponse{200: resp("Agent result file content", agentFileContentOpenAPIResponse{})},
+			QueryParams: agentThreadResultQueryParams{},
+			Responses:   map[int]openAPIResponse{200: evoGateContentResp},
 		},
 		{
 			Method:  "POST",

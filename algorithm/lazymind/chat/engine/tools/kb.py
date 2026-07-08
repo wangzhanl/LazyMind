@@ -77,13 +77,12 @@ def _build_reranker() -> Optional[Reranker]:
 
 def _ensure_kb_search_runtime() -> tuple[List[Retriever], Optional[Reranker], Retriever]:
     global _kb_retrievers, _kb_reranker, _kb_image_retriever
-    if _kb_retrievers is None:
-        _kb_retrievers = [
-            Retriever(DOCUMENT, **cfg)
-            for cfg in _KB_RETRIEVER_CONFIGS
-        ]
-        _kb_reranker = _build_reranker()
-        _kb_image_retriever = Retriever(DOCUMENT, **_KB_IMAGE_RETRIEVER_CONFIG)
+    if _kb_retrievers is not None and _kb_image_retriever is not None:
+        return _kb_retrievers, _kb_reranker, _kb_image_retriever
+
+    _kb_retrievers = [Retriever(DOCUMENT, **cfg) for cfg in _KB_RETRIEVER_CONFIGS]
+    _kb_reranker = _build_reranker()
+    _kb_image_retriever = Retriever(DOCUMENT, **_KB_IMAGE_RETRIEVER_CONFIG)
     return _kb_retrievers, _kb_reranker, _kb_image_retriever
 
 
@@ -120,6 +119,7 @@ def _serialize_doc_node_like(node: Any) -> Dict[str, Any]:
             'index',
             'file_name',
             'source',
+            'source_path',
             'store_num',
             'lazyllm_store_num',
             'page',
@@ -141,7 +141,17 @@ def _serialize_doc_node_like(node: Any) -> Dict[str, Any]:
         and local_path.lower().endswith(('.jpg', '.jpeg', '.png', '.gif', '.webp', '.bmp'))
     )
     image_markdown = None
-    if is_image and local_path:
+    source_path = metadata.get('source_path')
+    if source_path:
+        signed = static_file_url_from_any(source_path)
+        text = signed
+        compact_metadata = dict(compact_metadata)
+        compact_metadata['image_url'] = signed
+        compact_metadata['local_path'] = source_path
+        doc_file_name = global_md.get('file_name') or compact_metadata.get('file_name')
+        file_label = doc_file_name or basename_from_path(signed)
+        image_markdown = f'![{file_label}]({signed})'
+    elif is_image and local_path:
         signed = static_file_url_from_any(local_path)
         if signed:
             text = signed
@@ -157,6 +167,11 @@ def _serialize_doc_node_like(node: Any) -> Dict[str, Any]:
     else:
         local_path = ''
 
+    doc_file_name = (
+        global_md.get('file_name') or compact_metadata.get('file_name')
+        if group == 'image'
+        else compact_metadata.get('file_name') or global_md.get('file_name')
+    )
     serialized = {
         'uid': getattr(node, 'uid', None) or getattr(node, '_uid', None),
         'number': getattr(node, 'number', metadata.get('index')),
@@ -166,13 +181,13 @@ def _serialize_doc_node_like(node: Any) -> Dict[str, Any]:
         'text': truncate_text(text, _MAX_TEXT_LEN),
         'docid': global_md.get('docid'),
         'kb_id': global_md.get('kb_id'),
-        'file_name': compact_metadata.get('file_name') or global_md.get('file_name'),
+        'file_name': doc_file_name,
         'metadata': compact_metadata,
         'global_metadata': global_md,
     }
     if image_markdown:
         serialized['image_markdown'] = image_markdown
-        serialized['local_path'] = local_path
+        serialized['local_path'] = source_path or local_path
     return serialized
 
 
@@ -495,6 +510,10 @@ class KBToolGroup:
         doc = DOCUMENT
         docid = target if target_type == 'docid' else ''
         file_name = target if target_type == 'file_name' else None
+        if not keyword:
+            raise ValueError('keyword is required')
+        if not (target and str(target).strip()):
+            raise ValueError('target is required')
         LOG.info(f'[kb_keyword_search] store={_cfg["segment_store_type"]!r} keyword={keyword!r} docid={docid!r} '
                  f'file_name={file_name!r} group={group!r} phrase={phrase} sort_by={sort_by!r} size={size}')
 

@@ -1,5 +1,6 @@
+import { lazy, Suspense } from "react";
 import { Routes, Route, Navigate } from "react-router-dom";
-import { ConfigProvider } from "antd";
+import { ConfigProvider, Spin } from "antd";
 import { useTranslation } from "react-i18next";
 import MainLayout from "@/layouts/MainLayout";
 import SigninLogin from "@/modules/signin/pages/login";
@@ -19,6 +20,7 @@ import UserManagement from "@/modules/admin/pages/user";
 import GroupManagement from "@/modules/admin/pages/group";
 import GroupDetail from "@/modules/admin/pages/group/detail.tsx";
 import DataSourceManagement from "@/modules/dataSource";
+import DatabaseConnectionsPage from "@/modules/dataSource/database";
 import DataSourceDetail from "@/modules/dataSource/detail";
 import DataSourceFeishuCallback from "@/modules/dataSource/common/feishuCallback";
 import CloudDocumentsPage from "@/modules/modelProvider/pages/CloudDocumentsPage";
@@ -45,6 +47,9 @@ import {
 } from "@/modules/selfEvolution";
 import { getAntdLocale } from "@/i18n/antdLocale";
 import { runtimeFeatures } from "@/runtime/features";
+
+const PluginDetailPage = lazy(() => import("@/modules/plugin/pages/detail"));
+const BuiltinPluginDetailPage = lazy(() => import("@/modules/plugin/pages/builtin-detail"));
 
 export default function AppRouter() {
   const { i18n } = useTranslation();
@@ -94,6 +99,7 @@ export default function AppRouter() {
             />
           </Route>
           <Route path="data-sources" element={<DataSourceManagement />} />
+          <Route path="data-sources/database-connections" element={<DatabaseConnectionsPage />} />
           <Route path="data-sources/:id" element={<DataSourceDetail />} />
           <Route path="dataset-management" element={<DatasetListPage />} />
           <Route
@@ -156,6 +162,9 @@ export default function AppRouter() {
             />
             <Route path="review/:tab/:itemId" element={<MemoryReviewPage />} />
           </Route>
+          <Route path="memory-management/plugins" element={<Navigate to="/memory-management/skills?skillView=plugins" replace />} />
+          <Route path="memory-management/plugins/builtin/:pluginId" element={<Suspense fallback={<Spin style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100%' }} />}><BuiltinPluginDetailPage /></Suspense>} />
+          <Route path="memory-management/plugins/:pluginId" element={<Suspense fallback={<Spin style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100%' }} />}><PluginDetailPage /></Suspense>} />
           {runtimeFeatures.hideEvo ? (
             <Route
               path="self-evolution/*"

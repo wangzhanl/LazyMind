@@ -33,6 +33,8 @@ def _model_config_path_post_action(resolved_path):
 # All LAZYMIND_* environment variables are registered here.
 config = Config(prefix='LAZYMIND', home='~/.lazyllm_rag')
 _LAZYMIND_ROOT = os.path.dirname(__file__)
+config.add('runtime_mode', str, 'cloud', 'RUNTIME_MODE',
+           description='LazyMind runtime mode profile: cloud or local.')
 
 # ---------------------------------------------------------------------------
 # Chat
@@ -100,6 +102,8 @@ config.add('agentic_kb_url', str, 'http://lazyllm-algo:8000', 'AGENTIC_KB_URL',
            description='Knowledge base service URL for agentic tools.')
 config.add('core_api_url', str, 'http://core:8000', 'CORE_API_URL', description='Core API service URL.')
 config.add('core_api_timeout', int, 30, 'CORE_API_TIMEOUT', description='Core API request timeout in seconds.')
+config.add('core_internal_token', str, '', 'AUTH_SERVICE_INTERNAL_TOKEN',
+           description='Internal service token for privileged Core API calls.')
 config.add('agentic_kb_name', str, 'general_algo', 'AGENTIC_KB_NAME',
            description='Default knowledge base name for agentic.')
 config.add('skill_fs_url', str, 'remote://skills', 'SKILL_FS_URL', description='Skill filesystem URL.')
@@ -133,6 +137,8 @@ config.add('mineru_backend', str, 'pipeline', 'MINERU_BACKEND', description='Min
 config.add('mineru_server_port', int, 8000, 'MINERU_SERVER_PORT', description='MinerU server port.')
 config.add('ocr_cache_dir', str, os.path.join(config['shared_upload_dir'], '.image_cache'), 'OCR_CACHE_DIR',
            description='OCR cache root for parsed results and images.')
+config.add('reader_use_cache', bool, True, 'READER_USE_CACHE',
+           description='Reader ModuleBase cache; forwarded to LAZYLLM_READER_USE_CACHE.')
 config.add('document_parse_profile', str, 'cloud', 'DOCUMENT_PARSE_PROFILE',
            description='Document parsing profile: cloud or local.')
 config.add('document_processor_url', str, 'http://localhost:8000', 'DOCUMENT_PROCESSOR_URL',
@@ -209,3 +215,5 @@ config.add('evo_data_dir', str, None, 'EVO_DATA_DIR', description='Evo static da
 config.add('evo_base_dir', str, None, 'EVO_BASE_DIR', description='Evo runtime storage directory.')
 config.add('evo_code_map', str, None, 'EVO_CODE_MAP', description='Evo code map path.')
 config.add('evo_chat_source', str, None, 'EVO_CHAT_SOURCE', description='Evo chat source directory.')
+
+os.environ.setdefault('LAZYLLM_READER_USE_CACHE', str(bool(config['reader_use_cache'])).lower())
