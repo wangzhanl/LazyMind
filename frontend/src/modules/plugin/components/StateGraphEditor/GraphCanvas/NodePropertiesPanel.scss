@@ -218,6 +218,32 @@
   margin-top: 4px;
 }
 
+/* Slot Select: fixed width, truncate overflow text */
+.npp-slot-select {
+  flex: 1;
+  min-width: 0;
+
+  .ant-select-selector {
+    overflow: hidden;
+  }
+
+  .ant-select-selection-item {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    display: block;
+  }
+}
+
+/* Option label text inside optionRender — fills the item and truncates */
+.npp-select-option-text {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  width: 100%;
+}
+
 /* ── PromptEditor ── */
 .pe-wrapper {
   position: relative;
