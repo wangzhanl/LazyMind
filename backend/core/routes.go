@@ -14,7 +14,9 @@ import (
 	"lazymind/core/modelprovider"
 	"lazymind/core/plugin"
 	"lazymind/core/preference"
+	"lazymind/core/remotefs"
 	"lazymind/core/resourcechange"
+	"lazymind/core/resourcefs"
 	"lazymind/core/resourceupdate"
 	"lazymind/core/scheduler"
 	skillv2handler "lazymind/core/skillv2/handler"
@@ -341,6 +343,16 @@ func registerAllRoutes(r *mux.Router) {
 	handleAPI(r, "POST", "/user-preference:generate", []string{"qa.write"}, preference.Generate)
 	handleAPI(r, "POST", "/user-preference:confirm", []string{"qa.write"}, preference.Confirm)
 	handleAPI(r, "POST", "/user-preference:discard", []string{"qa.write"}, preference.Discard)
+	handleAPI(r, "GET", "/personal-resource/{resource_type}:file", []string{"qa.read"}, resourcefs.GetFile)
+	handleAPI(r, "PUT", "/personal-resource/{resource_type}:draft", []string{"qa.write"}, resourcefs.WriteDraft)
+	handleAPI(r, "GET", "/personal-resource/{resource_type}:draft-preview", []string{"qa.read"}, resourcefs.DraftPreview)
+	handleAPI(r, "POST", "/personal-resource/{resource_type}/draft-review/{review_id}/actions", []string{"qa.write"}, resourcefs.ReviewAction)
+	handleAPI(r, "POST", "/personal-resource/{resource_type}/draft-review/{review_id}:undo", []string{"qa.write"}, resourcefs.ReviewUndo)
+	handleAPI(r, "POST", "/personal-resource/{resource_type}:commit", []string{"qa.write"}, resourcefs.CommitDraft)
+	handleAPI(r, "POST", "/personal-resource/{resource_type}:discard", []string{"qa.write"}, resourcefs.DiscardDraft)
+	handleAPI(r, "GET", "/personal-resource/{resource_type}/revisions", []string{"qa.read"}, resourcefs.ListRevisions)
+	handleAPI(r, "GET", "/personal-resource/{resource_type}/revisions/{revision_id}", []string{"qa.read"}, resourcefs.GetRevision)
+	handleAPI(r, "POST", "/personal-resource/{resource_type}:rollback", []string{"qa.write"}, resourcefs.Rollback)
 
 	handleAPI(r, "GET", "/conversations/{name}:detail", []string{"qa.read"}, chat.GetConversationDetail)
 	handleAPI(r, "GET", "/conversations/{name}:history", []string{"qa.read"}, chat.GetConversationHistory)
@@ -414,16 +426,16 @@ func registerAllRoutes(r *mux.Router) {
 
 	// Algorithm service callbacks: no request-level RBAC, protected by internal service token at infra level.
 	handleAPI(r, "POST", "/skill/create", nil, skillv2handler.InternalCreate)
-	handleAPI(r, "GET", "/remote-fs/list", []string{"qa.read"}, skillv2handler.RemoteFSList)
-	handleAPI(r, "GET", "/remote-fs/info", []string{"qa.read"}, skillv2handler.RemoteFSInfo)
-	handleAPI(r, "GET", "/remote-fs/exists", []string{"qa.read"}, skillv2handler.RemoteFSExists)
-	handleAPI(r, "GET", "/remote-fs/content", []string{"qa.read"}, skillv2handler.RemoteFSContent)
-	handleAPI(r, "PUT", "/remote-fs/content", []string{"qa.write"}, skillv2handler.RemoteFSContent)
-	handleAPI(r, "POST", "/remote-fs/dir", []string{"qa.write"}, skillv2handler.RemoteFSDir)
-	handleAPI(r, "DELETE", "/remote-fs/path", []string{"qa.write"}, skillv2handler.RemoteFSDelete)
-	handleAPI(r, "POST", "/remote-fs/copy", []string{"qa.write"}, skillv2handler.RemoteFSCopy)
-	handleAPI(r, "POST", "/remote-fs/move", []string{"qa.write"}, skillv2handler.RemoteFSMove)
-	handleAPI(r, "POST", "/remote-fs/trash", []string{"qa.write"}, skillv2handler.RemoteFSTrash)
+	handleAPI(r, "GET", "/remote-fs/list", []string{"qa.read"}, remotefs.List)
+	handleAPI(r, "GET", "/remote-fs/info", []string{"qa.read"}, remotefs.Info)
+	handleAPI(r, "GET", "/remote-fs/exists", []string{"qa.read"}, remotefs.Exists)
+	handleAPI(r, "GET", "/remote-fs/content", []string{"qa.read"}, remotefs.Content)
+	handleAPI(r, "PUT", "/remote-fs/content", []string{"qa.write"}, remotefs.Content)
+	handleAPI(r, "POST", "/remote-fs/dir", []string{"qa.write"}, remotefs.Dir)
+	handleAPI(r, "DELETE", "/remote-fs/path", []string{"qa.write"}, remotefs.Delete)
+	handleAPI(r, "POST", "/remote-fs/copy", []string{"qa.write"}, remotefs.Copy)
+	handleAPI(r, "POST", "/remote-fs/move", []string{"qa.write"}, remotefs.Move)
+	handleAPI(r, "POST", "/remote-fs/trash", []string{"qa.write"}, remotefs.Trash)
 
 	// ----- ACL（Knowledge basetextPermission） -----
 	handleAPI(r, "GET", "/kb/list", []string{"document.read"}, acl.ListKB)
