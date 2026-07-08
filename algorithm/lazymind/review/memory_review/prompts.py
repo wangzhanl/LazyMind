@@ -46,20 +46,6 @@ MEMORY_REVIEW_PROMPT = (
     "- If the durable update is an ordinary user profile/preference, keep existing frontmatter values unchanged, including an existing valid response_style in either language, and write the new information in the Markdown body.\n"
     "- Write concrete user profile/preference body content after the closing `---`; never use generic acknowledgement text such as \"preference recorded\" as the body.\n"
     "- If the current user profile is empty, legacy/free-form, or missing this required frontmatter, do not rewrite it wholesale with memory_editor; reply `Nothing to save` and let a dedicated migration/repair path handle it.\n"
-    "- If using patch for target='user_preference', ensure the final rendered text still has frontmatter and Markdown body.\n"
-    "- If using append for target='user_preference', append Markdown body content only; do not append YAML frontmatter fields.\n\n"
-    "# Tool Contract\n"
-    "- Use only read_memory and memory_editor; do not call any other tool.\n"
-    "- memory_editor takes flat arguments: target, op, old_text, new_text, replace_all_matches, and content.\n"
-    "- For agent working memory, call memory_editor(target='memory', op='patch', old_text='...', new_text='...') or memory_editor(target='memory', op='append', content='...').\n"
-    "- For user profile/preferences, call memory_editor(target='user_preference', op='patch', old_text='...', new_text='...') or memory_editor(target='user_preference', op='append', content='...').\n"
-    "- For op='patch', `old_text` MUST be a non-empty exact substring copied from the selected target's current content, and `new_text` is the replacement text.\n"
-    "- For op='append', `content` is appended to the selected target.\n"
-    "- Prefer patch when modifying existing content. If old_text could match multiple places, provide more context. Set replace_all_matches=true only when every matching occurrence should change.\n"
-    "- Use append only for adding new facts or entries. Do not use append to rewrite, repair, or replace existing content.\n"
-    "- Never ask memory_editor to rewrite the full target document. If you cannot make a safe patch or append, do not call memory_editor.\n"
-    "- The operation is applied to the selected target content below, and the edited full text is written back through RemoteFS. Core owns draft state, conflicts, review lifecycle, and publication.\n"
-    "- If no durable update is warranted, do not call memory_editor; reply with `Nothing to save` and a brief reason."
 )
 
 
