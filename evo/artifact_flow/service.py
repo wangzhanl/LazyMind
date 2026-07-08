@@ -61,7 +61,7 @@ class FlowGatePort(Protocol):
 
 
 class FlowAdapterPort(EvoArtifactAccess, Protocol):
-    def tick(self, run_id: str) -> object:
+    def tick(self, run_id: str, *, should_interrupt: Callable[[], bool] | None = None) -> object:
         ...
 
 
@@ -326,7 +326,18 @@ class FlowService:
                 if boundary is not None:
                     return boundary
 
-                tick = adapter.tick(run_id)
+                def should_interrupt() -> bool:
+                    if self._interrupted(run_id, state) is not None:
+                        return True
+                    progress_now = progress_view(adapter, self._spec, run_id)
+                    released_now = dict(released)
+                    released_now.update(_released_before(command.until_step, progress_now))
+                    target = command.until_step
+                    if target == self._spec.steps[-1]:
+                        return _progress_by_step(progress_now)[target].completed
+                    return _checkpoint(progress_now, self._checkpoint_policy, released_now, target) is not None
+
+                tick = adapter.tick(run_id, should_interrupt=should_interrupt)
                 if tick.status in {'failed', 'conflict'}:
                     error = _tick_error(tick)
                     return self._record(
@@ -334,6 +345,25 @@ class FlowService:
                         command,
                         request_hash,
                         {'error': error, 'status': tick.status},
+                        FlowRunState(run_id, status='failed', released_checkpoints=released, last_error=error),
+                        state.status_version,
+                        error=error,
+                    )
+                if tick.status == 'stopped':
+                    interrupted = self._interrupted(run_id, state)
+                    if interrupted is not None:
+                        return self._record(run_id, command, request_hash, interrupted)
+                    progress = progress_view(adapter, self._spec, run_id)
+                    released.update(_released_before(command.until_step, progress))
+                    boundary = self._record_if_boundary(run_id, command, request_hash, state, progress, released)
+                    if boundary is not None:
+                        return boundary
+                    error = 'runtime stopped without gate change'
+                    return self._record(
+                        run_id,
+                        command,
+                        request_hash,
+                        {'error': error, 'status': 'failed'},
                         FlowRunState(run_id, status='failed', released_checkpoints=released, last_error=error),
                         state.status_version,
                         error=error,

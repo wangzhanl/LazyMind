@@ -27,7 +27,6 @@ ABS_PATH = re.compile(r'(?<![:/\w])/(?!/)(?:[^\s,;)\]}\"\']*/)+[^\s,;)\]}\"\']*'
 EVENT_TYPES = {
     'repair.attempt_started',
     'repair.base_selected',
-    'repair.decision_completed',
     'repair.loop_completed',
     'repair.patch_verified',
     'opencode.setup',
@@ -43,6 +42,7 @@ EVENT_TYPES = {
     'verify.pre_validation_started',
     'verify.diff_scope_completed',
     'verify.hardcode_check_completed',
+    'verify.behaviorful_diff_completed',
     'verify.patch_policy_completed',
     'verify.command_started',
     'verify.command_completed',

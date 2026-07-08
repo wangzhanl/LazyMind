@@ -5,7 +5,7 @@ from collections.abc import Mapping
 from hashlib import sha1
 from typing import Any
 
-DEFAULT_ALLOWED_ROOTS = ('lazymind/chat',)
+DEFAULT_ALLOWED_ROOTS = ('lazymind/chat', 'lazymind/parsing')
 DEFAULT_BLOCKED_ROOTS = ('tests', '.git', 'lazyllm', 'evo', 'data')
 BUDGET_LIMITS = {
     'target_case_budget': (8, 1, 30),
@@ -97,8 +97,6 @@ def build_repair_plan(analysis: Mapping[str, Any], policy: Mapping[str, Any]) ->
         }
         if missing:
             reason = f"malformed_repair_group_missing_{'_'.join(missing)}"
-        elif not group['candidate_files']:
-            reason = 'function block has no editable candidate files in allowed roots'
         elif confidence < 0.5:
             reason = 'selected group confidence below patch threshold'
         elif group.get('issue_category') == 'tracing' and badcase_count < 2:

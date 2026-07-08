@@ -114,6 +114,7 @@ class RepairPatch(Contract):
     algo_id: StrictStr
     candidate_algo_id: StrictStr
     status: StrictStr
+    workspace_ref: StrictStr
     diff: dict[StrictStr, StrictStr]
 
 
@@ -222,7 +223,7 @@ def build_abtest_comparison_root(
     if service.get('status') == 'skipped':
         verdict = 'skipped'
         status = 'skipped'
-        reasons.append('candidate evaluation skipped because repair patch is not verified')
+        reasons.append(_service_skip_reason(service))
         after = _copy_case_trace_ids(after, origin)
     elif service.get('status') != 'ready':
         verdict = 'candidate_service_unavailable'
@@ -253,6 +254,12 @@ def _copy_case_trace_ids(candidate: Mapping[str, Any], baseline: Mapping[str, An
         dict(row) | {'trace_id': trace_by_case.get(row['case_id'], row['trace_id'])}
         for row in candidate.get('cases', ())
     ]}
+
+
+def _service_skip_reason(service: Mapping[str, Any]) -> str:
+    health = service.get('healthcheck') if isinstance(service.get('healthcheck'), Mapping) else {}
+    message = str(health.get('message') or '').strip()
+    return message or 'candidate evaluation skipped'
 
 
 def _score(value: object) -> float:
