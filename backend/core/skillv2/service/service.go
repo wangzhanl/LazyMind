@@ -78,6 +78,11 @@ func (s *SkillService) CreateSkill(ctx context.Context, req CreateSkillRequest) 
 		}).Error; err != nil {
 			return err
 		}
+		if !enabled {
+			if err := tx.WithContext(ctx).Model(&skillRow{}).Where("id = ?", skillID).Update("is_enabled", false).Error; err != nil {
+				return err
+			}
+		}
 		if err := s.createRevision(ctx, tx, revisionSpec{
 			ID:            revisionID,
 			SkillID:       skillID,
@@ -111,6 +116,11 @@ func (s *SkillService) PatchSkill(ctx context.Context, req PatchSkillRequest) (P
 
 		if req.Source == nil {
 			updates := map[string]any{"updated_at": s.clock.Now()}
+			headRevisionID := ""
+			if skill.HeadRevisionID != nil {
+				headRevisionID = *skill.HeadRevisionID
+			}
+			committedDraftRevisionID := ""
 			if req.Name != nil {
 				updates["skill_name"] = *req.Name
 				updates["relative_root"] = path.Join(valueOr(req.Category, skill.Category), *req.Name)
@@ -130,18 +140,40 @@ func (s *SkillService) PatchSkill(ctx context.Context, req PatchSkillRequest) (P
 				updates["auto_evo"] = *req.AutoEvo
 			}
 			if req.IsEnabled != nil {
+				if *req.IsEnabled {
+					shouldPrepareEnable := !skill.IsEnabled
+					if !shouldPrepareEnable {
+						if err := ensurePublishedSkillMD(ctx, tx, skill); err != nil {
+							shouldPrepareEnable = true
+						}
+					}
+					if shouldPrepareEnable {
+						revisionID, committed, err := s.prepareEnableSkill(ctx, tx, skill, req.UserID)
+						if err != nil {
+							return err
+						}
+						headRevisionID = revisionID
+						if committed {
+							committedDraftRevisionID = revisionID
+							updates["head_revision_id"] = revisionID
+							updates["version"] = gorm.Expr("version + 1")
+						}
+					}
+				}
 				updates["is_enabled"] = *req.IsEnabled
 			}
 			if err := tx.Model(&skillRow{}).Where("id = ? AND deleted_at IS NULL", req.SkillID).Updates(updates).Error; err != nil {
 				return err
 			}
+			if committedDraftRevisionID != "" {
+				if err := s.resetDraft(tx, req.SkillID, committedDraftRevisionID); err != nil {
+					return err
+				}
+			}
 			if err := skillsearch.RebuildSkillTx(ctx, tx, req.SkillID, s.clock.Now()); err != nil {
 				return err
 			}
-			if skill.HeadRevisionID != nil {
-				out.HeadRevisionID = *skill.HeadRevisionID
-			}
-			out.SkillID = req.SkillID
+			out = PatchSkillResponse{SkillID: req.SkillID, HeadRevisionID: headRevisionID}
 			return nil
 		}
 
@@ -770,6 +802,132 @@ func (s *SkillService) resetDraft(tx *gorm.DB, skillID, baseRevisionID string) e
 	return tx.Save(&row).Error
 }
 
+func (s *SkillService) prepareEnableSkill(ctx context.Context, tx *gorm.DB, skill skillRow, userID string) (string, bool, error) {
+	var overlayCount int64
+	if err := tx.WithContext(ctx).Model(&skillDraftEntryRow{}).Where("skill_id = ?", skill.ID).Count(&overlayCount).Error; err != nil {
+		return "", false, err
+	}
+	if overlayCount == 0 {
+		if err := ensurePublishedSkillMD(ctx, tx, skill); err != nil {
+			return "", false, err
+		}
+		return valueOrEmpty(skill.HeadRevisionID), false, nil
+	}
+
+	entriesByPath, baseRevisionID, err := mergedDraftEntriesForSkill(ctx, tx, skill)
+	if err != nil {
+		return "", false, err
+	}
+	if err := ensureEntriesContainSkillMD(ctx, tx, skill.SkillMDPath, entriesByPath); err != nil {
+		return "", false, err
+	}
+	nextNo, err := s.nextRevisionNo(tx, skill.ID)
+	if err != nil {
+		return "", false, err
+	}
+	revisionID := newID()
+	entries := entriesFromMap(revisionID, entriesByPath)
+	if err := tx.WithContext(ctx).Create(&skillRevisionRow{
+		ID:               revisionID,
+		SkillID:          skill.ID,
+		ParentRevisionID: nullableString(baseRevisionID),
+		RevisionNo:       nextNo,
+		TreeHash:         hashTree(entries),
+		ChangeSource:     "draft_commit",
+		CreatedBy:        nullableString(userID),
+		CreatedAt:        s.clock.Now(),
+	}).Error; err != nil {
+		return "", false, err
+	}
+	if len(entries) > 0 {
+		if err := tx.WithContext(ctx).Create(&entries).Error; err != nil {
+			return "", false, err
+		}
+	}
+	return revisionID, true, nil
+}
+
+func mergedDraftEntriesForSkill(ctx context.Context, tx *gorm.DB, skill skillRow) (map[string]skillRevisionEntryRow, string, error) {
+	var draft skillDraftRow
+	if err := tx.WithContext(ctx).Where("skill_id = ?", skill.ID).Take(&draft).Error; err != nil {
+		return nil, "", err
+	}
+	baseRevisionID := valueOrEmpty(draft.BaseRevisionID)
+	if baseRevisionID == "" {
+		baseRevisionID = valueOrEmpty(skill.HeadRevisionID)
+	}
+	if baseRevisionID == "" {
+		return nil, "", fmt.Errorf("skill has no base revision")
+	}
+
+	var baseEntries []skillRevisionEntryRow
+	if err := tx.WithContext(ctx).Where("revision_id = ?", baseRevisionID).Order("path ASC").Find(&baseEntries).Error; err != nil {
+		return nil, "", err
+	}
+	entriesByPath := make(map[string]skillRevisionEntryRow, len(baseEntries))
+	for _, entry := range baseEntries {
+		entriesByPath[entry.Path] = entry
+	}
+
+	var overlays []skillDraftEntryRow
+	if err := tx.WithContext(ctx).Where("skill_id = ?", skill.ID).Order("path ASC").Find(&overlays).Error; err != nil {
+		return nil, "", err
+	}
+	for _, overlay := range overlays {
+		if overlay.Op == "delete" {
+			for entryPath := range entriesByPath {
+				if entryPath == overlay.Path || isAncestorPath(overlay.Path, entryPath) {
+					delete(entriesByPath, entryPath)
+				}
+			}
+			continue
+		}
+		hash := overlay.BlobHash
+		entriesByPath[overlay.Path] = skillRevisionEntryRow{
+			Path:      overlay.Path,
+			EntryType: overlay.EntryType,
+			BlobHash:  hash,
+			Size:      overlay.Size,
+			Mime:      overlay.Mime,
+			FileType:  overlay.FileType,
+			Binary:    overlay.Binary,
+			Mode:      overlay.Mode,
+		}
+	}
+	return entriesByPath, baseRevisionID, nil
+}
+
+func ensurePublishedSkillMD(ctx context.Context, tx *gorm.DB, skill skillRow) error {
+	if skill.HeadRevisionID == nil {
+		return fmt.Errorf("skill has no head revision")
+	}
+	var entries []skillRevisionEntryRow
+	if err := tx.WithContext(ctx).Where("revision_id = ?", *skill.HeadRevisionID).Find(&entries).Error; err != nil {
+		return err
+	}
+	entriesByPath := make(map[string]skillRevisionEntryRow, len(entries))
+	for _, entry := range entries {
+		entriesByPath[entry.Path] = entry
+	}
+	return ensureEntriesContainSkillMD(ctx, tx, skill.SkillMDPath, entriesByPath)
+}
+
+func ensureEntriesContainSkillMD(ctx context.Context, tx *gorm.DB, skillMDPath string, entriesByPath map[string]skillRevisionEntryRow) error {
+	skillMDPath = strings.TrimSpace(skillMDPath)
+	if skillMDPath == "" {
+		skillMDPath = "SKILL.md"
+	}
+	entry, ok := entriesByPath[skillMDPath]
+	if !ok || entry.EntryType != "file" || entry.BlobHash == nil {
+		return fmt.Errorf("skill package must contain SKILL.md")
+	}
+	var blob skillBlobRow
+	if err := tx.WithContext(ctx).Select("hash").Where("hash = ?", *entry.BlobHash).Take(&blob).Error; err != nil {
+		return err
+	}
+	return nil
+}
+
 func (s *SkillService) upsertDraftFiles(ctx context.Context, tx *gorm.DB, skillID string, files map[string][]byte) error {
 	for _, filePath := range sortedFilePaths(files) {
 		if _, err := cleanSkillPath(filePath); err != nil {
@@ -1024,6 +1182,8 @@ func (s *SkillService) summaryFor(ctx context.Context, row skillRow) (SkillSumma
 		Description:    row.Description,
 		Tags:           tags,
 		HeadRevisionID: head,
+		AutoEvo:        row.AutoEvo,
+		IsEnabled:      row.IsEnabled,
 		Draft:          draft,
 	}, nil
 }
@@ -1132,6 +1292,13 @@ func classifyFile(filePath string, data []byte) (string, string, bool) {
 func valueOr(ptr *string, fallback string) string {
 	if ptr == nil {
 		return fallback
+	}
+	return *ptr
+}
+
+func valueOrEmpty(ptr *string) string {
+	if ptr == nil {
+		return ""
 	}
 	return *ptr
 }

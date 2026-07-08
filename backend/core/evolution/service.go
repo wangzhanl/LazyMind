@@ -241,7 +241,7 @@ func BuildChatResourceContext(ctx context.Context, db *gorm.DB, userID, userName
 
 	var v2Skills []orm.SkillV2Skill
 	if err := db.WithContext(ctx).
-		Where("owner_user_id = ? AND is_enabled = ?", userID, true).
+		Where("owner_user_id = ? AND is_enabled = ? AND deleted_at IS NULL", userID, true).
 		Order("category ASC, skill_name ASC").
 		Find(&v2Skills).Error; err != nil {
 		return nil, err
@@ -283,6 +283,17 @@ func BuildChatResourceContext(ctx context.Context, db *gorm.DB, userID, userName
 	for _, skill := range v2Skills {
 		state, err := skillStateFromV2Resource(ctx, db, &skill)
 		if err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				appLog.Logger.Warn().
+					Str("user_id", userID).
+					Str("skill_id", strings.TrimSpace(skill.ID)).
+					Str("category", strings.TrimSpace(skill.Category)).
+					Str("skill_name", strings.TrimSpace(skill.SkillName)).
+					Str("head_revision_id", valueOrEmpty(skill.HeadRevisionID)).
+					Err(err).
+					Msg("skipping enabled skill with invalid published SKILL.md")
+				continue
+			}
 			return nil, err
 		}
 		parentName := strings.TrimSpace(skill.SkillName)
@@ -600,6 +611,13 @@ func firstNonEmpty(values ...string) string {
 		}
 	}
 	return ""
+}
+
+func valueOrEmpty(value *string) string {
+	if value == nil {
+		return ""
+	}
+	return strings.TrimSpace(*value)
 }
 
 func maxInt64(a, b int64) int64 {

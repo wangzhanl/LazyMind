@@ -134,6 +134,8 @@ type SkillSummary struct {
 	Tags           []string
 	HeadRevisionID string
 	FileContent    string
+	AutoEvo        bool
+	IsEnabled      bool
 	Draft          DraftSummary
 }
 
