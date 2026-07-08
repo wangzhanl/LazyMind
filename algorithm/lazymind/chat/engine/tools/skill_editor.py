@@ -241,6 +241,13 @@ class SkillEditorToolGroup:
 
         SKILL.md cannot be created or overwritten with this tool; use
         create_skill for new packages and edit_file or patch_file for SKILL.md.
+        After creating a supporting file, update SKILL.md with a relative link
+        or instruction that explains when and how the new file should be used.
+
+        Put reference material, examples, or detailed guidance under
+        references/. Put executable helper scripts under scripts/. Put static
+        media or data assets under assets/. Put reusable output or prompt
+        templates under templates/.
 
         Args:
             name: Skill name, or full "category/name" skill key.
