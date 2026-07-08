@@ -257,7 +257,7 @@ class RemoteFS(LazyLLMFSBase):
         if 'b' in mode:
             return body
         encoding = kwargs.get('encoding') or 'utf-8'
-        return TextIOWrapper(body, encoding=encoding)
+        return TextIOWrapper(body, encoding=encoding, errors=kwargs.get('errors'))
 
     def read_base64(self, path: str) -> bytes:
         data = self._request_json('content', path=self._normalize_path(path), encoding='base64')

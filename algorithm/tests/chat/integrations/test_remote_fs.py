@@ -103,6 +103,21 @@ def test_open_text_decodes_raw_content(captured_requests):
     assert calls[0]['params']['encoding'] == 'raw'
 
 
+def test_open_text_honors_decode_errors_option(captured_requests):
+    calls, responses = captured_requests
+    responses.append(FakeResponse(content=b'\xffbroken'))
+
+    with RemoteFS(base_url='http://core').open(
+        'remote://memory/memory.md',
+        'r',
+        encoding='utf-8',
+        errors='replace',
+    ) as fh:
+        assert fh.read() == '\ufffdbroken'
+
+    assert calls[0]['params']['encoding'] == 'raw'
+
+
 def test_write_and_write_file_send_raw_body_with_content_type(captured_requests):
     calls, responses = captured_requests
     responses.extend([
