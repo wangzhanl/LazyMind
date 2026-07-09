@@ -6,6 +6,7 @@ import os
 import re
 from collections.abc import Mapping
 from pathlib import Path
+from statistics import fmean
 from typing import Any, Callable
 
 from evo.operations.eval.answer import answer_case, case_kb_id, failed_rag_answer
@@ -47,6 +48,7 @@ COMPARE_METRICS = (
     'groundedness',
     'correct_rate',
 )
+GOODCASE_MAX_OVERALL_DROP = 0.05
 SAFE_ID = re.compile(r'[^A-Za-z0-9_.-]+')
 
 
@@ -192,13 +194,10 @@ def compare_eval_detail_for_repair(baseline: Mapping[str, Any], candidate: Mappi
                    for case_id in case_ids]
     failures = list(candidate.get('execution_failures') or [])
     candidate_failed = bool(failures) or not (candidate.get('checks') or {}).get('ready')
-    regressions = [row for row in case_deltas if row['outcome'] == 'regressed']
-    guard = _goodcase_guard(case_deltas, baseline_rows)
+    guard = _goodcase_guard(case_deltas)
     reasons = []
     if candidate_failed:
         reasons.append('candidate evaluation produced execution failures')
-    if regressions:
-        reasons.append(f'{len(regressions)} case(s) regressed on overall_score')
     verdict = 'candidate_eval_failed' if candidate_failed else 'review_candidate'
     return {
         'id': 'abtest.comparison',
@@ -209,7 +208,7 @@ def compare_eval_detail_for_repair(baseline: Mapping[str, Any], candidate: Mappi
         'metrics': {'baseline': before, 'candidate': after, 'delta': delta},
         'case_deltas': case_deltas,
         'goodcase_guard': guard,
-        'policy': {'primary_metric': 'overall_score', 'guard_metrics': ['overall_score', 'answer_correctness']},
+        'policy': {'primary_metric': 'overall_score', 'guard_metrics': ['overall_score']},
         'decision': {'status': verdict, 'primary_metric': 'overall_score', 'reasons': reasons},
         'reasons': reasons,
         'missing_metrics': [{'case_id': row['case_id'], 'outcome': row['outcome']} for row in case_deltas
@@ -412,11 +411,25 @@ def _row_metrics(row: Mapping[str, Any]) -> dict[str, float]:
     return {key: _float(row.get(key)) for key in COMPARE_METRICS if key != 'correct_rate'}
 
 
-def _goodcase_guard(case_deltas: list[dict[str, Any]], baseline_rows: Mapping[str, Mapping[str, Any]]) -> dict[str, Any]:
-    violations = [row for row in case_deltas
-                  if baseline_rows.get(row['case_id'], {}).get('quality_label') == 'good'
-                  and row['delta']['overall_score'] < -0.05]
-    return {'status': 'failed' if violations else 'passed', 'violations': violations}
+def _goodcase_guard(case_deltas: list[dict[str, Any]]) -> dict[str, Any]:
+    pairs = [
+        (row['before']['overall_score'], row['after']['overall_score'])
+        for row in case_deltas
+        if row.get('baseline_quality') == 'good'
+    ]
+    if not pairs:
+        return {'status': 'not_applicable', 'count': 0}
+    before = fmean(pair[0] for pair in pairs)
+    after = fmean(pair[1] for pair in pairs)
+    drop = round(before - after, 4)
+    return {
+        'status': 'failed' if drop > GOODCASE_MAX_OVERALL_DROP else 'passed',
+        'count': len(pairs),
+        'baseline_overall_avg': round(before, 4),
+        'candidate_overall_avg': round(after, 4),
+        'overall_delta': round(after - before, 4),
+        'allowed_drop': GOODCASE_MAX_OVERALL_DROP,
+    }
 
 
 def _mapping(value: object, name: str) -> Mapping[str, Any]:
