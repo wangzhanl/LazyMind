@@ -20,6 +20,7 @@ from .report import read_worker_report
 from .trace import safe_emit, trace_cursor
 from .validation import pre_validate
 from .workspace import (
+    apply_diff,
     algorithm_source_root,
     git,
     prepare_workspace,
@@ -32,6 +33,7 @@ from .workspace import (
 
 DEFAULT_SOURCE = '/app/algorithm'
 PROVIDER_NAME = re.compile(r'^[a-z0-9][a-z0-9_-]*$')
+FINAL_PATCH_STATUSES = {'validated', 'exhausted_with_patch'}
 
 
 def prepare_candidate_workspace(
@@ -96,7 +98,7 @@ def run_repair_loop(workspace: Mapping[str, Any], cases: tuple[Mapping[str, Any]
         safe_emit(trace, 'repair.loop_completed', status='failed', terminal=True, payload={'reason': reason})
         return _result('failed', plan, workspace, [], {}, reason, baseline_algo_id, trace_cursor(trace))
     attempts, session_id = [], ''
-    budget = _int(policy.get('repair_attempt_budget'), 3, 1, 20)
+    budget = _int(policy.get('repair_attempt_budget'), 10, 1, 20)
 
     for attempt_no in range(1, budget + 1):
         safe_emit(trace, 'repair.attempt_started', status='started', attempt=attempt_no,
@@ -150,6 +152,33 @@ def run_repair_loop(workspace: Mapping[str, Any], cases: tuple[Mapping[str, Any]
                       payload={'status': 'validated', 'attempt_count': len(attempts)})
             return _result('validated', plan, workspace, attempts, attempt, 'validated repair patch',
                            baseline_algo_id, trace_cursor(trace))
+    fallback = _latest_prevalidated_patch(attempts)
+    if fallback:
+        try:
+            reset_workspace(root)
+            apply_diff(root, str(fallback.get('diff') or ''))
+        except Exception as exc:
+            reason = f'exhausted patch could not be restored: {type(exc).__name__}'
+            safe_emit(trace, 'repair.loop_completed', status='failed', terminal=True,
+                      payload={'status': 'failed', 'attempt_count': len(attempts), 'reason': reason})
+            reset_workspace(root)
+            return _result('failed', plan, workspace, attempts, {}, reason, baseline_algo_id, trace_cursor(trace))
+        safe_emit(trace, 'repair.loop_completed', status='completed', terminal=True,
+                  payload={
+                      'status': 'exhausted_with_patch',
+                      'attempt_count': len(attempts),
+                      'fallback_attempt': fallback.get('attempt'),
+                  })
+        return _result(
+            'exhausted_with_patch',
+            plan,
+            workspace,
+            attempts,
+            fallback,
+            'repair exhausted validation attempts; using latest pre-validated patch',
+            baseline_algo_id,
+            trace_cursor(trace),
+        )
     safe_emit(trace, 'repair.loop_completed', status='failed', terminal=True,
               payload={'status': 'failed', 'attempt_count': len(attempts)})
     reset_workspace(root)
@@ -158,26 +187,27 @@ def run_repair_loop(workspace: Mapping[str, Any], cases: tuple[Mapping[str, Any]
 
 
 def build_verified_patch(run_id: str, loop: Mapping[str, Any]) -> dict[str, Any]:
-    if loop.get('status') != 'validated':
-        raise ValueError(f"repair did not produce a validated patch: {_text(loop.get('status')) or 'missing_status'}")
+    status = _text(loop.get('status'))
+    if status not in FINAL_PATCH_STATUSES:
+        raise ValueError(f"repair did not produce a final patch: {status or 'missing_status'}")
     attempts = loop.get('attempts') if isinstance(loop.get('attempts'), list) else []
     final = attempts[-1] if attempts and isinstance(attempts[-1], Mapping) else {}
     candidate = final.get('candidate_validation') if isinstance(final.get('candidate_validation'), Mapping) else {}
-    if candidate.get('accepted') is not True:
+    if status == 'validated' and candidate.get('accepted') is not True:
         raise ValueError('validated repair patch requires accepted candidate validation')
     raw_diff = loop.get('winning_patch_diff')
     diff = raw_diff if isinstance(raw_diff, str) else str(raw_diff or '')
     diff_by_file = _diff_by_file(diff)
     if not diff_by_file:
-        raise ValueError('validated repair patch requires a non-empty diff')
+        raise ValueError('final repair patch requires a non-empty diff')
     workspace_ref = _text(loop.get('workspace_ref'))
     if not workspace_ref:
-        raise ValueError('validated repair patch requires workspace_ref')
+        raise ValueError('final repair patch requires workspace_ref')
     return dump_contract(RepairPatch, {
         'run_id': run_id,
         'algo_id': _text(loop.get('algo_id')),
         'candidate_algo_id': _text(loop.get('candidate_algo_id')),
-        'status': 'verified',
+        'status': 'verified' if status == 'validated' else 'unvalidated',
         'workspace_ref': workspace_ref,
         'diff': diff_by_file,
     })
@@ -331,7 +361,7 @@ def _failed_case_feedback(analysis: Mapping[str, Any]) -> list[dict[str, Any]]:
 def _result(status: str, plan: Mapping[str, Any], workspace: Mapping[str, Any], attempts: list[Mapping[str, Any]],
             best: Mapping[str, Any], message: str, algo_id_value: str = '',
             trace_cursor: Mapping[str, Any] | None = None) -> dict[str, Any]:
-    winner = best if status == 'validated' else {}
+    winner = best if status in FINAL_PATCH_STATUSES else {}
     candidate = winner.get('candidate_validation') if isinstance(winner.get('candidate_validation'), Mapping) else {}
     service = candidate.get('service') if isinstance(candidate.get('service'), Mapping) else {}
     diff = str(winner.get('diff') or '')
@@ -350,6 +380,16 @@ def _result(status: str, plan: Mapping[str, Any], workspace: Mapping[str, Any], 
         'attempts': attempts,
         'trace_cursor': dict(trace_cursor or {}),
     }
+
+
+def _latest_prevalidated_patch(attempts: list[Mapping[str, Any]]) -> Mapping[str, Any]:
+    for attempt in reversed(attempts):
+        if not str(attempt.get('diff') or '').strip():
+            continue
+        pre = attempt.get('pre_validation') if isinstance(attempt.get('pre_validation'), Mapping) else {}
+        if pre.get('status') == 'passed':
+            return attempt
+    return {}
 
 
 def _worker_failure(run: Any) -> str:
