@@ -73,7 +73,7 @@ class EvoService:
     def __init__(self, root: Path) -> None:
         self.root = root
         self.threads = ThreadService(root)
-        self.projections = ProjectionService(root, self.threads.runtime)
+        self.projections = ProjectionService(root, self.threads.runtime, self.threads.is_active)
 
 
 def create_app() -> FastAPI:
