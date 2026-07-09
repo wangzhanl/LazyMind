@@ -88,6 +88,7 @@ func TestOpenAPISpecIncludesAgentEvoContracts(t *testing.T) {
 		{"get", "/api/core/agent/threads/{thread_id}/gates"},
 		{"get", "/api/core/agent/threads/{thread_id}/gates/{step}/versions/{version}"},
 		{"get", "/api/core/agent/threads/{thread_id}/gates/{step}/versions/{version}:download"},
+		{"get", "/api/core/agent/threads/{thread_id}/results/traces:compare"},
 		{"get", "/api/core/agent/threads/{thread_id}/results/traces/{trace_id}"},
 		{"get", "/api/core/agent/threads/{thread_id}/messages"},
 		{"post", "/api/core/agent/threads/{thread_id}/messages"},
@@ -141,6 +142,14 @@ func TestOpenAPISpecIncludesAgentEvoContracts(t *testing.T) {
 	binarySchema := binaryContent["schema"].(map[string]any)
 	if binarySchema["type"] != "string" || binarySchema["format"] != "binary" {
 		t.Fatalf("unexpected download response schema: %#v", binarySchema)
+	}
+
+	traceCompareOp := openAPIOperationForTest(t, spec, "get", "/api/core/agent/threads/{thread_id}/results/traces:compare")
+	traceCompareParams := openAPIParameterNamesForTest(t, traceCompareOp)
+	for _, name := range []string{"thread_id", "a", "b"} {
+		if _, ok := traceCompareParams[name]; !ok {
+			t.Fatalf("trace compare operation missing parameter %q", name)
+		}
 	}
 
 	paths := spec["paths"].(map[string]any)

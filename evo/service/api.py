@@ -207,6 +207,22 @@ def create_app() -> FastAPI:
 
         return build_trace_detail_view(trace_id)
 
+    @app.get('/threads/{thread_id}/results/traces:compare')
+    def trace_compare(
+        thread_id: str,
+        a: Annotated[str, Query(min_length=1)],
+        b: Annotated[str, Query(min_length=1)],
+    ) -> dict[str, Any]:
+        if service.threads.runtime.run_config(thread_id) is None:
+            raise HTTPException(404, f'thread not found: {thread_id}')
+        left = a.strip()
+        right = b.strip()
+        if not left or not right:
+            raise HTTPException(422, 'a and b trace ids are required')
+        from evo.traces import build_trace_compare_view
+
+        return build_trace_compare_view(left, right)
+
     @app.get('/threads/{thread_id}/messages')
     def message_history_api(
         thread_id: str,

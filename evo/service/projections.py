@@ -44,39 +44,6 @@ EVENT_TYPE_BY_ARTIFACT = {
     C.ABTEST_CANDIDATE_JUDGE_RESULT: 'abtest.candidate_judge',
     C.ABTEST_CANDIDATE_EVAL_SUMMARY: 'abtest.candidate_summary',
 }
-REPAIR_TRACE_TYPES = {
-    'repair.attempt_started': 'repair.attempt',
-    'repair.base_selected': 'repair.attempt',
-    'repair.loop_completed': 'repair.loop',
-    'repair.patch_verified': 'repair.verify',
-    'opencode.setup': 'repair.opencode',
-    'opencode.process_start': 'repair.opencode',
-    'opencode.message': 'repair.opencode',
-    'opencode.code': 'repair.opencode_code',
-    'opencode.tool_use.search': 'repair.opencode_tool',
-    'opencode.tool_use.read_file': 'repair.opencode_tool',
-    'opencode.tool_use.edit_file': 'repair.opencode_tool',
-    'opencode.tool_use.run_command': 'repair.opencode_tool',
-    'opencode.error': 'repair.opencode',
-    'opencode.process_exit': 'repair.opencode',
-    'verify.pre_validation_started': 'repair.verify',
-    'verify.diff_scope_completed': 'repair.verify',
-    'verify.hardcode_check_completed': 'repair.verify',
-    'verify.patch_policy_completed': 'repair.verify',
-    'verify.command_started': 'repair.verify',
-    'verify.command_completed': 'repair.verify',
-    'verify.pre_validation_completed': 'repair.verify',
-    'candidate.service_started': 'repair.candidate_eval',
-    'candidate.service_ready': 'repair.candidate_eval',
-    'candidate.service_failed': 'repair.candidate_eval',
-    'candidate.service_stopped': 'repair.candidate_eval',
-    'candidate.case_started': 'repair.candidate_eval',
-    'candidate.case_completed': 'repair.candidate_eval',
-    'candidate.eval_summary_completed': 'repair.candidate_eval',
-    'analysis.candidate_started': 'repair.candidate_eval',
-    'analysis.candidate_completed': 'repair.candidate_eval',
-    'analysis.delta_completed': 'repair.delta',
-}
 STEP_BY_ARTIFACT = {
     spec.artifact_id: step
     for step, specs in C.OUTPUTS.items()
@@ -953,25 +920,38 @@ def _ordered_stage_step_ids(rows: list[dict[str, Any]], stage: str) -> list[str]
 
 
 def _trace_item(thread_id: str, step_id: str, trace: Mapping[str, Any]) -> dict[str, Any] | None:
-    event_type = REPAIR_TRACE_TYPES.get(str(trace.get('type') or ''))
+    event_type = str(trace.get('type') or '')
     if not event_type:
         return None
     payload = trace.get('payload') if isinstance(trace.get('payload'), Mapping) else {}
+    status = str(trace.get('status') or 'running')
     item = {
         'event_id': str(uuid.uuid5(STEP_ID_NAMESPACE, f"{thread_id}:event-trace:{trace.get('seq')}")),
         'step_id': step_id,
         'stage': 'repair',
         'event_type': event_type,
-        'action': _action(str(trace.get('status') or 'running')),
+        'action': _action(status),
+        'status': status,
+        'source': str(trace.get('source') or ''),
+        'raw': public_value(dict(trace)),
     }
+    lifecycle = _trace_lifecycle(thread_id, step_id, trace, event_type, status, payload)
+    if lifecycle:
+        item['lifecycle'] = lifecycle
     case_id = str(payload.get('case_id') or '')
     if case_id:
         item['case'] = {'id': case_id}
     summary = {
         key: value
         for key, value in {
+            'seq': trace.get('seq'),
+            'created_at': trace.get('created_at'),
             'attempt': trace.get('attempt'),
+            'message': trace.get('message'),
+            'execution_type': payload.get('execution_type'),
             'tool_kind': payload.get('tool'),
+            'paths': payload.get('paths'),
+            'command': payload.get('command'),
             'exit_code': payload.get('returncode'),
             'decision': _scalar(payload.get('decision') or payload.get('decision_status')),
         }.items()
@@ -980,6 +960,86 @@ def _trace_item(thread_id: str, step_id: str, trace: Mapping[str, Any]) -> dict[
     if summary:
         item['summary'] = public_value(summary)
     return _clean_empty(item)
+
+
+def _trace_lifecycle(
+    thread_id: str,
+    step_id: str,
+    trace: Mapping[str, Any],
+    event_type: str,
+    status: str,
+    payload: Mapping[str, Any],
+) -> dict[str, Any]:
+    attempt = _positive_int(trace.get('attempt'))
+    phase = _trace_lifecycle_phase(event_type)
+    name = _trace_lifecycle_name(event_type, payload)
+    if not name or not phase:
+        return {}
+    scope = _trace_lifecycle_scope(event_type, payload)
+    parts = [thread_id, step_id, name]
+    if attempt:
+        parts.append(f'attempt-{attempt}')
+    if scope:
+        parts.append(scope)
+    result = {
+        'id': ':'.join(parts),
+        'name': name,
+        'phase': phase,
+        'status': status,
+        'action': _action(status),
+    }
+    if attempt:
+        result['attempt'] = attempt
+    if phase in {'finish', 'terminal'}:
+        result['terminal'] = True
+    return result
+
+
+def _trace_lifecycle_name(event_type: str, payload: Mapping[str, Any]) -> str:
+    if event_type in {'repair.attempt_started', 'repair.attempt_completed'}:
+        return 'repair.attempt'
+    if event_type in {'opencode.process_start', 'opencode.process_exit'}:
+        return 'opencode.process'
+    if event_type == 'opencode.error' and payload.get('execution_type') in {
+        'configuration_error',
+        'process_failed',
+        'process_start_failed',
+        'prompt_write_failed',
+        'timeout',
+    }:
+        return 'opencode.process'
+    if event_type in {'verify.pre_validation_started', 'verify.pre_validation_completed'}:
+        return 'verify.pre_validation'
+    if event_type in {'verify.command_started', 'verify.command_completed'}:
+        return 'verify.command'
+    if event_type in {'candidate.service_started', 'candidate.service_ready', 'candidate.service_failed'}:
+        return 'candidate.service'
+    if event_type in {'candidate.case_started', 'candidate.case_completed'}:
+        return 'candidate.case'
+    if event_type in {'analysis.candidate_started', 'analysis.candidate_completed'}:
+        return 'analysis.candidate'
+    return ''
+
+
+def _trace_lifecycle_phase(event_type: str) -> str:
+    if event_type.endswith('_started') or event_type == 'opencode.process_start':
+        return 'start'
+    if event_type.endswith('_completed') or event_type in {
+        'opencode.process_exit',
+        'candidate.service_ready',
+        'candidate.service_failed',
+        'opencode.error',
+    }:
+        return 'finish'
+    return ''
+
+
+def _trace_lifecycle_scope(event_type: str, payload: Mapping[str, Any]) -> str:
+    if event_type in {'candidate.case_started', 'candidate.case_completed'}:
+        return _text(payload.get('case_id'))
+    if event_type in {'verify.command_started', 'verify.command_completed'}:
+        return _text(payload.get('command')) or 'command'
+    return ''
 
 
 def _base_event(row: Mapping[str, Any], event_type: str, action: str) -> dict[str, Any]:
