@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import re
 import uuid
-from collections.abc import Iterable, Mapping
+from collections.abc import Callable, Iterable, Mapping
 from pathlib import Path
 from typing import Any
 
@@ -69,9 +69,15 @@ ABS_PATH = re.compile(r'(?<![:/\w])/(?!/)(?:[^\s,;)\]}\"\']*/)+[^\s,;)\]}\"\']*'
 
 
 class ProjectionService:
-    def __init__(self, root: Path, runtime: RuntimePort) -> None:
+    def __init__(
+        self,
+        root: Path,
+        runtime: RuntimePort,
+        is_thread_active: Callable[[str], bool] | None = None,
+    ) -> None:
         self.root = root
         self.runtime = runtime
+        self._is_thread_active = is_thread_active or (lambda _: False)
         self.repair_trace = RepairTraceStore(root)
         self.download_root = root / 'downloads'
         self.download_root.mkdir(parents=True, exist_ok=True)
@@ -120,7 +126,9 @@ class ProjectionService:
             rows = _source_event_rows(thread_id, store)
         finally:
             store.close()
-        items = _step_items(thread_id, rows, state, _gate_boundary_step(state, snapshot.checkpoint.current_step))
+        boundary_status = _step_boundary_status(state, snapshot.progress, self._is_thread_active(thread_id))
+        boundary_step = _step_boundary_step(state, snapshot.checkpoint.current_step, boundary_status)
+        items = _step_items(thread_id, rows, state, boundary_step, boundary_status)
         active = next((item['step_id'] for item in reversed(items) if item['active']), '')
         return {
             'thread_id': thread_id,
@@ -136,8 +144,9 @@ class ProjectionService:
             rows = _source_event_rows(thread_id, store)
             state = self.runtime.gate_state(thread_id)
             snapshot = self.runtime.query(_num_case(config)).snapshot(thread_id)
-            boundary_step = _gate_boundary_step(state, snapshot.checkpoint.current_step)
-            step_items = _step_items(thread_id, rows, state, boundary_step)
+            boundary_status = _step_boundary_status(state, snapshot.progress, self._is_thread_active(thread_id))
+            boundary_step = _step_boundary_step(state, snapshot.checkpoint.current_step, boundary_status)
+            step_items = _step_items(thread_id, rows, state, boundary_step, boundary_status)
             gate_step_id = next((item['step_id'] for item in reversed(step_items) if item['active']), '')
             step_id = _normalized_step_id(step_id)
             if step_id and step_id not in {item['step_id'] for item in step_items}:
@@ -657,6 +666,7 @@ def _step_items(
     rows: list[dict[str, Any]],
     state: FlowRunState,
     boundary_step: str = '',
+    boundary_status: str = '',
 ) -> list[dict[str, Any]]:
     by_id: dict[str, dict[str, Any]] = {}
     for row in sorted(rows, key=lambda item: item['order']):
@@ -691,7 +701,7 @@ def _step_items(
         result.append(item)
     for index in range(1, len(result)):
         result[index]['continues_previous'] = result[index - 1].get('stage') == result[index].get('stage')
-    _apply_gate_step_status(thread_id, rows, result, state, boundary_step)
+    _apply_step_boundary_status(thread_id, rows, result, state, boundary_step, boundary_status)
     return result
 
 
@@ -748,25 +758,25 @@ def _append_step_event(
     items.append(_clean_empty(item))
 
 
-def _apply_gate_step_status(
+def _apply_step_boundary_status(
     thread_id: str,
     rows: list[dict[str, Any]],
     items: list[dict[str, Any]],
     state: FlowRunState,
     boundary_step: str,
+    boundary_status: str,
 ) -> None:
-    status, _ = _gate_boundary(state.status)
-    if not status:
+    if not boundary_status:
         return
     item = _gate_step_item(items, state, boundary_step)
     if item is None:
         if not boundary_step:
             return
-        item = _synthetic_step_item(thread_id, rows, items, boundary_step, status)
+        item = _synthetic_step_item(thread_id, rows, items, boundary_step, boundary_status)
         items.append(item)
     for current in items:
         current['active'] = current is item
-    item['status'] = status
+    item['status'] = boundary_status
     item['active'] = True
 
 
@@ -791,6 +801,8 @@ def _gate_step_item(
         match = next((item for item in reversed(items) if item.get('stage') == boundary_step), None)
         if match is not None and (match.get('status') != 'completed' or not match.get('next_step_id')):
             return match
+        if state.status == 'idle':
+            return None
     running = next((item for item in reversed(items) if item.get('status') == 'running'), None)
     if running is not None:
         return running
@@ -856,9 +868,18 @@ def _gate_boundary(status: str) -> tuple[str, str]:
     return GATE_BOUNDARY_BY_STATUS.get(status, ('', ''))
 
 
-def _gate_boundary_step(state: FlowRunState, current_step: str) -> str:
+def _step_boundary_status(state: FlowRunState, progress: Iterable[Any], thread_active: bool) -> str:
     status, _ = _gate_boundary(state.status)
-    if not status:
+    if status:
+        return status
+    items = list(progress)
+    if thread_active or not items or items[-1].completed:
+        return ''
+    return 'paused' if any(item.completed for item in items) else ''
+
+
+def _step_boundary_step(state: FlowRunState, current_step: str, boundary_status: str) -> str:
+    if not boundary_status:
         return ''
     if state.pending_checkpoint is not None:
         return state.pending_checkpoint.step

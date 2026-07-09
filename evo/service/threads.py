@@ -90,6 +90,10 @@ class ThreadService:
             item['retryable'] = status['status'] == 'failed'
         return item
 
+    def is_active(self, thread_id: str) -> bool:
+        with self._lock:
+            return thread_id in self._active
+
     def delete(self, thread_id: str) -> dict[str, Any]:
         with self._lock:
             self._config(thread_id)
