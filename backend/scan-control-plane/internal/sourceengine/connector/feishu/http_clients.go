@@ -929,14 +929,6 @@ func isFeishuAuthInvalidMessage(message string) bool {
 		"token invalid",
 		"token expired",
 		"unauthorized",
-		"授权失效",
-		"授权已过期",
-		"授权过期",
-		"访问凭证无效",
-		"令牌无效",
-		"令牌过期",
-		"token无效",
-		"token过期",
 	} {
 		if strings.Contains(message, keyword) {
 			return true
@@ -964,16 +956,6 @@ func isFeishuPermissionDeniedMessage(message string) bool {
 		"not allowed",
 		"download permission",
 		"export permission",
-		"权限不足",
-		"权限不够",
-		"没有权限",
-		"无权限",
-		"无权",
-		"禁止访问",
-		"无访问权限",
-		"不可访问",
-		"下载权限",
-		"导出权限",
 	} {
 		if strings.Contains(message, keyword) {
 			return true
@@ -987,9 +969,7 @@ func isFeishuUnsupportedExportMessage(message string) bool {
 	return strings.Contains(message, "unsupported_export") ||
 		strings.Contains(message, "unsupported export") ||
 		strings.Contains(message, "export not supported") ||
-		strings.Contains(message, "not support export") ||
-		strings.Contains(message, "不支持导出") ||
-		strings.Contains(message, "暂不支持导出")
+		strings.Contains(message, "not support export")
 }
 
 func isFeishuRateLimitMessage(message string) bool {

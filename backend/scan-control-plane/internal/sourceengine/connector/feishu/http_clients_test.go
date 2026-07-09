@@ -566,20 +566,8 @@ func TestFeishuOpenAPIMapsFrequencyLimitAsRateLimited(t *testing.T) {
 func TestFeishuOpenAPIMapsPermissionTextAsPermissionDenied(t *testing.T) {
 	t.Parallel()
 
-	for _, tc := range []struct {
-		name    string
-		message string
-	}{
-		{name: "english", message: "permission denied: no download permission"},
-		{name: "chinese", message: "没有下载权限，请检查文档设置"},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
-
-			err := mapFeishuOpenAPIError("123456", tc.message, http.StatusOK)
-			assertFeishuErrorCode(t, err, connector.ErrorCodePermissionDenied)
-		})
-	}
+	err := mapFeishuOpenAPIError("123456", "permission denied: no download permission", http.StatusOK)
+	assertFeishuErrorCode(t, err, connector.ErrorCodePermissionDenied)
 }
 
 func TestFeishuOpenAPIMapsAuthTextAsAuthInvalid(t *testing.T) {
