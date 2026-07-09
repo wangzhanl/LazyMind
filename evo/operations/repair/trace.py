@@ -26,6 +26,7 @@ URL = re.compile(r'(?i)\bhttps?://[^\s,;)\]}]+')
 ABS_PATH = re.compile(r'(?<![:/\w])/(?!/)(?:[^\s,;)\]}\"\']*/)+[^\s,;)\]}\"\']*')
 EVENT_TYPES = {
     'repair.attempt_started',
+    'repair.attempt_completed',
     'repair.base_selected',
     'repair.loop_completed',
     'repair.patch_verified',

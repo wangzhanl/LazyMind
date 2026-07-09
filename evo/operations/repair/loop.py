@@ -147,6 +147,12 @@ def run_repair_loop(workspace: Mapping[str, Any], cases: tuple[Mapping[str, Any]
             'diff': diff_info['diff'],
         }
         attempts.append(attempt)
+        safe_emit(trace, 'repair.attempt_completed', status='completed' if status == 'validated' else 'failed',
+                  attempt=attempt_no, payload={
+                      'status': status,
+                      'reason': candidate.get('reason'),
+                      'files_changed': diff_info['files'],
+                  })
         if status == 'validated':
             safe_emit(trace, 'repair.loop_completed', status='completed', terminal=True,
                       payload={'status': 'validated', 'attempt_count': len(attempts)})

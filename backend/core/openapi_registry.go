@@ -509,6 +509,11 @@ type agentThreadTracePathParams struct {
 	TraceID  string `path:"trace_id"`
 }
 
+type agentThreadTraceCompareQueryParams struct {
+	A string `query:"a" required:"true"`
+	B string `query:"b" required:"true"`
+}
+
 type agentThreadEvalBadCasesQueryParams struct {
 	PageSize    int32  `query:"page_size"`
 	PageToken   string `query:"page_token"`
@@ -3270,6 +3275,16 @@ func registeredCoreOperations() []openAPIOperation {
 			PathParams:  agentThreadGateVersionPathParams{},
 			QueryParams: agentThreadABTestCaseDetailsQueryParams{},
 			Responses:   map[int]openAPIResponse{200: evoJSONResp("Evo AB test case detail page")},
+		},
+		{
+			Method:      "GET",
+			Path:        "/agent/threads/{thread_id}/results/traces:compare",
+			Summary:     "Compare agent traces",
+			Description: "Proxies Evo GET /threads/{thread_id}/results/traces:compare.",
+			Tags:        []string{"agent"},
+			PathParams:  agentThreadPathParams{},
+			QueryParams: agentThreadTraceCompareQueryParams{},
+			Responses:   map[int]openAPIResponse{200: evoJSONResp("Evo trace comparison")},
 		},
 		{
 			Method:      "GET",

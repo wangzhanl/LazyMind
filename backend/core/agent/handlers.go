@@ -273,6 +273,14 @@ func GetThreadTraceDetail(w http.ResponseWriter, r *http.Request) {
 	proxyEvoResponse(w, r, http.MethodGet, path, cloneURLValues(r.URL.Query()), nil, "application/json")
 }
 
+func CompareThreadTraces(w http.ResponseWriter, r *http.Request) {
+	threadID, ok := ownerCheckedThreadID(w, r)
+	if !ok {
+		return
+	}
+	proxyEvoResponse(w, r, http.MethodGet, threadProxyPath(threadID, "/results/traces:compare"), cloneURLValues(r.URL.Query()), nil, "application/json")
+}
+
 func StreamThreadEvents(w http.ResponseWriter, r *http.Request) {
 	streamThreadEvents(w, r, "")
 }
