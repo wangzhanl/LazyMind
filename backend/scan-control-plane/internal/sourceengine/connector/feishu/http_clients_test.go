@@ -571,7 +571,7 @@ func TestFeishuOpenAPIMapsPermissionTextAsPermissionDenied(t *testing.T) {
 		message string
 	}{
 		{name: "english", message: "permission denied: no download permission"},
-		{name: "chinese", message: "没有下载权限，请检查文档设置"},
+		{name: "chinese", message: "\u6ca1\u6709\u4e0b\u8f7d\u6743\u9650\uff0c\u8bf7\u68c0\u67e5\u6587\u6863\u8bbe\u7f6e"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
