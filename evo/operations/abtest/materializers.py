@@ -50,6 +50,7 @@ COMPARE_METRICS = (
 )
 GOODCASE_MAX_OVERALL_DROP = 0.05
 SAFE_ID = re.compile(r'[^A-Za-z0-9_.-]+')
+ABTEST_PATCH_STATUSES = {'verified', 'unvalidated'}
 
 
 def abtest_materializers() -> dict[str, Callable[[Any, Mapping[str, object]], Mapping[str, object]]]:
@@ -93,8 +94,8 @@ def candidate_service(config: Mapping[str, Any], patch: Mapping[str, Any], ctx: 
     base = {'candidate_config': dict(config), 'patch_status': _text(patch.get('status'))}
     if not _text(patch.get('diff')):
         return base | _failed_service('', '', '', '', 'invalid_repair_patch', 'repair patch has empty diff')
-    if _text(patch.get('status')) != 'verified':
-        message = f"candidate evaluation requires verified repair patch, got {_text(patch.get('status'))}"
+    if _text(patch.get('status')) not in ABTEST_PATCH_STATUSES:
+        message = f"candidate evaluation requires final repair patch, got {_text(patch.get('status'))}"
         return base | _failed_service('', '', '', '', 'invalid_repair_patch', message)
     algorithm_id = router_chat_url = admin_url = code_path = ''
     manager: RouterManager | None = None
@@ -367,11 +368,11 @@ def _candidate_max_retries(config: Mapping[str, Any]) -> str:
 def _code_path(config: Mapping[str, Any], patch: Mapping[str, Any]) -> str:
     workspace = Path(_text(patch.get('workspace_ref'))).as_posix()
     if not workspace:
-        raise ValueError('verified repair patch must provide workspace_ref')
+        raise ValueError('final repair patch must provide workspace_ref')
     expected = f'{workspace.rstrip("/")}/algorithm/lazymind/chat'
     explicit = Path(_text(config.get('code_path'))).as_posix().rstrip('/') if _text(config.get('code_path')) else ''
     if explicit and explicit != expected:
-        raise ValueError('candidate_config.code_path must match verified repair patch workspace')
+        raise ValueError('candidate_config.code_path must match final repair patch workspace')
     return expected
 
 
