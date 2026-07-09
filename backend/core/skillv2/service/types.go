@@ -97,9 +97,18 @@ type DeleteSkillRequest struct {
 	UserID  string
 }
 
+type RestoreSkillRequest struct {
+	SkillID string
+	UserID  string
+}
+
 type PurgeSkillRequest struct {
 	SkillID string
 	UserID  string
+}
+
+type EmptyTrashRequest struct {
+	UserID string
 }
 
 type DiscardDraftRequest struct {
@@ -137,6 +146,8 @@ type SkillSummary struct {
 	AutoEvo        bool
 	IsEnabled      bool
 	Draft          DraftSummary
+	DeletedAt      *time.Time
+	DeletedBy      string
 }
 
 type SkillDetail struct {

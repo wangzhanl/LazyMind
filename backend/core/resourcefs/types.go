@@ -67,19 +67,22 @@ type ReadFileRequest struct {
 }
 
 type FileResponse struct {
-	ResourceType ResourceType `json:"resource_type"`
-	Path         string       `json:"path"`
-	Content      string       `json:"content,omitempty"`
-	BlobHash     string       `json:"blob_hash"`
-	ContentHash  string       `json:"content_hash"`
-	Size         int64        `json:"size"`
-	Mime         string       `json:"mime"`
-	FileType     string       `json:"file_type"`
-	Binary       bool         `json:"binary"`
-	RevisionID   string       `json:"revision_id,omitempty"`
-	RevisionNo   int64        `json:"revision_no,omitempty"`
-	DraftVersion int64        `json:"draft_version,omitempty"`
-	DraftStatus  string       `json:"draft_status,omitempty"`
+	ResourceType  ResourceType `json:"resource_type"`
+	Path          string       `json:"path"`
+	Content       string       `json:"content,omitempty"`
+	BlobHash      string       `json:"blob_hash"`
+	ContentHash   string       `json:"content_hash"`
+	Size          int64        `json:"size"`
+	Mime          string       `json:"mime"`
+	FileType      string       `json:"file_type"`
+	Binary        bool         `json:"binary"`
+	RevisionID    string       `json:"revision_id,omitempty"`
+	RevisionNo    int64        `json:"revision_no,omitempty"`
+	DraftVersion  int64        `json:"draft_version,omitempty"`
+	DraftStatus   string       `json:"draft_status,omitempty"`
+	AgentPersona  string       `json:"agent_persona,omitempty"`
+	PreferredName string       `json:"preferred_name,omitempty"`
+	ResponseStyle string       `json:"response_style,omitempty"`
 }
 
 type WriteDraftRequest struct {
