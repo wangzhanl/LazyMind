@@ -16,6 +16,13 @@ from lazymind.rewrite.base import (
 MemoryEditorTarget = Literal['memory', 'user_preference']
 
 
+def _memory_editor_write_error(target: str, exc: Exception) -> Dict[str, Any]:
+    message = str(exc).strip()
+    if message.lower() == 'conflict':
+        return tool_error('memory_editor', 'There are pending changes. Please ask the user to handle them before modifying.')
+    return tool_error('memory_editor', f'Failed to write {target} via RemoteFS: {message}')
+
+
 def memory_editor(
     target: MemoryEditorTarget,
     op: str,
@@ -111,7 +118,7 @@ def memory_editor(
     try:
         store.write(raw_target, edited_content)
     except Exception as exc:
-        return tool_error('memory_editor', f'Failed to write {raw_target} via RemoteFS: {exc}')
+        return _memory_editor_write_error(raw_target, exc)
 
     return tool_success(
         'memory_editor',

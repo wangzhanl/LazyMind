@@ -192,10 +192,22 @@ def test_memory_editor_remote_fs_errors_return_tool_error(monkeypatch):
     monkeypatch.setattr(
         memory_mod,
         'MemoryRemoteStore',
-        lambda: FakeMemoryStore({'memory': 'old'}, write_error=RuntimeError('draft conflict')),
+        lambda: FakeMemoryStore({'memory': 'old'}, write_error=RuntimeError('conflict')),
     )
     monkeypatch.setattr(memory_mod, '_validate_generated_content', lambda memory_type, content: content)
-    write_result = memory_mod.memory_editor(
+    blocked_write_result = memory_mod.memory_editor(
+        'memory',
+        op='patch',
+        old_text='old',
+        new_text='new',
+    )
+
+    monkeypatch.setattr(
+        memory_mod,
+        'MemoryRemoteStore',
+        lambda: FakeMemoryStore({'memory': 'old'}, write_error=RuntimeError('backend down')),
+    )
+    failed_write_result = memory_mod.memory_editor(
         'memory',
         op='patch',
         old_text='old',
@@ -204,8 +216,12 @@ def test_memory_editor_remote_fs_errors_return_tool_error(monkeypatch):
 
     assert read_result['success'] is False
     assert 'Failed to read memory via RemoteFS: backend down' in read_result['error']['reason']
-    assert write_result['success'] is False
-    assert 'Failed to write memory via RemoteFS: draft conflict' in write_result['error']['reason']
+    assert blocked_write_result['success'] is False
+    assert blocked_write_result['error']['reason'] == (
+        'There are pending changes. Please ask the user to handle them before modifying.'
+    )
+    assert failed_write_result['success'] is False
+    assert 'Failed to write memory via RemoteFS: backend down' in failed_write_result['error']['reason']
 
 
 def test_read_memory_reads_remote_fs(monkeypatch):

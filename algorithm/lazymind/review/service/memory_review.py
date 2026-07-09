@@ -31,11 +31,8 @@ def _truncate_log_text(value: Any, limit: int = 4000) -> str:
 
 
 def review_memory(
-    *,
     user_id: str,
     history: List[Dict[str, Any]],
-    memory: str,
-    user: str,
     llm_config: Optional[Dict[str, Any]] = None,
 ) -> MemoryReviewResult:
     task_id = f'memory_review_{uuid4()}'
@@ -45,8 +42,7 @@ def review_memory(
     LOG.info(
         f'[MemoryReview] review started: user_id={user_id} '
         f'task_id={task_id} history_len={len(history)} '
-        f'request_memory_len={len(memory or "")} '
-        f'request_user_len={len(user or "")} has_llm_config={bool(llm_config)}'
+        f'has_llm_config={bool(llm_config)}'
     )
 
     config = {

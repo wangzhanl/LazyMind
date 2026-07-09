@@ -275,16 +275,13 @@ def test_memory_review_route_returns_task_id(monkeypatch):
     memory_review_routes = _load_memory_review_routes_module()
 
     def fake_review_memory(**kwargs):
-        assert kwargs['memory'] == 'ignored request memory'
-        assert kwargs['user'] == 'ignored request user'
+        assert set(kwargs) == {'user_id', 'history', 'llm_config'}
         return memory_review_routes.MemoryReviewResult(status='success', task_id='review_123')
 
     monkeypatch.setattr(memory_review_routes, 'review_memory', fake_review_memory)
     payload = memory_review_routes.MemoryReviewPayload(
         user_id='user-1',
         history=[{'role': 'user', 'content': '你好'}],
-        memory='ignored request memory',
-        user='ignored request user',
     )
 
     result = asyncio.run(memory_review_routes.memory_review(payload))
@@ -358,8 +355,6 @@ def test_review_memory_runs_agent_with_memory_editor_tool(monkeypatch):
     result = memory_review.review_memory(
         user_id='user-1',
         history=[{'role': 'user', 'content': '以后请用中文简洁回答'}],
-        memory='旧记忆',
-        user='旧用户画像',
         llm_config={'llm': {'model': 'test'}},
     )
 
@@ -369,8 +364,6 @@ def test_review_memory_runs_agent_with_memory_editor_tool(monkeypatch):
     assert calls['history'] == [{'role': 'user', 'content': 'normalized'}]
     assert 'RemoteFS 记忆' in calls['prompt']
     assert 'RemoteFS 用户画像' in calls['prompt']
-    assert '旧记忆' not in calls['prompt']
-    assert '旧用户画像' not in calls['prompt']
     assert calls['store_reads'] == ['memory', 'user_preference']
     assert fake_lazyllm.globals['agentic_config']['user_id'] == 'user-1'
     assert fake_lazyllm.globals['agentic_config']['task_id'] == 'memory_review_uuid-1'
@@ -428,8 +421,6 @@ def test_review_memory_returns_success_when_no_tool_submission(monkeypatch):
     result = memory_review.review_memory(
         user_id='user-1',
         history=[{'role': 'user', 'content': '你好'}],
-        memory='',
-        user='',
     )
 
     assert result.model_dump() == {'status': 'success', 'task_id': 'memory_review_uuid-2'}
