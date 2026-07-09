@@ -2,15 +2,11 @@ from typing import Any, Callable, Dict, Optional
 
 import lazyllm
 
-from lazymind.chat.integrations.remote_fs import RemoteFS
 from lazymind.chat.engine.tools.infra import (
-    create_remote_skill,
-    list_skill_files,
     normalize_skill_category,
-    remove_remote_skill,
-    rename_skill_package,
     resolve_skill_editor_identity,
     rewrite_skill_identity,
+    SkillRemoteStore,
     skill_identity_from_content,
     tool_error,
     tool_success,
@@ -51,8 +47,8 @@ class SkillEditorToolGroup:
         'remove_skill',
     ]
 
-    def __init__(self, remote_fs: Optional[RemoteFS] = None):
-        self.remote_fs = remote_fs or RemoteFS()
+    def __init__(self, store: Optional[SkillRemoteStore] = None):
+        self.store = store or SkillRemoteStore()
 
     def create_skill(self, name: str, category: Optional[str] = None, *, content: str) -> Dict[str, Any]:
         """Create a new reusable skill from full SKILL.md content.
@@ -94,46 +90,13 @@ class SkillEditorToolGroup:
                 'SKILL.md frontmatter name/category must match the tool name/category for create.'
             )
         try:
-            create_remote_skill(content_category, content_name, content or '', fs=self.remote_fs)
+            self.store.create(content_category, content_name, content or '')
         except Exception as exc:
             return _skill_editor_error('create_skill', 'Failed to create skill package', exc)
         return tool_success('create_skill', {
             'status': 'created',
-            'message': 'Skill was created and is now active.',
+            'message': 'Skill package change was written.',
         })
-
-    def _resolve_existing_skill_identity(
-        self,
-        name: str,
-        category: Optional[str],
-        tool_name: str,
-    ) -> Dict[str, Any]:
-        resolved = resolve_skill_editor_identity(name, category, tool_name)
-        if not resolved.get('error') or category or '/' in str(name or '').strip():
-            return resolved
-        if 'requires category' not in str(resolved.get('error') or ''):
-            return resolved
-
-        try:
-            from lazyllm.tools.agent.skill_manager import SkillManager
-
-            skill = SkillManager(dir='remote://skills', fs=self.remote_fs).get_skill(
-                str(name or '').strip(),
-                allow_large=True,
-            )
-        except Exception as exc:
-            return {'error': f"{resolved['error']} Failed to resolve skill name {name!r}: {exc}"}
-
-        status = skill.get('status')
-        if status == 'ambiguous':
-            return {'error': skill.get('error') or f'Ambiguous skill name {name!r}; use the full skill key.'}
-        if status != 'ok':
-            return {'error': f'Skill {name!r} was not found; provide category or full skill key.'}
-
-        parts = [part for part in RemoteFS._normalize_path(skill.get('path') or '').split('/') if part]
-        if len(parts) < 4 or parts[0] != 'skills' or parts[-1] != 'SKILL.md':
-            return {'error': f"Resolved skill {name!r} to invalid path {skill.get('path')!r}."}
-        return resolve_skill_editor_identity(f'{parts[1]}/{parts[2]}', None, tool_name)
 
     def _run_file_operation(
         self,
@@ -144,19 +107,24 @@ class SkillEditorToolGroup:
         reason: Optional[str] = None,
         **kwargs: Any,
     ) -> Dict[str, Any]:
-        resolved = self._resolve_existing_skill_identity(name, category, tool_name)
+        resolved = self.store.resolve_existing_identity(name, category)
         if resolved.get('error'):
             return tool_error(tool_name, resolved['error'])
         normalized_category = resolved['category']
         name = resolved['name']
         try:
-            result = operation(normalized_category, name, fs=self.remote_fs, **kwargs)
+            current_files = self.store.list_files(normalized_category, name)
+            result = operation(current_files, normalized_category, name, **kwargs)
+            edited_files = result.pop('files')
+            change_set = self.store.replace_files(normalized_category, name, current_files, edited_files)
         except ValueError as exc:
             if _DRAFT_BELONGS_TO_ANOTHER_TASK_ERROR in str(exc):
                 return tool_error(tool_name, _PENDING_SKILL_CHANGE_MESSAGE)
             return tool_error(tool_name, str(exc))
         except Exception as exc:
             return _skill_editor_error(tool_name, 'Failed to load or edit skill package', exc)
+        result['written_files'] = change_set['written']
+        result['deleted_files'] = change_set['deleted']
         if 'summary' not in result:
             touched = ', '.join(result.get('touched_files') or [])
             result['summary'] = reason or f'skill_editor {tool_name}: {touched}'
@@ -325,7 +293,7 @@ class SkillEditorToolGroup:
             '[rename_skill] called '
             f'name={name!r} category={category!r} new_name={new_name!r} new_category={new_category!r}'
         )
-        resolved = self._resolve_existing_skill_identity(name, category, 'rename_skill')
+        resolved = self.store.resolve_existing_identity(name, category)
         if resolved.get('error'):
             return tool_error('rename_skill', resolved['error'])
         normalized_category = resolved['category']
@@ -346,7 +314,7 @@ class SkillEditorToolGroup:
             return tool_error('rename_skill', 'rename_skill requires a different new_name or new_category.')
 
         try:
-            current_files = list_skill_files(normalized_category, name, fs=self.remote_fs)
+            current_files = self.store.list_files(normalized_category, name)
             skill_content = current_files.get('SKILL.md') or ''
             renamed_content = rewrite_skill_identity(skill_content, target_category, target_name)
         except Exception as exc:
@@ -356,13 +324,12 @@ class SkillEditorToolGroup:
             return tool_error('rename_skill', content_error)
 
         try:
-            rename_skill_package(
+            self.store.rename(
                 normalized_category,
                 name,
                 target_category,
                 target_name,
                 skill_content=renamed_content,
-                fs=self.remote_fs,
             )
         except Exception as exc:
             return _skill_editor_error('rename_skill', 'Failed to rename skill package', exc)
@@ -373,7 +340,7 @@ class SkillEditorToolGroup:
         }
         result = {
             'status': 'renamed',
-            'message': 'Skill package was renamed and is now active.',
+            'message': 'Skill package change was written.',
         }
         result.update(payload)
         return tool_success('rename_skill', result)
@@ -394,7 +361,7 @@ class SkillEditorToolGroup:
             reason: Why the skill should be removed.
         """
         lazyllm.LOG.info(f'[remove_skill] called name={name!r} category={category!r} reason={reason!r}')
-        resolved = self._resolve_existing_skill_identity(name, category, 'remove_skill')
+        resolved = self.store.resolve_existing_identity(name, category)
         if resolved.get('error'):
             return tool_error('remove_skill', resolved['error'])
         normalized_category = resolved['category']
@@ -402,10 +369,10 @@ class SkillEditorToolGroup:
         lazyllm.LOG.info(f'[remove_skill] lookup category={normalized_category!r} name={name!r}')
 
         try:
-            remove_remote_skill(normalized_category, name, fs=self.remote_fs)
+            self.store.remove(normalized_category, name)
         except Exception as exc:
             return _skill_editor_error('remove_skill', 'Failed to remove skill package', exc)
         return tool_success('remove_skill', {
             'status': 'removed',
-            'message': 'Skill was removed and is no longer active.',
+            'message': 'Skill package change was written.',
         })

@@ -1,11 +1,10 @@
 from __future__ import annotations
 
-import posixpath
 import re
 from typing import Callable, Optional
 
-from lazymind.chat.integrations.remote_fs import RemoteFS
 from .skill_identity import skill_identity_from_content
+from .skill_paths import normalize_skill_package_path
 from .skill_validation import validate_skill_content
 
 
@@ -21,61 +20,46 @@ _UNICODE_MAP = {
 }
 
 
-def normalize_skill_package_path(path: str | None) -> str:
-    raw = str(path or '').strip()
-    if not raw or raw.startswith('/') or '\\' in raw:
-        raise ValueError('operation path must be a non-empty relative POSIX path.')
-    parts = raw.split('/')
-    if any(part in ('', '.', '..') for part in parts):
-        raise ValueError("operation path must not contain empty, '.', or '..' segments.")
-    normalized = posixpath.normpath(raw)
-    if normalized in ('', '.') or normalized == '..' or normalized.startswith('../'):
-        raise ValueError('operation path must stay inside the skill package.')
-    return normalized
-
-
 def edit_skill_file(
+    current_files: dict[str, str],
     category: str,
     name: str,
     path: str,
     content: str,
-    *,
-    fs: RemoteFS,
 ) -> dict:
     normalized_path = normalize_skill_package_path(path)
-    current_files = _load_skill_package(category, name, fs=fs)
+    _validate_loaded_skill_package(current_files)
     if normalized_path not in current_files:
         raise ValueError(f'edit_file target does not exist: {normalized_path}')
     if not isinstance(content, str):
         raise ValueError("edit_file requires a string field 'content'.")
     edited_files = dict(current_files)
     edited_files[normalized_path] = content
-    return _persist_skill_file_change(
+    return _build_skill_file_change(
         category,
         name,
         normalized_path,
         current_files,
         edited_files,
-        fs=fs,
         result={
             'status': 'edited',
-            'message': 'Skill package file was edited and is now active.',
+            'message': 'Skill package file change was written.',
         },
     )
 
 
 def patch_skill_file(
+    current_files: dict[str, str],
     category: str,
     name: str,
     path: str,
     old_text: str,
     new_text: str,
     *,
-    fs: RemoteFS,
     replace_all: bool = False,
 ) -> dict:
     normalized_path = normalize_skill_package_path(path)
-    current_files = _load_skill_package(category, name, fs=fs)
+    _validate_loaded_skill_package(current_files)
     if normalized_path not in current_files:
         raise ValueError(f'patch_file target does not exist: {normalized_path}')
     if not isinstance(old_text, str):
@@ -92,16 +76,15 @@ def patch_skill_file(
         raise ValueError(error)
     edited_files = dict(current_files)
     edited_files[normalized_path] = new_content
-    return _persist_skill_file_change(
+    return _build_skill_file_change(
         category,
         name,
         normalized_path,
         current_files,
         edited_files,
-        fs=fs,
         result={
             'status': 'patched',
-            'message': 'Skill package file was patched and is now active.',
+            'message': 'Skill package file change was written.',
             'match_count': match_count,
             'strategy': strategy,
         },
@@ -109,15 +92,14 @@ def patch_skill_file(
 
 
 def create_skill_file(
+    current_files: dict[str, str],
     category: str,
     name: str,
     path: str,
     content: str,
-    *,
-    fs: RemoteFS,
 ) -> dict:
     normalized_path = normalize_skill_package_path(path)
-    current_files = _load_skill_package(category, name, fs=fs)
+    _validate_loaded_skill_package(current_files)
     if normalized_path == 'SKILL.md':
         raise ValueError('create_file cannot create or overwrite SKILL.md; use edit_file or patch_file instead.')
     if normalized_path in current_files:
@@ -126,29 +108,27 @@ def create_skill_file(
         raise ValueError("create_file requires a string field 'content'.")
     edited_files = dict(current_files)
     edited_files[normalized_path] = content
-    return _persist_skill_file_change(
+    return _build_skill_file_change(
         category,
         name,
         normalized_path,
         current_files,
         edited_files,
-        fs=fs,
         result={
             'status': 'created',
-            'message': 'Skill package file was created and is now active.',
+            'message': 'Skill package file change was written.',
         },
     )
 
 
 def delete_skill_file(
+    current_files: dict[str, str],
     category: str,
     name: str,
     path: str,
-    *,
-    fs: RemoteFS,
 ) -> dict:
     normalized_path = normalize_skill_package_path(path)
-    current_files = _load_skill_package(category, name, fs=fs)
+    _validate_loaded_skill_package(current_files)
     if normalized_path == 'SKILL.md':
         raise ValueError(
             'SKILL.md cannot be deleted with delete_file; use remove_skill to remove the whole skill package.'
@@ -157,16 +137,15 @@ def delete_skill_file(
         raise ValueError(f'delete_file target does not exist: {normalized_path}')
     edited_files = dict(current_files)
     del edited_files[normalized_path]
-    return _persist_skill_file_change(
+    return _build_skill_file_change(
         category,
         name,
         normalized_path,
         current_files,
         edited_files,
-        fs=fs,
         result={
             'status': 'deleted',
-            'message': 'Skill package file was deleted and is now active.',
+            'message': 'Skill package file change was written.',
         },
     )
 
@@ -217,40 +196,18 @@ def fuzzy_find_and_replace(
     return content, 0, None, 'Could not find a match for old_text in the file.'
 
 
-def _load_skill_package(category: str, name: str, *, fs: RemoteFS) -> dict[str, str]:
-    files = _list_skill_files(category, name, fs=fs)
+def _validate_loaded_skill_package(files: dict[str, str]) -> None:
     if 'SKILL.md' not in files:
         raise ValueError('Skill package must contain SKILL.md.')
-    return files
 
 
-def _list_skill_files(category: str, name: str, *, fs: RemoteFS) -> dict[str, str]:
-    from .skill_remote_store import list_skill_files as remote_list_skill_files
-
-    return remote_list_skill_files(category, name, fs=fs)
-
-
-def _replace_skill_package_files(
-    category: str,
-    name: str,
-    before: dict[str, str],
-    after: dict[str, str],
-    *,
-    fs: RemoteFS,
-) -> dict[str, list[str]]:
-    from .skill_remote_store import replace_skill_package_files as remote_replace_skill_package_files
-
-    return remote_replace_skill_package_files(category, name, before, after, fs=fs)
-
-
-def _persist_skill_file_change(
+def _build_skill_file_change(
     category: str,
     name: str,
     normalized_path: str,
     current_files: dict[str, str],
     edited_files: dict[str, str],
     *,
-    fs: RemoteFS,
     result: dict,
 ) -> dict:
     if edited_files == current_files:
@@ -258,17 +215,9 @@ def _persist_skill_file_change(
     if edited_files.get('SKILL.md') != current_files.get('SKILL.md'):
         _validate_skill_identity_unchanged(category, name, edited_files.get('SKILL.md') or '')
 
-    change_set = _replace_skill_package_files(
-        category,
-        name,
-        current_files,
-        edited_files,
-        fs=fs,
-    )
     result = dict(result)
+    result['files'] = edited_files
     result['touched_files'] = [normalized_path]
-    result['written_files'] = change_set['written']
-    result['deleted_files'] = change_set['deleted']
     return result
 
 
