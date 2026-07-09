@@ -22,6 +22,27 @@ type SkillReviewData struct {
 	RequestID string `json:"requestid"`
 }
 
+type SkillOrganizeRequest struct {
+	RequestID    string         `json:"requestid"`
+	UserID       string         `json:"user_id"`
+	Skills       []string       `json:"skills"`
+	FSBaseURL    string         `json:"fs_base_url"`
+	ArtifactDir  string         `json:"artifact_dir,omitempty"`
+	ModelConfigs map[string]any `json:"model_configs,omitempty"`
+}
+
+type SkillOrganizeResponse struct {
+	Code int               `json:"code"`
+	Msg  string            `json:"msg"`
+	Data SkillOrganizeData `json:"data"`
+}
+
+type SkillOrganizeData struct {
+	Status    string `json:"status"`
+	RequestID string `json:"requestid"`
+	TaskID    string `json:"taskid"`
+}
+
 type MemoryReviewRequest struct {
 	UserID    string         `json:"user_id"`
 	History   any            `json:"history"`
