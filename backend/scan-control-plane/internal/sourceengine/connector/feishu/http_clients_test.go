@@ -563,6 +563,32 @@ func TestFeishuOpenAPIMapsFrequencyLimitAsRateLimited(t *testing.T) {
 	assertFeishuErrorCode(t, err, connector.ErrorCodeRateLimited)
 }
 
+func TestFeishuOpenAPIMapsPermissionTextAsPermissionDenied(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		name    string
+		message string
+	}{
+		{name: "english", message: "permission denied: no download permission"},
+		{name: "chinese", message: "没有下载权限，请检查文档设置"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			err := mapFeishuOpenAPIError("123456", tc.message, http.StatusOK)
+			assertFeishuErrorCode(t, err, connector.ErrorCodePermissionDenied)
+		})
+	}
+}
+
+func TestFeishuOpenAPIMapsAuthTextAsAuthInvalid(t *testing.T) {
+	t.Parallel()
+
+	err := mapFeishuOpenAPIError("123456", "access token invalid", http.StatusOK)
+	assertFeishuErrorCode(t, err, ErrorCodeAuthInvalid)
+}
+
 func newHTTPAuthTestClient(t *testing.T, baseURL string) *HTTPAuthConnectionClient {
 	t.Helper()
 	client, err := NewHTTPAuthConnectionClient(baseURL, "internal-token", nil)
