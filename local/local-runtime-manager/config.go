@@ -5,12 +5,15 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 )
 
 const (
-	defaultProfileEnvVar          = "LAZYMIND_LOCAL_PROFILE"
+	runtimeProfileEnvVar          = "LAZYMIND_RUNTIME_PROFILE"
+	runtimeRootEnvVar             = "LAZYMIND_RUNTIME_ROOT"
+	runtimeResourcesRootEnvVar    = "LAZYMIND_RUNTIME_RESOURCES_ROOT"
 	localPortsPinnedEnvVar        = "LAZYMIND_LOCAL_PORTS_PINNED"
 	processComposePortEnvVar      = "LAZYMIND_PROCESS_COMPOSE_PORT"
 	localUpTimeoutEnvVar          = "LAZYMIND_LOCAL_UP_TIMEOUT"
@@ -43,16 +46,16 @@ const (
 	frontendPortEnvVar            = "LAZYMIND_FRONTEND_PORT"
 	frontendLANOriginEnvVar       = "LAZYMIND_FRONTEND_LAN_ORIGIN"
 	authServicePortEnvVar         = "LAZYMIND_AUTH_SERVICE_PORT"
-	authServicePythonEnvVar       = "LAZYMIND_AUTH_SERVICE_PYTHON"
 	authServiceUVEnvVar           = "LAZYMIND_AUTH_SERVICE_UV"
 	authServiceDatabaseURLEnvVar  = "LAZYMIND_AUTH_SERVICE_DATABASE_URL"
 	authServiceInstallDepsEnvVar  = "LAZYMIND_AUTH_SERVICE_INSTALL_DEPS"
+	localPythonVersionEnvVar      = "LAZYMIND_LOCAL_PYTHON_VERSION"
 	localSQLiteDirEnvVar          = "LAZYMIND_LOCAL_SQLITE_DIR"
 	caddyBinEnvVar                = "LAZYMIND_CADDY_BIN"
 	caddyVersionEnvVar            = "LAZYMIND_CADDY_VERSION"
-	defaultProfile                = "linux-browser"
 	processComposeVersion         = 2
 	defaultCaddyVersion           = "2.10.2"
+	defaultLocalPythonVersion     = "3.11.15"
 	defaultProcessComposePort     = 19080
 	defaultLocalUpTimeout         = 30 * 60
 	defaultLocalDownTimeout       = 2 * 60
@@ -81,20 +84,18 @@ const (
 	serviceEndpointsEnvName       = "service-endpoints.env"
 	tokenFileName                 = "pc-token"
 	upLockFileName                = "up.lock"
-	logFileName                   = "docker-stack.log"
+	logFileName                   = "process-compose.log"
 	localProxyLogFileName         = "local-proxy.log"
 	authServiceLogFileName        = "auth-service.log"
 	coreLogFileName               = "core.log"
 	frontendLogFileName           = "frontend.log"
-	repoComposeFileName           = "docker-compose.yml"
-	localComposeOverrideName      = "local/docker-compose.local.yml"
-	localProcessComposeBin        = "local/bin/process-compose"
+	localProcessComposeBin        = "local/runtime/bin/process-compose"
 	localProxyConfigName          = "local/local-proxy/configs/cloud-replace-kong.yaml"
 	localProxyScriptDirName       = "local/local-proxy/scripts"
 	localProxySourceDirName       = "local/local-proxy"
 	authServiceSourceDirName      = "backend/auth-service"
 	coreSourceDirName             = "backend/core"
-	processComposeServiceName     = "docker-stack"
+	processComposeServiceName     = "process-supervisor"
 	localProxyProcessName         = "local-proxy"
 	authServiceProcessName        = "auth-service"
 	coreProcessName               = "core"
@@ -112,20 +113,36 @@ const (
 
 type RuntimePaths struct {
 	RepoRoot                 string
+	ResourcesRoot            string
 	RuntimeRoot              string
+	CacheDir                 string
+	DataDir                  string
+	DepsDir                  string
 	StateDir                 string
 	LogsDir                  string
 	RunDir                   string
+	ConfigDir                string
 	GeneratedDir             string
 	BinDir                   string
 	StateFile                string
+	ProcessRegistryFile      string
 	RunDirTokenFile          string
 	UpLockFile               string
 	LogFilePath              string
+	ProcessComposeBin        string
+	ProcessComposePIDFile    string
 	LocalProxyLog            string
 	AuthServiceLog           string
 	AuthServicePIDFile       string
 	AuthServiceVenvDir       string
+	PythonRuntimeDir         string
+	PythonStateDir           string
+	UVCacheDir               string
+	PipCacheDir              string
+	XDGCacheDir              string
+	XDGStateDir              string
+	ProcessComposeHome       string
+	ServiceHome              string
 	AuthServiceStateDir      string
 	AuthServiceDBPath        string
 	CoreLog                  string
@@ -134,6 +151,13 @@ type RuntimePaths struct {
 	CoreStateDir             string
 	CoreDBPath               string
 	LazyLLMDBPath            string
+	UploadRoot               string
+	LazyLLMTempDir           string
+	OCRCacheDir              string
+	SubagentDataDir          string
+	TracesDir                string
+	LazyLLMHome              string
+	EvoDataDir               string
 	ScanDBPath               string
 	ScanControlPlaneLog      string
 	ScanControlPlanePIDFile  string
@@ -165,12 +189,14 @@ type RuntimePaths struct {
 	AlgorithmVenv            string
 	AlgorithmPython          string
 	AlgorithmHome            string
+	FrontendNodeModules      string
 	AlgorithmPIDDir          string
 }
 
 type RuntimeConfig struct {
 	Profile            string
 	RepoRoot           string
+	ResourcesRoot      string
 	RuntimeRoot        string
 	ModeProfile        RuntimeModeProfileConfig
 	ProcessComposePort int
@@ -184,6 +210,13 @@ type RuntimeConfig struct {
 	PortResolutions    []PortResolution `json:"-"`
 }
 
+type RuntimeConfigOptions struct {
+	Profile       string
+	RepoRoot      string
+	RuntimeRoot   string
+	ResourcesRoot string
+}
+
 type LocalProxyConfig struct {
 	Address      string
 	Port         int
@@ -195,10 +228,10 @@ type LocalProxyConfig struct {
 }
 
 type AuthServiceConfig struct {
-	Port        int
-	Python      string
-	DatabaseURL string
-	InstallDeps bool
+	Port          int
+	PythonVersion string
+	DatabaseURL   string
+	InstallDeps   bool
 }
 
 type FileWatcherConfig struct {
@@ -223,15 +256,17 @@ type VectorStoreConfig struct {
 }
 
 type AlgorithmConfig struct {
-	PostgresPort   int
-	DocPort        int
-	ProcessorPort  int
-	AlgoPort       int
-	WorkerPort     int
-	ChatPort       int
-	EvoPort        int
-	OpenSearchPort int
-	EnableEvo      bool
+	PostgresPort        int
+	DocPort             int
+	ProcessorPort       int
+	AlgoPort            int
+	WorkerPort          int
+	ChatPort            int
+	EvoPort             int
+	OpenSearchPort      int
+	RouterPortPoolStart int
+	RouterPortPoolEnd   int
+	EnableEvo           bool
 }
 
 type PortResolution struct {
@@ -256,13 +291,6 @@ type ServiceEndpointURLs struct {
 	EvoBaseURL             string `json:"evoBaseUrl"`
 	OfficeConvertURL       string `json:"officeConvertUrl"`
 	PostgresAddress        string `json:"postgresAddress"`
-}
-
-func defaultProfileValue() string {
-	if v := os.Getenv(defaultProfileEnvVar); v != "" {
-		return v
-	}
-	return defaultProfile
 }
 
 func defaultProcessComposePortValue() int {
@@ -366,6 +394,31 @@ func (a *localPortAllocator) availableFromOn(start int, attempts int, address st
 	return a.reserve(start)
 }
 
+func (a *localPortAllocator) availableBlockFromOn(start int, size int, attempts int, address string) int {
+	if size <= 0 {
+		return a.availableFromOn(start, attempts, address)
+	}
+	for port := start; port < start+attempts && port+size-1 < 65536; port++ {
+		ok := true
+		for candidate := port; candidate < port+size; candidate++ {
+			if !a.portAvailableOn(address, candidate) {
+				ok = false
+				break
+			}
+		}
+		if ok {
+			for candidate := port; candidate < port+size; candidate++ {
+				a.reserve(candidate)
+			}
+			return port
+		}
+	}
+	for candidate := start; candidate < start+size && candidate < 65536; candidate++ {
+		a.reserve(candidate)
+	}
+	return start
+}
+
 func (a *localPortAllocator) portAvailable(port int) bool {
 	if _, ok := a.used[port]; ok {
 		return false
@@ -459,6 +512,9 @@ func localNetworkProfile() (string, error) {
 func defaultFileWatcherWatchHostDir(repoRoot string) string {
 	raw := strings.TrimSpace(os.Getenv("LAZYMIND_FILE_WATCHER_WATCH_HOST_DIR"))
 	if raw == "" {
+		raw = strings.TrimSpace(os.Getenv(localHostHomeEnvVar))
+	}
+	if raw == "" {
 		raw = strings.TrimSpace(os.Getenv("HOME"))
 	}
 	if raw == "" {
@@ -473,13 +529,20 @@ func defaultFileWatcherWatchHostDir(repoRoot string) string {
 	return filepath.Clean(raw)
 }
 
-func defaultFileWatcherBaseRoot(repoRoot string) string {
+func defaultFileWatcherBaseRoot(profile string, repoRoot string, runtimeRoot string) string {
 	raw := strings.TrimSpace(os.Getenv("LAZYMIND_FILE_WATCHER_BASE_ROOT"))
 	if raw == "" {
-		raw = filepath.Join(repoRoot, ".lazymind-local", "stores", "scan", "file-watcher")
+		if profile == "desktop" {
+			raw = filepath.Join(runtimeRoot, "data", "stores", "scan", "file-watcher")
+		} else {
+			raw = filepath.Join(repoRoot, "local", "runtime", "data", "stores", "scan", "file-watcher")
+		}
 	}
 	if filepath.IsAbs(raw) {
 		return filepath.Clean(raw)
+	}
+	if profile == "desktop" {
+		return filepath.Clean(filepath.Join(runtimeRoot, raw))
 	}
 	return filepath.Clean(filepath.Join(repoRoot, raw))
 }
@@ -571,64 +634,104 @@ func resolveRepoRoot(start string) (string, error) {
 	start = filepath.Clean(start)
 
 	for {
-		candidate := filepath.Join(start, repoComposeFileName)
-		if _, err := os.Stat(candidate); err == nil {
+		makefile := filepath.Join(start, "Makefile")
+		managerMod := filepath.Join(start, "local", "local-runtime-manager", "go.mod")
+		if _, err := os.Stat(makefile); err == nil {
+			if _, err := os.Stat(managerMod); err == nil {
+				return start, nil
+			}
+		}
+		if _, err := os.Stat(filepath.Join(start, ".git")); err == nil {
 			return start, nil
 		}
 		parent := filepath.Dir(start)
 		if parent == start {
-			return "", fmt.Errorf("could not find %s in current or parent directories", repoComposeFileName)
+			return "", fmt.Errorf("could not find LazyMind repo root in current or parent directories")
 		}
 		start = parent
 	}
 }
 
 func NewRuntimeConfig(profile, repoRootHint string) (RuntimeConfig, RuntimePaths, error) {
-	if profile == "" {
-		profile = defaultProfileValue()
+	return NewRuntimeConfigWithOptions(RuntimeConfigOptions{Profile: profile, RepoRoot: repoRootHint})
+}
+
+func NewRuntimeConfigWithOptions(opts RuntimeConfigOptions) (RuntimeConfig, RuntimePaths, error) {
+	profile, err := normalizeRuntimeProfile(firstNonEmpty(opts.Profile, os.Getenv(runtimeProfileEnvVar), "local"))
+	if err != nil {
+		return RuntimeConfig{}, RuntimePaths{}, err
 	}
-	resolved, err := resolveRepoRoot(repoRootHint)
+	resolved, err := resolveRepoRoot(opts.RepoRoot)
 	if err != nil {
 		return RuntimeConfig{}, RuntimePaths{}, err
 	}
 
 	root := filepath.Clean(resolved)
-	runtimeRoot := filepath.Join(root, ".lazymind-local")
-	sqliteRoot := envText(localSQLiteDirEnvVar, filepath.Join(runtimeRoot, "stores", "sqlite"))
+	resourcesRoot := cleanOptionalPath(firstNonEmpty(opts.ResourcesRoot, os.Getenv(runtimeResourcesRootEnvVar), root))
+	runtimeRoot := cleanOptionalPath(firstNonEmpty(opts.RuntimeRoot, os.Getenv(runtimeRootEnvVar), defaultRuntimeRoot(profile, root)))
+	cacheRoot := filepath.Join(runtimeRoot, "cache")
+	dataRoot := filepath.Join(runtimeRoot, "data")
+	depsRoot := filepath.Join(runtimeRoot, "deps")
+	sqliteRoot := envText(localSQLiteDirEnvVar, filepath.Join(dataRoot, "stores", "sqlite"))
+	uploadRoot := filepath.Join(runtimeRoot, "data", "core", "uploads")
+	frontendNodeModules := filepath.Join(depsRoot, "node", "frontend")
 	p := RuntimePaths{
 		RepoRoot:                 root,
+		ResourcesRoot:            resourcesRoot,
 		RuntimeRoot:              runtimeRoot,
+		CacheDir:                 cacheRoot,
+		DataDir:                  dataRoot,
+		DepsDir:                  depsRoot,
 		StateDir:                 filepath.Join(runtimeRoot, "state"),
 		LogsDir:                  filepath.Join(runtimeRoot, "logs"),
 		RunDir:                   filepath.Join(runtimeRoot, "run"),
+		ConfigDir:                filepath.Join(runtimeRoot, "config"),
 		GeneratedDir:             filepath.Join(runtimeRoot, "generated"),
 		BinDir:                   filepath.Join(runtimeRoot, "bin"),
 		StateFile:                filepath.Join(runtimeRoot, "state", stateFileName),
+		ProcessRegistryFile:      filepath.Join(runtimeRoot, "run", "processes.json"),
 		RunDirTokenFile:          filepath.Join(runtimeRoot, "run", tokenFileName),
 		UpLockFile:               filepath.Join(runtimeRoot, "run", upLockFileName),
 		LogFilePath:              filepath.Join(runtimeRoot, "logs", logFileName),
+		ProcessComposeBin:        filepath.Join(runtimeRoot, "bin", "process-compose"),
+		ProcessComposePIDFile:    filepath.Join(runtimeRoot, "run", "process-compose.pid"),
 		LocalProxyLog:            filepath.Join(runtimeRoot, "logs", localProxyLogFileName),
 		AuthServiceLog:           filepath.Join(runtimeRoot, "logs", authServiceLogFileName),
 		AuthServicePIDFile:       filepath.Join(runtimeRoot, "run", "auth-service.pid"),
-		AuthServiceVenvDir:       filepath.Join(runtimeRoot, "venvs", "auth-service"),
-		AuthServiceStateDir:      filepath.Join(runtimeRoot, "stores", "sqlite", "auth-state"),
+		AuthServiceVenvDir:       filepath.Join(depsRoot, "python", "auth-service"),
+		PythonRuntimeDir:         filepath.Join(runtimeRoot, "runtimes", "python"),
+		PythonStateDir:           filepath.Join(runtimeRoot, "state", "python"),
+		UVCacheDir:               filepath.Join(defaultHostCacheDir(hostHomeDir()), "uv"),
+		PipCacheDir:              filepath.Join(defaultHostCacheDir(hostHomeDir()), "pip"),
+		XDGCacheDir:              filepath.Join(cacheRoot, "xdg"),
+		XDGStateDir:              filepath.Join(runtimeRoot, "state", "xdg"),
+		ProcessComposeHome:       filepath.Join(dataRoot, "homes", "process-compose"),
+		ServiceHome:              filepath.Join(dataRoot, "homes", "services"),
+		AuthServiceStateDir:      filepath.Join(dataRoot, "stores", "sqlite", "auth-state"),
 		AuthServiceDBPath:        filepath.Join(sqliteRoot, "auth", "authservice.db"),
 		CoreLog:                  filepath.Join(runtimeRoot, "logs", coreLogFileName),
 		CorePIDFile:              filepath.Join(runtimeRoot, "run", "core.pid"),
 		CoreBin:                  filepath.Join(runtimeRoot, "bin", "core"),
-		CoreStateDir:             filepath.Join(runtimeRoot, "stores", "sqlite", "core-state"),
+		CoreStateDir:             filepath.Join(dataRoot, "stores", "sqlite", "core-state"),
 		CoreDBPath:               filepath.Join(sqliteRoot, "core", "core.db"),
 		LazyLLMDBPath:            filepath.Join(sqliteRoot, "lazyllm", "app.db"),
+		UploadRoot:               uploadRoot,
+		LazyLLMTempDir:           filepath.Join(uploadRoot, ".lazyllm_temp"),
+		OCRCacheDir:              filepath.Join(uploadRoot, ".image_cache"),
+		SubagentDataDir:          filepath.Join(dataRoot, "subagent"),
+		TracesDir:                filepath.Join(dataRoot, "traces"),
+		LazyLLMHome:              filepath.Join(dataRoot, "homes", "lazyllm"),
+		EvoDataDir:               filepath.Join(dataRoot, "evo"),
 		ScanDBPath:               filepath.Join(sqliteRoot, "scan", "scan_control_plane.db"),
 		ScanControlPlaneLog:      filepath.Join(runtimeRoot, "logs", scanControlPlaneProcessName+".log"),
 		ScanControlPlanePIDFile:  filepath.Join(runtimeRoot, "run", scanControlPlaneProcessName+".pid"),
 		ScanControlPlaneBin:      filepath.Join(runtimeRoot, "bin", scanControlPlaneProcessName),
-		ScanControlPlaneStateDir: filepath.Join(runtimeRoot, "stores", "sqlite", "scan-state"),
+		ScanControlPlaneStateDir: filepath.Join(dataRoot, "stores", "sqlite", "scan-state"),
 		ScanControlPlaneTempDir:  filepath.Join(runtimeRoot, "tmp", scanControlPlaneProcessName, "sourceengine"),
 		FileWatcherLog:           filepath.Join(runtimeRoot, "logs", fileWatcherProcessName+".log"),
 		FileWatcherPIDFile:       filepath.Join(runtimeRoot, "run", fileWatcherProcessName+".pid"),
 		FileWatcherBin:           filepath.Join(runtimeRoot, "bin", fileWatcherProcessName),
-		FileWatcherBaseRoot:      defaultFileWatcherBaseRoot(root),
+		FileWatcherBaseRoot:      defaultFileWatcherBaseRoot(profile, root, runtimeRoot),
 		FrontendLog:              filepath.Join(runtimeRoot, "logs", frontendLogFileName),
 		DocServerLog:             filepath.Join(runtimeRoot, "logs", docServerProcessName+".log"),
 		ProcessorServerLog:       filepath.Join(runtimeRoot, "logs", processorServerProcessName+".log"),
@@ -638,7 +741,7 @@ func NewRuntimeConfig(profile, repoRootHint string) (RuntimeConfig, RuntimePaths
 		EvoLog:                   filepath.Join(runtimeRoot, "logs", evoProcessName+".log"),
 		MilvusLiteLog:            filepath.Join(runtimeRoot, "logs", milvusLiteProcessName+".log"),
 		MilvusLitePIDFile:        filepath.Join(runtimeRoot, "run", milvusLiteProcessName+".pid"),
-		MilvusLiteDBPath:         filepath.Join(runtimeRoot, "stores", "milvus", "lazymind.db"),
+		MilvusLiteDBPath:         filepath.Join(dataRoot, "stores", "milvus", "lazymind.db"),
 		LocalProxyBin:            filepath.Join(runtimeRoot, "bin", "local-proxy"),
 		CaddyBin:                 filepath.Join(runtimeRoot, "bin", "caddy"),
 		LocalProxyConfig:         filepath.Join(root, localProxyConfigName),
@@ -647,10 +750,16 @@ func NewRuntimeConfig(profile, repoRootHint string) (RuntimeConfig, RuntimePaths
 		GeneratedConfig:          filepath.Join(runtimeRoot, "generated", composeGeneratedFileName),
 		ServiceEndpointsJSON:     filepath.Join(runtimeRoot, "generated", serviceEndpointsJSONName),
 		ServiceEndpointsEnv:      filepath.Join(runtimeRoot, "generated", serviceEndpointsEnvName),
-		AlgorithmVenv:            filepath.Join(runtimeRoot, "python", ".venv"),
-		AlgorithmPython:          filepath.Join(runtimeRoot, "python", ".venv", "bin", "python"),
-		AlgorithmHome:            filepath.Join(runtimeRoot, "home"),
+		AlgorithmVenv:            filepath.Join(depsRoot, "python", "algorithm"),
+		AlgorithmPython:          filepath.Join(depsRoot, "python", "algorithm", "bin", "python"),
+		AlgorithmHome:            filepath.Join(dataRoot, "homes", "lazymind"),
+		FrontendNodeModules:      frontendNodeModules,
 		AlgorithmPIDDir:          filepath.Join(runtimeRoot, "run", "algorithm"),
+	}
+	if profile == "desktop" {
+		if err := applyDesktopManifestPaths(&p); err != nil {
+			return RuntimeConfig{}, RuntimePaths{}, err
+		}
 	}
 	ports := newLocalPortAllocator()
 	networkProfile, err := localNetworkProfile()
@@ -677,10 +786,40 @@ func NewRuntimeConfig(profile, repoRootHint string) (RuntimeConfig, RuntimePaths
 	openSearchPort := ports.resolvedPort("opensearch", []string{localOpenSearchPortEnvVar}, defaultLocalOpenSearchPort)
 	chatPort := ports.resolvedPort("chat", []string{localChatPortEnvVar, localProxyChatHostPortEnvVar}, defaultLocalProxyChatHostPort)
 	evoPort := ports.resolvedPort("evo-api", []string{localEvoPortEnvVar, localProxyEvoHostPortEnvVar}, defaultLocalProxyEvoHostPort)
+	routerPoolFallback := defaultRouterPortPoolStart + (processComposePort-defaultProcessComposePort)*defaultRouterPortsPerInstance
+	if routerPoolFallback < 1024 || routerPoolFallback+defaultRouterPortsPerInstance-1 >= 65536 {
+		routerPoolFallback = defaultRouterPortPoolStart
+	}
+	routerPoolStart := ports.resolvedPort("router-port-pool", []string{routerPortPoolStartEnvVar}, routerPoolFallback)
+	if !envBool(localPortsPinnedEnvVar, false) {
+		for {
+			conflict := false
+			for port := routerPoolStart + 1; port < routerPoolStart+defaultRouterPortsPerInstance && port < 65536; port++ {
+				if !ports.portAvailable(port) {
+					conflict = true
+					break
+				}
+				ports.reserve(port)
+			}
+			if !conflict {
+				break
+			}
+			routerPoolStart = ports.availableBlockFromOn(routerPoolStart+defaultRouterPortsPerInstance, defaultRouterPortsPerInstance, 500, "127.0.0.1")
+			ports.resolutions = append(ports.resolutions, PortResolution{
+				Name:          "router-port-pool",
+				RequestedPort: routerPoolFallback,
+				ResolvedPort:  routerPoolStart,
+				Reason:        "default port range unavailable",
+			})
+			break
+		}
+	}
+	routerPoolEnd := envPort(routerPortPoolEndEnvVar, routerPoolStart+defaultRouterPortsPerInstance-1)
 	milvusLiteDBPath := filepath.Clean(envText(localMilvusLiteDBPathEnvVar, p.MilvusLiteDBPath))
 	return RuntimeConfig{
 		Profile:            profile,
 		RepoRoot:           p.RepoRoot,
+		ResourcesRoot:      p.ResourcesRoot,
 		RuntimeRoot:        runtimeRoot,
 		ModeProfile:        localRuntimeModeProfile(milvusPort, milvusLiteDBPath),
 		ProcessComposePort: processComposePort,
@@ -697,21 +836,23 @@ func NewRuntimeConfig(profile, repoRootHint string) (RuntimeConfig, RuntimePaths
 			EvoHostPort:  evoPort,
 		},
 		Algorithm: AlgorithmConfig{
-			PostgresPort:   postgresPort,
-			DocPort:        docPort,
-			ProcessorPort:  processorPort,
-			AlgoPort:       algoPort,
-			WorkerPort:     workerPort,
-			ChatPort:       chatPort,
-			EvoPort:        evoPort,
-			OpenSearchPort: openSearchPort,
-			EnableEvo:      envBool(localEnableEvoEnvVar, false),
+			PostgresPort:        postgresPort,
+			DocPort:             docPort,
+			ProcessorPort:       processorPort,
+			AlgoPort:            algoPort,
+			WorkerPort:          workerPort,
+			ChatPort:            chatPort,
+			EvoPort:             evoPort,
+			OpenSearchPort:      openSearchPort,
+			RouterPortPoolStart: routerPoolStart,
+			RouterPortPoolEnd:   routerPoolEnd,
+			EnableEvo:           envBool(localEnableEvoEnvVar, false),
 		},
 		AuthService: AuthServiceConfig{
-			Port:        authHostPort,
-			Python:      envText(authServicePythonEnvVar, "python3"),
-			DatabaseURL: authServiceDatabaseURL(p.AuthServiceDBPath),
-			InstallDeps: envBool(authServiceInstallDepsEnvVar, true),
+			Port:          authHostPort,
+			PythonVersion: envText(localPythonVersionEnvVar, defaultLocalPythonVersion),
+			DatabaseURL:   authServiceDatabaseURL(p.AuthServiceDBPath),
+			InstallDeps:   envBool(authServiceInstallDepsEnvVar, true),
 		},
 		FileWatcher: FileWatcherConfig{
 			Port:          fileWatcherPort,
@@ -724,19 +865,144 @@ func NewRuntimeConfig(profile, repoRootHint string) (RuntimeConfig, RuntimePaths
 	}, p, nil
 }
 
+func applyDesktopManifestPaths(paths *RuntimePaths) error {
+	manifest, err := loadRuntimeManifest(paths.ResourcesRoot)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+	joinResource := func(value string) string {
+		if value == "" {
+			return ""
+		}
+		if filepath.IsAbs(value) {
+			return filepath.Clean(value)
+		}
+		return filepath.Join(paths.ResourcesRoot, value)
+	}
+	if value := joinResource(manifest.Binaries[processComposeServiceName]); value != "" {
+		paths.ProcessComposeBin = value
+	}
+	if value := joinResource(manifest.Binaries[localProxyProcessName]); value != "" {
+		paths.LocalProxyBin = value
+	}
+	if value := joinResource(manifest.Binaries[coreProcessName]); value != "" {
+		paths.CoreBin = value
+	}
+	if value := joinResource(manifest.Binaries[scanControlPlaneProcessName]); value != "" {
+		paths.ScanControlPlaneBin = value
+	}
+	if value := joinResource(manifest.Binaries[fileWatcherProcessName]); value != "" {
+		paths.FileWatcherBin = value
+	}
+	if value := joinResource(manifest.Binaries["caddy"]); value != "" {
+		paths.CaddyBin = value
+	}
+	if value := joinResource(manifest.Paths.LocalProxyConfig); value != "" {
+		paths.LocalProxyConfig = value
+	}
+	if value := joinResource(manifest.Paths.PythonRuntime); value != "" {
+		paths.PythonRuntimeDir = value
+	}
+	if value := joinResource(manifest.Paths.AuthServiceVenv); value != "" {
+		paths.AuthServiceVenvDir = value
+	}
+	if value := joinResource(manifest.Paths.AlgorithmVenv); value != "" {
+		paths.AlgorithmVenv = value
+		paths.AlgorithmPython = filepath.Join(value, "bin", "python")
+	}
+	return nil
+}
+
+func normalizeRuntimeProfile(profile string) (string, error) {
+	switch strings.ToLower(strings.TrimSpace(profile)) {
+	case "", "local":
+		return "local", nil
+	case "desktop":
+		return "desktop", nil
+	default:
+		return "", fmt.Errorf("%s must be local or desktop", runtimeProfileEnvVar)
+	}
+}
+
+func defaultRuntimeRoot(profile string, repoRoot string) string {
+	if profile != "desktop" {
+		return filepath.Join(repoRoot, "local", "runtime")
+	}
+	switch runtime.GOOS {
+	case "darwin":
+		return filepath.Join(hostHomeDir(), "Library", "Application Support", "LazyMind")
+	case "windows":
+		appData := strings.TrimSpace(os.Getenv("APPDATA"))
+		if appData == "" {
+			appData = filepath.Join(hostHomeDir(), "AppData", "Roaming")
+		}
+		return filepath.Join(appData, "LazyMind")
+	default:
+		configHome := strings.TrimSpace(os.Getenv("XDG_CONFIG_HOME"))
+		if configHome == "" {
+			configHome = filepath.Join(hostHomeDir(), ".config")
+		}
+		return filepath.Join(configHome, "LazyMind")
+	}
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if trimmed := strings.TrimSpace(value); trimmed != "" {
+			return trimmed
+		}
+	}
+	return ""
+}
+
+func cleanOptionalPath(path string) string {
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return ""
+	}
+	if filepath.IsAbs(path) {
+		return filepath.Clean(path)
+	}
+	if abs, err := filepath.Abs(path); err == nil {
+		return filepath.Clean(abs)
+	}
+	return filepath.Clean(path)
+}
+
 func (p RuntimePaths) EnsureAllDirs() error {
 	dirs := []string{
+		p.CacheDir,
+		p.DataDir,
+		p.DepsDir,
 		p.StateDir,
 		p.LogsDir,
 		p.RunDir,
+		p.ConfigDir,
+		filepath.Join(p.ConfigDir, "process-compose"),
 		p.GeneratedDir,
 		p.BinDir,
+		p.XDGCacheDir,
+		p.XDGStateDir,
+		p.ProcessComposeHome,
+		p.ServiceHome,
+		p.PythonRuntimeDir,
+		p.PythonStateDir,
 		filepath.Dir(p.AuthServicePIDFile),
 		p.AuthServiceStateDir,
 		filepath.Dir(p.AuthServiceDBPath),
 		p.CoreStateDir,
 		filepath.Dir(p.CoreDBPath),
 		filepath.Dir(p.LazyLLMDBPath),
+		p.UploadRoot,
+		p.LazyLLMTempDir,
+		p.OCRCacheDir,
+		p.SubagentDataDir,
+		p.TracesDir,
+		p.LazyLLMHome,
+		p.EvoDataDir,
 		filepath.Dir(p.ScanDBPath),
 		p.ScanControlPlaneStateDir,
 		p.ScanControlPlaneTempDir,
@@ -744,6 +1010,7 @@ func (p RuntimePaths) EnsureAllDirs() error {
 		p.AuthServiceVenvDir,
 		filepath.Dir(p.AlgorithmVenv),
 		p.AlgorithmHome,
+		p.FrontendNodeModules,
 		p.AlgorithmPIDDir,
 		filepath.Dir(p.MilvusLiteDBPath),
 	}

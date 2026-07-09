@@ -203,6 +203,7 @@ func registerAllRoutes(r *mux.Router) {
 	handleAPI(r, "POST", "/plugin-drafts", []string{"qa.write"}, plugin.CreatePluginDraft)
 	handleAPI(r, "GET", "/plugin-drafts/{draft_id}", []string{"qa.read"}, plugin.GetPluginDraft)
 	handleAPI(r, "POST", "/plugin-drafts/{draft_id}:save", []string{"qa.write"}, plugin.SavePluginDraft)
+	handleAPI(r, "POST", "/plugin-drafts/{draft_id}:ai-generate", []string{"qa.write"}, plugin.AIGeneratePluginDraft)
 	handleAPI(r, "DELETE", "/plugin-drafts/{draft_id}", []string{"qa.write"}, plugin.DeletePluginDraft)
 
 	// ----- Task Center -----
@@ -258,6 +259,9 @@ func registerAllRoutes(r *mux.Router) {
 	handleAPI(r, "GET", "/conversations/{conversation_id}/dismissed-plugin-sessions", []string{"qa.read"}, plugin.ListDismissedSessionsHandler)
 	handleAPI(r, "GET", "/evolution/tasks", []string{"qa.read"}, resourceupdate.ListTasks)
 	handleAPI(r, "GET", "/evolution/tasks/{task_id}", []string{"qa.read"}, resourceupdate.GetTask)
+	handleAPI(r, "GET", "/skill-review:summary", []string{"qa.read"}, resourceupdate.GetSkillReviewSummary)
+	handleAPI(r, "POST", "/skill-review:run", []string{"qa.write"}, resourceupdate.RunSkillReview)
+	handleAPI(r, "GET", "/skill-review/tasks", []string{"qa.read"}, resourceupdate.ListSkillReviewTasks)
 	handleAPI(r, "GET", "/skill-review-results", []string{"qa.read"}, resourceupdate.ListSkillReviewResults)
 	handleAPI(r, "GET", "/skill-review-results/{review_result_id}", []string{"qa.read"}, resourceupdate.GetSkillReviewResult)
 	handleAPI(r, "POST", "/skill-review-results/{review_result_id}:accept", []string{"qa.read"}, resourceupdate.AcceptSkillReviewResult)

@@ -2,6 +2,8 @@ import { lazy, Suspense } from 'react';
 import { Spin } from 'antd';
 import type { GraphModel } from '../core/model';
 import type { ValidationError } from '../core/validator';
+import type { PluginModel } from '../core/pluginModel';
+import type { ScenarioData } from '../ScenarioEditor';
 import type { CanvasHandle } from './Canvas';
 
 export type { CanvasHandle };
@@ -12,7 +14,11 @@ interface Props {
   model: GraphModel;
   errors: ValidationError[];
   onModelChange: (model: GraphModel) => void;
+  pluginModel?: PluginModel;
+  scenarioData?: ScenarioData;
+  onScenarioChange?: (data: ScenarioData) => void;
   canvasRef?: React.Ref<CanvasHandle>;
+  readonly?: boolean;
 }
 
 export default function GraphCanvas(props: Props) {
