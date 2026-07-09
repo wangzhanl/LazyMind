@@ -19,7 +19,10 @@ MemoryEditorTarget = Literal['memory', 'user_preference']
 def _memory_editor_write_error(target: str, exc: Exception) -> Dict[str, Any]:
     message = str(exc).strip()
     if message.lower() == 'conflict':
-        return tool_error('memory_editor', 'There are pending changes. Please ask the user to handle them before modifying.')
+        return tool_error(
+            'memory_editor',
+            'There are pending changes. Please ask the user to handle them before modifying.',
+        )
     return tool_error('memory_editor', f'Failed to write {target} via RemoteFS: {message}')
 
 

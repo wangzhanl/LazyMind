@@ -32,22 +32,22 @@ class SkillRemoteStore:
         if '/' in raw_name:
             parts = [part.strip() for part in raw_name.split('/')]
             if len(parts) != 2 or not all(parts):
-                return {'error': f"Skill key {raw_name!r} must be in 'category/name' form."}
+                return {'error': f'Skill key {raw_name!r} must be in \'category/name\' form.'}
             key_category = normalize_skill_category(parts[0])
             key_name = parts[1]
             if not key_category:
                 return {
                     'error': (
-                        f"Skill key {raw_name!r} has invalid category; it must be a single ASCII-safe path segment."
+                        f'Skill key {raw_name!r} has invalid category; it must be a single ASCII-safe path segment.'
                     )
                 }
             name_error = validate_skill_name(key_name)
             if name_error:
-                return {'error': f"Skill key {raw_name!r} has invalid name: {name_error}"}
+                return {'error': f'Skill key {raw_name!r} has invalid name: {name_error}'}
             if normalized_category and normalized_category != key_category:
                 return {
                     'error': (
-                        f"Skill key {raw_name!r} conflicts with category {category!r}; "
+                        f'Skill key {raw_name!r} conflicts with category {category!r}; '
                         'they must refer to the same category.'
                     )
                 }
@@ -61,10 +61,13 @@ class SkillRemoteStore:
 
         matches = self._find_packages_by_name(raw_name)
         if not matches:
-            return {'error': f"Skill {raw_name!r} was not found; provide category or full skill key."}
+            return {'error': f'Skill {raw_name!r} was not found; provide category or full skill key.'}
         if len(matches) > 1:
-            first = f'{matches[0]["category"]}/{matches[0]["name"]}'
-            return {'error': f"Ambiguous skill name {raw_name!r}; use the full skill key such as {first!r}."}
+            first_match = matches[0]
+            first_category = first_match['category']
+            first_name = first_match['name']
+            first = f'{first_category}/{first_name}'
+            return {'error': f'Ambiguous skill name {raw_name!r}; use the full skill key such as {first!r}.'}
         return matches[0]
 
     def list_files(self, category: str, name: str) -> Dict[str, str]:
