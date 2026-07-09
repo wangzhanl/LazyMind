@@ -28,6 +28,31 @@ from lazyllm.tools.agent.base import _write_agent_data
 
 from lazymind.chat.plugin import plugin_loader
 
+_COLD_START_PLUGIN_PROMPT = (
+    '## Available Plugins\n'
+    'IMPORTANT: Only trigger a plugin when the capability matches the '
+    "user's PRIMARY and DIRECT intent — the main goal they are asking for "
+    'right now. Never trigger a plugin for a sub-step that the model has '
+    "internally decided is part of a larger multi-step plan. If the user's "
+    'request involves multiple steps and only one of those steps would use a '
+    'plugin, do NOT trigger the plugin. Never infer plugin intent from '
+    'indirect or implicit cues.\n'
+    'When a plugin does match the user\'s primary and direct intent, call '
+    'the matching `trigger_<plugin>_plugin` tool before using `ask_user`. '
+    'Do not ask clarification questions first just because optional details '
+    "are missing; pass the user's exact original request to the plugin so its "
+    'workflow can collect context or proceed with sensible defaults.\n\n'
+    'CRITICAL — explicit plugin start requests:\n'
+    'If the user explicitly asks to start, launch, or enable a plugin (e.g. '
+    '"启动绘图插件", "打开图片生成插件", "启动图片插件", "start the image plugin"), '
+    'you MUST call the matching `trigger_<plugin_id>_plugin` tool in this same '
+    'response before any other action. Do NOT reply with text only, do NOT call '
+    '`image_generator` / `image_editor` directly, and do NOT ask clarification '
+    'questions first. Pass the user\'s request as `user_input` (or repeat their '
+    'start phrase if they gave no further detail).\n'
+    'For the AI image plugin (`image-plugin`), call `trigger_image_plugin`.\n\n'
+)
+
 
 # ---------------------------------------------------------------------------
 # Framework tools always injected into every plugin step regardless of what
@@ -394,6 +419,13 @@ def _build_step_choices_doc(
                 '  If they belong to a choice node (route:choice), pick exactly ONE based on conditions.\n'
                 '  For steps annotated with [when: ...], only advance to that step if the condition holds.'
             )
+    # Self-retry: current_step is injected into all_reachable without a graph self-loop.
+    # Document it here so ChatAgent knows it can pass step_id=current_step to re-run.
+    if current_step and current_step not in {'__start__', '__end__'}:
+        label = step_labels.get(current_step, '')
+        suffix = f'  ({label})' if label else ''
+        lines.append('Retry (re-run current step):')
+        lines.append(f'  - {current_step}{suffix}  <- full or partial retry of this step')
     if rewind_steps:
         lines.append('Rewind (re-run a past step):')
         for s in rewind_steps:
@@ -436,11 +468,12 @@ def build_cold_start_tools() -> List[Any]:
                 f'{tool_desc}\n\n'
                 'Args:\n'
                 '    user_input (str): A concise goal statement for the SubAgent that\n'
-                '        will execute this step.  Synthesise the key intent from the\n'
-                '        conversation — do NOT pass vague phrases like "继续", "请继续",\n'
-                '        or "continue".  Include: what the user wants to achieve, any\n'
-                '        style / quality constraints they mentioned, and relevant context\n'
-                '        from the chat history.  Example: "生成一张科幻风格的宇宙飞船插画，\n'
+                '        will execute this step. Use ONLY the latest user query in this turn;\n'
+                '        do NOT pass vague phrases like "继续", "请继续", or "continue".\n'
+                '        Include: what the user wants to achieve, and style / quality\n'
+                '        constraints explicitly mentioned in that query only.\n'
+                '        Do NOT inject prior-turn context unless the user explicitly repeats it.\n'
+                '        Example: "生成一张科幻风格的宇宙飞船插画，\n'
                 '        线条简洁，色调冷蓝，适合作为游戏启动画面背景".\n\n'
                 'Returns:\n'
                 '    Confirmation that the plugin was started.'
@@ -468,6 +501,9 @@ def build_advance_step_and_hand_off_tool(
     rewind = list(rewind_steps or [])
     labels = step_labels or {}
     all_reachable = list(forward) + rewind
+    # Self-retry: is_reachable allows current_step → current_step even without a graph edge.
+    if current_step and current_step not in all_reachable:
+        all_reachable = [current_step] + all_reachable
 
     choices_doc = _build_step_choices_doc(forward, rewind, labels, plugin_id=plugin_id, current_step=current_step)
 
@@ -536,8 +572,9 @@ def build_advance_step_and_hand_off_tool(
         + choices_doc + '\n\n'
         'Args:\n'
         '    step_id (str): Step to advance to (see list above) or "__end__".\n'
-        '    user_input (str): Concise goal statement for the SubAgent — synthesise intent\n'
-        '        from the conversation.  Do NOT pass vague phrases like "继续" or "continue".\n'
+        '    user_input (str): Concise goal statement for the SubAgent based on the latest\n'
+        '        user query only. Do NOT pass vague phrases like "继续" or "continue", and\n'
+        '        do NOT include prior-turn context unless the user explicitly repeats it.\n'
         '    runtime_instruction (str, optional): Ephemeral directive for this run only.\n'
         '    partial_indices (dict, optional): Maps slot → list_index values to\n'
         '        overwrite (list-cardinality slots only).\n\n'
@@ -564,6 +601,8 @@ def build_advance_step_tool(
     rewind = list(rewind_steps or [])
     labels = step_labels or {}
     all_reachable = list(forward) + rewind
+    if current_step and current_step not in all_reachable:
+        all_reachable = [current_step] + all_reachable
 
     choices_doc = _build_step_choices_doc(forward, rewind, labels, plugin_id=plugin_id, current_step=current_step)
 
@@ -606,7 +645,7 @@ def build_advance_step_tool(
         + choices_doc + '\n\n'
         'Args:\n'
         '    step_id (str): Step to advance to (see list above).\n'
-        '    user_input (str): Concise goal statement for the SubAgent.\n'
+        '    user_input (str): Concise goal statement from the latest user query only.\n'
         '    runtime_instruction (str, optional): Ephemeral directive for this run.\n'
         '    partial_indices (dict, optional): List-slot overwrite indices.\n\n'
         'Returns:\n'
@@ -683,7 +722,9 @@ def build_update_intent_tool() -> Any:
 
         Args:
             scope (str): 'session' for global or 'step' for step-specific constraint.
-            content (str): The intent/constraint description, in the user's own words.
+            content (str): A concise model-generated summary of the user's emphasized
+                constraints in the latest query (not a full raw quote). If no explicit
+                constraints are present, do not call this tool.
             step_id (str, optional): Required when scope='step'.
 
         Returns:
@@ -1002,19 +1043,7 @@ def resolve_plugin_injection(
                     for spec in (plugin_loader._registry or {}).values()
                 ]
                 plugin_system_prompt = (
-                    '## Available Plugins\n'
-                    'IMPORTANT: Only trigger a plugin when the capability matches the '
-                    'user\'s PRIMARY and DIRECT intent — the main goal they are asking for '
-                    'right now. Never trigger a plugin for a sub-step that the model has '
-                    'internally decided is part of a larger multi-step plan. If the user\'s '
-                    'request involves multiple steps and only one of those steps would use a '
-                    'plugin, do NOT trigger the plugin. Never infer plugin intent from '
-                    'indirect or implicit cues.\n'
-                    'When a plugin does match the user\'s primary and direct intent, call '
-                    'the matching `trigger_<plugin>_plugin` tool before using `ask_user`. '
-                    'Do not ask clarification questions first just because optional details '
-                    'are missing; pass the user\'s exact original request to the plugin so its '
-                    'workflow can collect context or proceed with sensible defaults.\n\n'
+                    _COLD_START_PLUGIN_PROMPT
                 ) + '\n\n---\n\n'.join(s for s in scenarios if s)
     else:
         # No plugin_context provided: still inject cold-start triggers
@@ -1026,19 +1055,7 @@ def resolve_plugin_injection(
                 for spec in (plugin_loader._registry or {}).values()
             ]
             plugin_system_prompt = (
-                '## Available Plugins\n'
-                'IMPORTANT: Only trigger a plugin when the capability matches the '
-                'user\'s PRIMARY and DIRECT intent — the main goal they are asking for '
-                'right now. Never trigger a plugin for a sub-step that the model has '
-                'internally decided is part of a larger multi-step plan. If the user\'s '
-                'request involves multiple steps and only one of those steps would use a '
-                'plugin, do NOT trigger the plugin. Never infer plugin intent from '
-                'indirect or implicit cues.\n'
-                'When a plugin does match the user\'s primary and direct intent, call '
-                'the matching `trigger_<plugin>_plugin` tool before using `ask_user`. '
-                'Do not ask clarification questions first just because optional details '
-                'are missing; pass the user\'s exact original request to the plugin so its '
-                'workflow can collect context or proceed with sensible defaults.\n\n'
+                _COLD_START_PLUGIN_PROMPT
             ) + '\n\n---\n\n'.join(s for s in scenarios if s)
 
     return plugin_tools, plugin_system_prompt, plugin_stop_tools, agentic_config_patch, plugin_artifact_context
@@ -1144,7 +1161,13 @@ def _build_mode_guidance(
     # --- Global decision rules (apply to both auto and dynamic modes) ---
     global_rules = (
         '\n\n## Step decision rules (READ BEFORE EVERY ACTION)\n\n'
-        '### Rule 1 — Intent-change detection (highest priority)\n'
+        '### Rule 0 — Intent capture from latest user query (highest priority)\n'
+        'At the beginning of each plugin turn, inspect ONLY the latest user query.\n'
+        'If it contains explicit constraints/emphasis (e.g. "必须/务必/一定/不要/不许/禁止/只能/根据..."),\n'
+        'you MUST call `update_intent(scope="session", content="<concise summary>")` FIRST,\n'
+        'before any step-advance tool call. Summarize 1-2 key constraints in concise Chinese.\n'
+        'If the latest query has no explicit new constraints, do NOT call update_intent.\n\n'
+        '### Rule 1 — Intent-change detection\n'
         'Before advancing any step, check whether the user is rejecting or changing\n'
         'the outcome of a step that has ALREADY SUCCEEDED. Signals include:\n'
         '  - Direct negation: "我不喜欢…", "换成…", "不要…", "重新…", "I don\'t like…"\n'
