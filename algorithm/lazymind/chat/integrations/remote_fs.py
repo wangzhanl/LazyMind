@@ -41,7 +41,7 @@ class RemoteFS(LazyLLMFSBase):
     def _raw_request(self, method: str, endpoint: str, **kwargs) -> requests.Response:
         agentic_config = lazyllm.globals.get('agentic_config') or {}
         user_id = agentic_config.get('user_id')
-        task_id = agentic_config.get('session_id')
+        task_id = agentic_config.get('session_id') or agentic_config.get('task_id')
         params = kwargs.pop('params', {})
         if user_id:
             params['user_id'] = user_id
@@ -257,7 +257,7 @@ class RemoteFS(LazyLLMFSBase):
         if 'b' in mode:
             return body
         encoding = kwargs.get('encoding') or 'utf-8'
-        return TextIOWrapper(body, encoding=encoding)
+        return TextIOWrapper(body, encoding=encoding, errors=kwargs.get('errors'))
 
     def read_base64(self, path: str) -> bytes:
         data = self._request_json('content', path=self._normalize_path(path), encoding='base64')
@@ -284,9 +284,13 @@ class RemoteFS(LazyLLMFSBase):
                     rel_path = remote_name[len(prefix):]
                 else:
                     rel_path = remote_name.rsplit('/', 1)[-1]
-                if not rel_path or rel_path.startswith('../') or '/..' in rel_path:
+                rel_parts = [part for part in rel_path.replace('\\', '/').split('/') if part]
+                if not rel_parts or any(part in ('.', '..') for part in rel_parts):
                     raise RuntimeError(f'remote-fs materialize got invalid relative path: {rel_path!r}')
-                destination = os.path.join(local_dir, *rel_path.split('/'))
+                local_root = os.path.abspath(local_dir)
+                destination = os.path.abspath(os.path.join(local_root, *rel_parts))
+                if os.path.commonpath([local_root, destination]) != local_root:
+                    raise RuntimeError(f'remote-fs materialize got invalid relative path: {rel_path!r}')
                 os.makedirs(os.path.dirname(destination), exist_ok=True)
                 with self.open(remote_name, 'rb') as src, open(destination, 'wb') as dst:
                     dst.write(src.read())

@@ -12,8 +12,8 @@ from .memory_editor import memory_editor
 from .memory_reader import read_memory
 from .multimodal import image_editor, image_generator, vision_extractor
 from .schedule import build_schedule_tool_group
-from .system_query import SystemQueryToolGroup
 from .skill_editor import SkillEditorToolGroup
+from .system_query import SystemQueryToolGroup
 from .vocab_learn import vocab_learn
 from .web_search import url_fetch
 from .writer import WriterToolGroup
@@ -30,8 +30,8 @@ __all__ = [
     'memory_editor',
     'read_memory',
     'vision_extractor',
-    'SystemQueryToolGroup',
     'SkillEditorToolGroup',
+    'SystemQueryToolGroup',
     'vocab_learn',
     'url_fetch',
     'WriterToolGroup',
