@@ -7,6 +7,8 @@ type SkillReviewRequest struct {
 	EndTime         string         `json:"end_time"`
 	MinUserTurns    int            `json:"min_user_turns,omitempty"`
 	MinToolTurns    int            `json:"min_tool_turns,omitempty"`
+	SkillBaseDir    string         `json:"skill_base_dir,omitempty"`
+	FSBaseURL       string         `json:"fs_base_url,omitempty"`
 	PendingSkillIDs []string       `json:"pending_skill_ids,omitempty"`
 	ModelConfigs    map[string]any `json:"model_configs,omitempty"`
 }
@@ -20,6 +22,7 @@ type SkillReviewResponse struct {
 type SkillReviewData struct {
 	Status    string `json:"status"`
 	RequestID string `json:"requestid"`
+	TaskID    string `json:"taskid,omitempty"`
 }
 
 type SkillOrganizeRequest struct {
