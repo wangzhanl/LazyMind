@@ -929,14 +929,14 @@ func isFeishuAuthInvalidMessage(message string) bool {
 		"token invalid",
 		"token expired",
 		"unauthorized",
-		"授权失效",
-		"授权已过期",
-		"授权过期",
-		"访问凭证无效",
-		"令牌无效",
-		"令牌过期",
-		"token无效",
-		"token过期",
+		"\u6388\u6743\u5931\u6548",
+		"\u6388\u6743\u5df2\u8fc7\u671f",
+		"\u6388\u6743\u8fc7\u671f",
+		"\u8bbf\u95ee\u51ed\u8bc1\u65e0\u6548",
+		"\u4ee4\u724c\u65e0\u6548",
+		"\u4ee4\u724c\u8fc7\u671f",
+		"token\u65e0\u6548",
+		"token\u8fc7\u671f",
 	} {
 		if strings.Contains(message, keyword) {
 			return true
@@ -964,16 +964,16 @@ func isFeishuPermissionDeniedMessage(message string) bool {
 		"not allowed",
 		"download permission",
 		"export permission",
-		"权限不足",
-		"权限不够",
-		"没有权限",
-		"无权限",
-		"无权",
-		"禁止访问",
-		"无访问权限",
-		"不可访问",
-		"下载权限",
-		"导出权限",
+		"\u6743\u9650\u4e0d\u8db3",
+		"\u6743\u9650\u4e0d\u591f",
+		"\u6ca1\u6709\u6743\u9650",
+		"\u65e0\u6743\u9650",
+		"\u65e0\u6743",
+		"\u7981\u6b62\u8bbf\u95ee",
+		"\u65e0\u8bbf\u95ee\u6743\u9650",
+		"\u4e0d\u53ef\u8bbf\u95ee",
+		"\u4e0b\u8f7d\u6743\u9650",
+		"\u5bfc\u51fa\u6743\u9650",
 	} {
 		if strings.Contains(message, keyword) {
 			return true
@@ -988,8 +988,8 @@ func isFeishuUnsupportedExportMessage(message string) bool {
 		strings.Contains(message, "unsupported export") ||
 		strings.Contains(message, "export not supported") ||
 		strings.Contains(message, "not support export") ||
-		strings.Contains(message, "不支持导出") ||
-		strings.Contains(message, "暂不支持导出")
+		strings.Contains(message, "\u4e0d\u652f\u6301\u5bfc\u51fa") ||
+		strings.Contains(message, "\u6682\u4e0d\u652f\u6301\u5bfc\u51fa")
 }
 
 func isFeishuRateLimitMessage(message string) bool {
