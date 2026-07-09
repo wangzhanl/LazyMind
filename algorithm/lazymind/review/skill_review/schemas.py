@@ -16,8 +16,7 @@ class SkillReviewRequest(BaseModel):
     min_user_turns: int = Field(default=2, ge=0)
     min_tool_turns: int = Field(default=5, ge=0)
     artifact_dir: Optional[str] = None
-    skill_base_dir: str = 'skills'
-    fs_base_url: Optional[str] = None
+    pending_skill_ids: List[str] = Field(default_factory=list)
     model_configs: Dict[str, Any] = Field(default_factory=dict)
 
     @model_validator(mode='after')
