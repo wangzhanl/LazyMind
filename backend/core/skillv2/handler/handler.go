@@ -283,6 +283,80 @@ func Delete(w http.ResponseWriter, r *http.Request) {
 	common.ReplyOK(w, map[string]any{"deleted": true})
 }
 
+func Trash(w http.ResponseWriter, r *http.Request) {
+	Delete(w, r)
+}
+
+func ListTrash(w http.ResponseWriter, r *http.Request) {
+	db, ok := requireDB(w)
+	if !ok {
+		return
+	}
+	userID, _, ok := requireUser(w, r)
+	if !ok {
+		return
+	}
+	resp, err := newSkillService(db).ListTrashedSkills(r.Context(), skillservice.ListSkillsRequest{UserID: userID})
+	if err != nil {
+		replyServiceError(w, err)
+		return
+	}
+	items := filterTrashedSkillSummaries(resp.Items, r)
+	total := len(items)
+	items = paginateSkillSummaries(items, r)
+	out := make([]map[string]any, 0, len(items))
+	for _, item := range items {
+		out = append(out, skillSummaryDTO(item))
+	}
+	common.ReplyOK(w, map[string]any{
+		"items":     out,
+		"page":      positiveQueryInt(r, "page", 1),
+		"page_size": positiveQueryInt(r, "page_size", 20),
+		"total":     total,
+	})
+}
+
+func Restore(w http.ResponseWriter, r *http.Request) {
+	db, skillID, userID, ok := requireSkillInTrash(w, r)
+	if !ok {
+		return
+	}
+	if err := newSkillService(db).RestoreSkill(r.Context(), skillservice.RestoreSkillRequest{SkillID: skillID, UserID: userID}); err != nil {
+		replyServiceError(w, err)
+		return
+	}
+	common.ReplyOK(w, map[string]any{"restored": true, "skill_id": skillID})
+}
+
+func Purge(w http.ResponseWriter, r *http.Request) {
+	db, skillID, userID, ok := requireSkillInTrash(w, r)
+	if !ok {
+		return
+	}
+	if err := newSkillService(db).PurgeSkill(r.Context(), skillservice.PurgeSkillRequest{SkillID: skillID, UserID: userID}); err != nil {
+		replyServiceError(w, err)
+		return
+	}
+	common.ReplyOK(w, map[string]any{"purged": true, "skill_id": skillID})
+}
+
+func EmptyTrash(w http.ResponseWriter, r *http.Request) {
+	db, ok := requireDB(w)
+	if !ok {
+		return
+	}
+	userID, _, ok := requireUser(w, r)
+	if !ok {
+		return
+	}
+	count, err := newSkillService(db).EmptyTrash(r.Context(), skillservice.EmptyTrashRequest{UserID: userID})
+	if err != nil {
+		replyServiceError(w, err)
+		return
+	}
+	common.ReplyOK(w, map[string]any{"purged": count})
+}
+
 func Tree(w http.ResponseWriter, r *http.Request) {
 	db, skillID, _, ok := requireOwnedSkill(w, r)
 	if !ok {
@@ -1465,6 +1539,28 @@ func requireOwnedSkill(w http.ResponseWriter, r *http.Request) (*gorm.DB, string
 	return db, skillID, userID, true
 }
 
+func requireSkillInTrash(w http.ResponseWriter, r *http.Request) (*gorm.DB, string, string, bool) {
+	db, ok := requireDB(w)
+	if !ok {
+		return nil, "", "", false
+	}
+	userID, _, ok := requireUser(w, r)
+	if !ok {
+		return nil, "", "", false
+	}
+	skillID := common.PathVar(r, "skill_id")
+	if skillID == "" {
+		replyError(w, "missing skill_id", http.StatusBadRequest)
+		return nil, "", "", false
+	}
+	var row orm.SkillV2Skill
+	if err := db.WithContext(r.Context()).Select("id").Where("id = ? AND owner_user_id = ? AND deleted_at IS NOT NULL", skillID, userID).Take(&row).Error; err != nil {
+		replyServiceError(w, err)
+		return nil, "", "", false
+	}
+	return db, skillID, userID, true
+}
+
 func requireOwnedRevision(w http.ResponseWriter, r *http.Request) (*gorm.DB, string, string, string, bool) {
 	db, skillID, userID, ok := requireOwnedSkill(w, r)
 	if !ok {
@@ -1751,7 +1847,7 @@ func writeInlineSkillZip(content string) (string, error) {
 }
 
 func skillSummaryDTO(item skillservice.SkillSummary) map[string]any {
-	return map[string]any{
+	out := map[string]any{
 		"id":               item.ID,
 		"skill_id":         firstNonEmpty(item.SkillID, item.ID),
 		"name":             firstNonEmpty(item.Name, item.SkillName),
@@ -1765,6 +1861,13 @@ func skillSummaryDTO(item skillservice.SkillSummary) map[string]any {
 		"is_enabled":       item.IsEnabled,
 		"draft":            draftSummaryDTO(item.Draft),
 	}
+	if item.DeletedAt != nil {
+		out["deleted_at"] = item.DeletedAt
+	}
+	if strings.TrimSpace(item.DeletedBy) != "" {
+		out["deleted_by"] = item.DeletedBy
+	}
+	return out
 }
 
 func skillDetailDTO(item skillservice.SkillDetail) map[string]any {
@@ -2142,6 +2245,26 @@ func filterSkillSummaries(ctx context.Context, db *gorm.DB, items []skillservice
 		out = append(out, item)
 	}
 	return out, nil
+}
+
+func filterTrashedSkillSummaries(items []skillservice.SkillSummary, r *http.Request) []skillservice.SkillSummary {
+	keyword := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("keyword")))
+	category := strings.TrimSpace(r.URL.Query().Get("category"))
+	tags := compactStrings(r.URL.Query()["tags"])
+	out := make([]skillservice.SkillSummary, 0, len(items))
+	for _, item := range items {
+		if category != "" && item.Category != category {
+			continue
+		}
+		if len(tags) > 0 && !hasAllTags(item.Tags, tags) {
+			continue
+		}
+		if keyword != "" && !strings.Contains(strings.ToLower(item.Name+" "+item.SkillName+" "+item.Description), keyword) {
+			continue
+		}
+		out = append(out, item)
+	}
+	return out
 }
 
 func skillHeadTextContains(ctx context.Context, db *gorm.DB, skillID, keyword string) (bool, error) {

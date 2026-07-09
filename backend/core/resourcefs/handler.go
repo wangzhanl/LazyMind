@@ -36,6 +36,17 @@ func GetFile(w http.ResponseWriter, r *http.Request) {
 		replyError(w, err)
 		return
 	}
+	if ref.ResourceType == ResourceTypeUserPreference {
+		parsed, err := preferencefile.ParseFileContent(resp.Content)
+		if err != nil {
+			replyError(w, err)
+			return
+		}
+		resp.Content = parsed.Content
+		resp.AgentPersona = parsed.AgentPersona
+		resp.PreferredName = parsed.PreferredName
+		resp.ResponseStyle = parsed.ResponseStyle
+	}
 	common.ReplyOK(w, resp)
 }
 
@@ -45,18 +56,35 @@ func WriteDraft(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req struct {
-		Content              string `json:"content"`
-		ExpectedDraftVersion int64  `json:"expected_draft_version"`
-		ConversationID       string `json:"conversation_id"`
-		TaskID               string `json:"task_id"`
+		Content              string  `json:"content"`
+		AgentPersona         *string `json:"agent_persona"`
+		PreferredName        *string `json:"preferred_name"`
+		ResponseStyle        *string `json:"response_style"`
+		ExpectedDraftVersion int64   `json:"expected_draft_version"`
+		ConversationID       string  `json:"conversation_id"`
+		TaskID               string  `json:"task_id"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		common.ReplyErr(w, "invalid body", http.StatusBadRequest)
 		return
 	}
+	content := req.Content
+	if ref.ResourceType == ResourceTypeUserPreference {
+		patched, err := patchUserPreferenceDraftContent(r.Context(), service, ref, preferencefile.PreferencePatch{
+			Content:       &req.Content,
+			AgentPersona:  req.AgentPersona,
+			PreferredName: req.PreferredName,
+			ResponseStyle: req.ResponseStyle,
+		})
+		if err != nil {
+			replyError(w, err)
+			return
+		}
+		content = patched
+	}
 	resp, err := service.WriteDraft(r.Context(), WriteDraftRequest{
 		Ref:                  ref,
-		Content:              req.Content,
+		Content:              content,
 		ExpectedDraftVersion: req.ExpectedDraftVersion,
 		ConversationID:       req.ConversationID,
 		TaskID:               req.TaskID,
@@ -67,6 +95,21 @@ func WriteDraft(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	common.ReplyOK(w, resp)
+}
+
+func patchUserPreferenceDraftContent(ctx context.Context, service *Service, ref ResourceRef, patch preferencefile.PreferencePatch) (string, error) {
+	base, err := service.ReadFile(ctx, ReadFileRequest{Ref: ref, RefType: FileRefDraft})
+	if err != nil {
+		if !errors.Is(err, ErrDraftNotFound) {
+			return "", err
+		}
+		base, err = service.ReadFile(ctx, ReadFileRequest{Ref: ref, RefType: FileRefHead})
+		if err != nil {
+			return "", err
+		}
+	}
+	next, _, err := preferencefile.PatchFileContent(base.Content, patch)
+	return next, err
 }
 
 func DraftPreview(w http.ResponseWriter, r *http.Request) {

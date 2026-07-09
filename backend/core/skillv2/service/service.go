@@ -263,6 +263,22 @@ func (s *SkillService) DeleteSkill(ctx context.Context, req DeleteSkillRequest) 
 	return s.TrashSkill(ctx, req)
 }
 
+func (s *SkillService) ListTrashedSkills(ctx context.Context, req ListSkillsRequest) (ListSkillsResponse, error) {
+	var rows []skillRow
+	if err := s.db.WithContext(ctx).Where("owner_user_id = ? AND deleted_at IS NOT NULL", req.UserID).Order("deleted_at DESC, updated_at DESC, id ASC").Find(&rows).Error; err != nil {
+		return ListSkillsResponse{}, err
+	}
+	items := make([]SkillSummary, 0, len(rows))
+	for _, row := range rows {
+		summary, err := s.summaryFor(ctx, row)
+		if err != nil {
+			return ListSkillsResponse{}, err
+		}
+		items = append(items, summary)
+	}
+	return ListSkillsResponse{Items: items}, nil
+}
+
 func (s *SkillService) TrashSkill(ctx context.Context, req DeleteSkillRequest) error {
 	now := s.clock.Now()
 	updates := map[string]any{
@@ -289,40 +305,101 @@ func (s *SkillService) TrashSkill(ctx context.Context, req DeleteSkillRequest) e
 	})
 }
 
-func (s *SkillService) PurgeSkill(ctx context.Context, req PurgeSkillRequest) error {
+func (s *SkillService) RestoreSkill(ctx context.Context, req RestoreSkillRequest) error {
+	now := s.clock.Now()
 	return s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		var skill skillRow
 		if err := tx.Where("id = ? AND owner_user_id = ? AND deleted_at IS NOT NULL", req.SkillID, req.UserID).Take(&skill).Error; err != nil {
 			return err
 		}
-		var revisions []string
-		if err := tx.Model(&skillRevisionRow{}).Where("skill_id = ?", req.SkillID).Pluck("id", &revisions).Error; err != nil {
+		if err := tx.Model(&skillRow{}).Where("id = ? AND deleted_at IS NOT NULL", req.SkillID).Updates(map[string]any{
+			"deleted_at": nil,
+			"deleted_by": nil,
+			"updated_at": now,
+		}).Error; err != nil {
 			return err
 		}
-		if len(revisions) > 0 {
-			if err := tx.Where("revision_id IN ?", revisions).Delete(&skillRevisionEntryRow{}).Error; err != nil {
-				return err
-			}
-			if err := tx.Where("id IN ?", revisions).Delete(&skillRevisionRow{}).Error; err != nil {
-				return err
-			}
-		}
-		if err := tx.Where("skill_id = ?", req.SkillID).Delete(&skillDraftEntryRow{}).Error; err != nil {
-			return err
-		}
-		if err := tx.Where("skill_id = ?", req.SkillID).Delete(&skillDraftRow{}).Error; err != nil {
-			return err
-		}
-		if tx.Migrator().HasTable(&skillSearchIndexRow{}) {
-			if err := tx.Where("skill_id = ?", req.SkillID).Delete(&skillSearchIndexRow{}).Error; err != nil {
-				return err
-			}
-		}
-		if err := tx.Where("id = ?", req.SkillID).Delete(&skillRow{}).Error; err != nil {
-			return err
-		}
-		return s.cleanupUnreferencedBlobs(ctx, tx)
+		return skillsearch.RebuildSkillTx(ctx, tx, req.SkillID, now)
 	})
+}
+
+func (s *SkillService) PurgeSkill(ctx context.Context, req PurgeSkillRequest) error {
+	return s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		return s.purgeSkillTx(ctx, tx, req)
+	})
+}
+
+func (s *SkillService) EmptyTrash(ctx context.Context, req EmptyTrashRequest) (int, error) {
+	var purged int
+	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		var skillIDs []string
+		if err := tx.Model(&skillRow{}).Where("owner_user_id = ? AND deleted_at IS NOT NULL", req.UserID).Order("deleted_at ASC, id ASC").Pluck("id", &skillIDs).Error; err != nil {
+			return err
+		}
+		for _, skillID := range skillIDs {
+			if err := s.purgeSkillTx(ctx, tx, PurgeSkillRequest{SkillID: skillID, UserID: req.UserID}); err != nil {
+				return err
+			}
+			purged++
+		}
+		return nil
+	})
+	return purged, err
+}
+
+func (s *SkillService) purgeSkillTx(ctx context.Context, tx *gorm.DB, req PurgeSkillRequest) error {
+	var skill skillRow
+	if err := tx.Where("id = ? AND owner_user_id = ? AND deleted_at IS NOT NULL", req.SkillID, req.UserID).Take(&skill).Error; err != nil {
+		return err
+	}
+	var revisions []string
+	if err := tx.Model(&skillRevisionRow{}).Where("skill_id = ?", req.SkillID).Pluck("id", &revisions).Error; err != nil {
+		return err
+	}
+	if len(revisions) > 0 {
+		if err := tx.Where("revision_id IN ?", revisions).Delete(&skillRevisionEntryRow{}).Error; err != nil {
+			return err
+		}
+		if err := tx.Where("id IN ?", revisions).Delete(&skillRevisionRow{}).Error; err != nil {
+			return err
+		}
+	}
+	if err := tx.Where("skill_id = ?", req.SkillID).Delete(&skillDraftEntryRow{}).Error; err != nil {
+		return err
+	}
+	if err := tx.Where("skill_id = ?", req.SkillID).Delete(&skillDraftRow{}).Error; err != nil {
+		return err
+	}
+	if tx.Migrator().HasTable("skill_draft_review_sessions") {
+		var reviewIDs []string
+		if err := tx.Table("skill_draft_review_sessions").Where("skill_id = ?", req.SkillID).Pluck("id", &reviewIDs).Error; err != nil {
+			return err
+		}
+		if len(reviewIDs) > 0 {
+			if tx.Migrator().HasTable("skill_draft_review_action_items") {
+				if err := tx.Exec("DELETE FROM skill_draft_review_action_items WHERE review_session_id IN ?", reviewIDs).Error; err != nil {
+					return err
+				}
+			}
+			if tx.Migrator().HasTable("skill_draft_review_action_batches") {
+				if err := tx.Exec("DELETE FROM skill_draft_review_action_batches WHERE review_session_id IN ?", reviewIDs).Error; err != nil {
+					return err
+				}
+			}
+			if err := tx.Exec("DELETE FROM skill_draft_review_sessions WHERE id IN ?", reviewIDs).Error; err != nil {
+				return err
+			}
+		}
+	}
+	if tx.Migrator().HasTable(&skillSearchIndexRow{}) {
+		if err := tx.Where("skill_id = ?", req.SkillID).Delete(&skillSearchIndexRow{}).Error; err != nil {
+			return err
+		}
+	}
+	if err := tx.Where("id = ?", req.SkillID).Delete(&skillRow{}).Error; err != nil {
+		return err
+	}
+	return s.cleanupUnreferencedBlobs(ctx, tx)
 }
 
 func (s *SkillService) cleanupUnreferencedBlobs(ctx context.Context, tx *gorm.DB) error {
@@ -1185,6 +1262,8 @@ func (s *SkillService) summaryFor(ctx context.Context, row skillRow) (SkillSumma
 		AutoEvo:        row.AutoEvo,
 		IsEnabled:      row.IsEnabled,
 		Draft:          draft,
+		DeletedAt:      row.DeletedAt,
+		DeletedBy:      valueOrEmpty(row.DeletedBy),
 	}, nil
 }
 
