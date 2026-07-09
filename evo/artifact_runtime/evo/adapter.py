@@ -1,10 +1,10 @@
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 import threading
 
 from ..kernel import (ArtifactKey, ArtifactRef, ArtifactRecord, ArtifactRuntime, DAGGraph,
-                      ConcurrencyLimits, FixedOp, Materializer, ReadyOrder, SQLiteArtifactStore, StoreResult,
+                      ConcurrencyLimits, FixedOp, Materializer, SQLiteArtifactStore, StoreResult,
                       TickInterruptionChecker, TickResult)
 
 
@@ -13,12 +13,9 @@ class EvoArtifactAdapter:
         self,
         store: SQLiteArtifactStore,
         runtime: ArtifactRuntime,
-        *,
-        default_ready_order: ReadyOrder = 'partition_pipeline',
     ) -> None:
         self._store = store
         self._runtime = runtime
-        self._default_ready_order = default_ready_order
         self._owner_thread_id = threading.get_ident()
 
     def commit_external(self, run_id: str, key: ArtifactKey, value: object, *,
@@ -56,12 +53,13 @@ class EvoArtifactAdapter:
         self._require_owner_thread()
         return self._store.get(run_id, ref)
 
-    def tick(self, run_id: str, *, should_interrupt: TickInterruptionChecker | None = None) -> TickResult:
+    def tick(self, run_id: str, *, should_interrupt: TickInterruptionChecker | None = None,
+             op_selector: Callable[[object], bool] | None = None) -> TickResult:
         self._require_owner_thread()
         return self._runtime.tick(
             run_id,
             should_interrupt=should_interrupt,
-            ready_order=self._default_ready_order,
+            op_selector=op_selector,
         )
 
     def _require_owner_thread(self) -> None:
@@ -71,7 +69,6 @@ class EvoArtifactAdapter:
 
 def build_evo_artifact_adapter(store: SQLiteArtifactStore, ops: Sequence[type[FixedOp]],
                                materializers: Mapping[str, Materializer], *,
-                               default_ready_order: ReadyOrder = 'partition_pipeline',
                                concurrency_limits: ConcurrencyLimits | None = None,
                                ) -> EvoArtifactAdapter:
     graph = DAGGraph()
@@ -81,7 +78,6 @@ def build_evo_artifact_adapter(store: SQLiteArtifactStore, ops: Sequence[type[Fi
     return EvoArtifactAdapter(
         store,
         ArtifactRuntime(store, graph, materializers, concurrency_limits=concurrency_limits),
-        default_ready_order=default_ready_order,
     )
 
 

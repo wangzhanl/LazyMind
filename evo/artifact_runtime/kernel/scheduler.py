@@ -3,12 +3,8 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from types import MappingProxyType
-from typing import Literal
 
 from .graph import NextOp
-
-
-ReadyOrder = Literal['topological', 'partition_pipeline']
 
 
 @dataclass(frozen=True)
@@ -32,20 +28,9 @@ class ConcurrencyLimits:
         object.__setattr__(self, 'per_materializer', MappingProxyType(limits))
 
 
-def select_ready_op(
-    ready: tuple[NextOp, ...],
-    recent: NextOp | None,
-    ready_order: ReadyOrder,
-) -> NextOp | None:
+def select_ready_op(ready: tuple[NextOp, ...]) -> NextOp | None:
     # `ready` must already be ordered by the graph's deterministic topological sort.
-    if not ready:
-        return None
-    if ready_order == 'topological' or recent is None or not recent.partition:
-        return ready[0]
-    for op in ready:
-        if op.partition == recent.partition and op.sort_key > recent.sort_key:
-            return op
-    return ready[0]
+    return ready[0] if ready else None
 
 
-__all__ = ['ConcurrencyLimits', 'ReadyOrder', 'select_ready_op']
+__all__ = ['ConcurrencyLimits', 'select_ready_op']

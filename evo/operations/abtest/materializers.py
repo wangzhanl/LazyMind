@@ -90,11 +90,10 @@ def abtest_materializers() -> dict[str, Callable[[Any, Mapping[str, object]], Ma
 def candidate_service(config: Mapping[str, Any], patch: Mapping[str, Any], ctx: Any | None = None) -> dict[str, Any]:
     base = {'candidate_config': dict(config), 'patch_status': _text(patch.get('status'))}
     if not _text(patch.get('diff')):
-        return base | {'status': 'skipped', 'healthcheck': {'status': 'skipped', 'message': 'repair patch has empty diff'}}
-    runnable_statuses = {'verified', 'candidate_rejected_patch', 'fallback_patch_generated'}
-    if _text(patch.get('status')) not in runnable_statuses:
-        message = f"candidate evaluation skipped because repair patch status is {_text(patch.get('status'))}"
-        return base | {'status': 'skipped', 'healthcheck': {'status': 'skipped', 'message': message}}
+        return base | _failed_service('', '', '', '', 'invalid_repair_patch', 'repair patch has empty diff')
+    if _text(patch.get('status')) != 'verified':
+        message = f"candidate evaluation requires verified repair patch, got {_text(patch.get('status'))}"
+        return base | _failed_service('', '', '', '', 'invalid_repair_patch', message)
     algorithm_id = router_chat_url = admin_url = code_path = ''
     manager: RouterManager | None = None
     stop_on_failure = False
@@ -177,15 +176,13 @@ def candidate_rag_answer(case: Mapping[str, Any], service: Mapping[str, Any]) ->
     }
     if service.get('status') != 'ready':
         health = service.get('healthcheck') if isinstance(service.get('healthcheck'), Mapping) else {}
-        error_type = 'candidate_service_skipped' if service.get('status') == 'skipped' else \
-            'candidate_service_unavailable'
+        error_type = 'candidate_service_unavailable'
         message = _text(health.get('message')) or _service_unavailable_message(service)
         return failed_rag_answer(case, {}, target, error_type, message)
     return answer_case(case, target_config)
 
 
 def compare_eval_detail_for_repair(baseline: Mapping[str, Any], candidate: Mapping[str, Any]) -> dict[str, Any]:
-    skipped = _candidate_service_skipped(candidate)
     baseline_rows, candidate_rows = _rows_by_case(baseline.get('rows')), _rows_by_case(candidate.get('rows'))
     case_ids = list(dict.fromkeys([*baseline_rows, *candidate_rows, *baseline.get('case_ids', ()),
                                    *candidate.get('case_ids', ())]))
@@ -194,20 +191,18 @@ def compare_eval_detail_for_repair(baseline: Mapping[str, Any], candidate: Mappi
     case_deltas = [_case_delta(case_id, baseline_rows.get(case_id), candidate_rows.get(case_id))
                    for case_id in case_ids]
     failures = list(candidate.get('execution_failures') or [])
-    candidate_failed = not skipped and (bool(failures) or not (candidate.get('checks') or {}).get('ready'))
+    candidate_failed = bool(failures) or not (candidate.get('checks') or {}).get('ready')
     regressions = [row for row in case_deltas if row['outcome'] == 'regressed']
     guard = _goodcase_guard(case_deltas, baseline_rows)
     reasons = []
-    if skipped:
-        reasons.append(_candidate_skip_reason(candidate))
     if candidate_failed:
         reasons.append('candidate evaluation produced execution failures')
     if regressions:
         reasons.append(f'{len(regressions)} case(s) regressed on overall_score')
-    verdict = 'skipped' if skipped else 'candidate_eval_failed' if candidate_failed else 'review_candidate'
+    verdict = 'candidate_eval_failed' if candidate_failed else 'review_candidate'
     return {
         'id': 'abtest.comparison',
-        'status': 'skipped' if skipped else 'failed' if candidate_failed else 'completed',
+        'status': 'failed' if candidate_failed else 'completed',
         'verdict': verdict,
         'case_ids': case_ids,
         'case_count': len(case_ids),
@@ -239,45 +234,7 @@ def _candidate_target_config(service: Mapping[str, Any]) -> dict[str, Any]:
 
 
 def _service_unavailable_message(service: Mapping[str, Any]) -> str:
-    status = _text(service.get('status'))
-    if status == 'skipped':
-        patch_status = _text(service.get('patch_status'))
-        if patch_status:
-            return f'candidate evaluation skipped because repair patch status is {patch_status}'
-        return 'candidate evaluation skipped'
     return 'candidate not ready'
-
-
-def _candidate_skip_reason(candidate: Mapping[str, Any]) -> str:
-    for row in candidate.get('execution_failures') or ():
-        if not isinstance(row, Mapping):
-            continue
-        message = _text(row.get('chat_error_message')) or _text(row.get('reason'))
-        if message:
-            return message
-    return 'candidate evaluation skipped'
-
-
-def _candidate_service_skipped(candidate: Mapping[str, Any]) -> bool:
-    total = int(candidate.get('total') or 0)
-    if not total:
-        return False
-    counts = candidate.get('quality_counts') if isinstance(candidate.get('quality_counts'), Mapping) else {}
-    if counts.get('skipped') == total:
-        return True
-    rows = candidate.get('rows') if isinstance(candidate.get('rows'), (list, tuple)) else ()
-    if rows:
-        return all(
-            isinstance(row, Mapping)
-            and _text(row.get('chat_error_type')) == 'candidate_service_skipped'
-            for row in rows
-        )
-    failures = candidate.get('execution_failures') if isinstance(candidate.get('execution_failures'), list) else []
-    return len(failures) == total and all(
-        isinstance(row, Mapping)
-        and _text(row.get('chat_error_type')) == 'candidate_service_skipped'
-        for row in failures
-    )
 
 
 def _service_patch(patch: Mapping[str, Any], workspace: Mapping[str, Any]) -> dict[str, Any]:
@@ -409,12 +366,14 @@ def _candidate_max_retries(config: Mapping[str, Any]) -> str:
 
 
 def _code_path(config: Mapping[str, Any], patch: Mapping[str, Any]) -> str:
-    if config.get('code_path'):
-        return _text(config['code_path'])
     workspace = Path(_text(patch.get('workspace_ref'))).as_posix()
     if not workspace:
-        raise ValueError('verified repair patch must provide workspace_ref or candidate_config.code_path')
-    return f'{workspace.rstrip("/")}/lazymind/chat'
+        raise ValueError('verified repair patch must provide workspace_ref')
+    expected = f'{workspace.rstrip("/")}/algorithm/lazymind/chat'
+    explicit = Path(_text(config.get('code_path'))).as_posix().rstrip('/') if _text(config.get('code_path')) else ''
+    if explicit and explicit != expected:
+        raise ValueError('candidate_config.code_path must match verified repair patch workspace')
+    return expected
 
 
 def _summary_metrics(summary: Mapping[str, Any]) -> dict[str, float]:

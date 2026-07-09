@@ -23,7 +23,8 @@ DEFAULT_DISABLED_TOOLS = tuple(
 EVO_EVAL_MEMORY = (
     'Evo evaluation request: use the knowledge-base tool as the evidence source, '
     'keep retrieval bounded, answer directly when enough evidence is available, '
-    'and do not ask the user or schedule tasks.'
+    'and do not ask the user or schedule tasks. The final answer must contain only '
+    'the answer itself; never return search plans, tool-use narration, or progress promises.'
 )
 
 TRACE_ID = re.compile(r'^[0-9a-f]{32}$')
@@ -40,6 +41,31 @@ INVALID_FINAL_ANSWER_MARKERS = (
     'knowledge base retrieval service is unavailable',
     'kb retrieval service is unavailable',
     'retrieval service is unavailable',
+)
+PROGRESS_FINAL_ANSWER = re.compile(
+    r'^\s*(?:'
+    r'(?:我(?:要|需要|将|会|先|来|准备|正在|正)|正在|先|需要先).{0,40}(?:检索|搜索|查找|激活|调用).{0,40}(?:知识库|工具|简历|文档|资料|相关信息|相关内容)|'
+    r'我(?:要|需要|将|会|先|来|准备).{0,40}使用.{0,40}(?:知识库搜索|知识库工具|搜索工具|检索工具)|'
+    r'我(?:将|会)直接.{0,30}检索结果.{0,30}(?:提取|回答|分析)|'
+    r'首先[，,]?\s*我(?:需要|将|会).{0,40}(?:检索|搜索|查找|激活|调用|使用)|'
+    r'接下来(?:我)?(?:将|会)?.{0,40}(?:检索|搜索|查找|激活|调用|使用)|'
+    r'I\s*(?:will|need|am going to|am now).{0,80}\b(?:search|retrieve|activate|call|use)\b.{0,40}\b(?:knowledge|tool|resume|document|file)s?\b|'
+    r'Let me.{0,80}\b(?:search|retrieve|activate|call|use)\b.{0,40}\b(?:knowledge|tool|resume|document|file)s?\b|'
+    r'The\s*knowledge\s*base\s*search\s*(?:has\s*)?(?:returned|found)|Knowledge\s*base\s*search\s*(?:returned|found)'
+    r')',
+    re.I,
+)
+RETRIEVAL_FAILURE_SELF_RECOVERY = re.compile(
+    r'^\s*(?:'
+    r'(?:因|因为|由于).{0,50}(?:知识库|检索|搜索).{0,50}'
+    r'(?:连接失败|连接错误|超时|暂时不可用|无法访问|不可用|失败).{0,120}'
+    r'(?:我(?:将|会|只能|需要)?|将|会|直接|只能).{0,60}'
+    r'(?:基于|根据|依据|从|用).{0,80}'
+    r'(?:已有|之前|前面|成功检索|搜索结果|检索结果|初始搜索|资料|信息).{0,60}'
+    r'(?:判断|分析|回答|提取|推断)|'
+    r'我(?:将|会)?(?:直接)?基于(?:之前|已有|前面|成功检索|初始搜索|搜索结果|检索结果).{0,80}'
+    r'(?:判断|分析|回答|提取|推断)'
+    r')',
 )
 
 DEFAULT_CASE_DEADLINE_SECONDS = 300.0
@@ -349,9 +375,7 @@ def _accept_payload(
         return _failed(state, target, 'chat_business_error', str(message))
 
     _extend_sources(state.sources, data.get('sources'))
-    visible_text = _visible_text(str(data.get('text') or ''))
-    if visible_text:
-        state.answer_parts.append(visible_text)
+    _accept_answer_text(state, str(data.get('text') or ''))
 
     if status == 'FINISHED':
         state.finished = True
@@ -371,7 +395,7 @@ def _normalize(target: Mapping[str, Any], stream: Mapping[str, Any] | ChatStream
         answer = _answer_text(str(
             stream.get('explicit_answer')
             or stream.get('answer')
-            or ''.join(_visible_text(str(data.get('text') or '')) for data in data_frames)
+            or _answer_from_data_frames(data_frames)
         ))
         sources = _unique_sources(_sources(data_frames))
 
@@ -381,7 +405,7 @@ def _normalize(target: Mapping[str, Any], stream: Mapping[str, Any] | ChatStream
         return _failed({'answer': ''}, target, 'chat_no_answer', 'stream finished without final answer text')
     if _invalid_final_answer(answer):
         return _failed({'answer': ''}, target, 'chat_invalid_answer',
-                       'stream finished with retrieval-unavailable final answer')
+                       'stream finished with invalid final answer text')
 
     contexts, doc_ids, chunk_ids = _source_refs(sources, target)
     return {
@@ -540,7 +564,7 @@ def _retry_exhausted_result(state: Any) -> dict[str, Any]:
     error = result.get('chat_error') if isinstance(result.get('chat_error'), Mapping) else {}
     exhausted_type = f'{str(error.get("type") or "").strip()}_retry_exhausted'
     messages = {
-        'chat_invalid_answer_retry_exhausted': 'chat stream repeatedly returned retrieval-unavailable final answer',
+        'chat_invalid_answer_retry_exhausted': 'chat stream repeatedly returned invalid final answer text',
         'chat_no_answer_retry_exhausted': 'chat stream repeatedly finished without final answer text',
         'chat_transport_error_retry_exhausted': 'chat stream repeatedly failed with transport errors',
         'chat_http_error_retry_exhausted': 'chat stream repeatedly failed with retryable HTTP errors',
@@ -607,12 +631,41 @@ def _frame_data(frame: Mapping[str, Any]) -> Mapping[str, Any]:
     return data if isinstance(data, Mapping) else {}
 
 
+def _accept_answer_text(state: ChatStreamState, text: str) -> None:
+    raw = str(text or '')
+    if _contains_control_tag(raw):
+        state.answer_parts.clear()
+        visible_text = _visible_after_last_control_tag(raw)
+    else:
+        visible_text = _visible_text(raw)
+    if visible_text:
+        state.answer_parts.append(visible_text)
+
+
+def _answer_from_data_frames(data_frames: Sequence[Mapping[str, Any]]) -> str:
+    state = ChatStreamState(frames=[], answer_parts=[], sources=[])
+    for data in data_frames:
+        _accept_answer_text(state, str(data.get('text') or ''))
+    return state.answer
+
+
+def _contains_control_tag(text: str) -> bool:
+    return bool(CONTROL_TAG.search(str(text or '')))
+
+
 def _visible_text(text: str) -> str:
     return re.sub(r'\n{3,}', '\n\n', CONTROL_TAG.sub('', str(text or ''))).strip()
 
 
 def _answer_text(raw_answer: str) -> str:
-    return _visible_text(raw_answer)
+    text = str(raw_answer or '')
+    return _visible_after_last_control_tag(text) if _contains_control_tag(text) else _visible_text(text)
+
+
+def _visible_after_last_control_tag(text: str) -> str:
+    matches = list(CONTROL_TAG.finditer(str(text or '')))
+    tail = str(text or '')[matches[-1].end():] if matches else str(text or '')
+    return _visible_text(tail)
 
 
 def _sources(frames: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
@@ -673,7 +726,10 @@ def _source_refs(
 
 
 def _invalid_final_answer(answer: str) -> bool:
-    text = re.sub(r'\s+', ' ', str(answer or '').strip()).lower()
+    raw = str(answer or '').strip()
+    if _progress_final_answer(raw):
+        return True
+    text = re.sub(r'\s+', ' ', raw).lower()
     if len(text) > INVALID_FINAL_ANSWER_MAX_CHARS:
         return False
     if not any(marker in text for marker in INVALID_FINAL_ANSWER_MARKERS):
@@ -683,6 +739,17 @@ def _invalid_final_answer(answer: str) -> bool:
         return True
     match = INVALID_FINAL_ANSWER_APOLOGY.match(text)
     return bool(match and text[match.end():].lstrip(' "\'“”‘’').startswith(INVALID_FINAL_ANSWER_MARKERS))
+
+
+def _progress_final_answer(answer: str) -> bool:
+    text = str(answer or '').strip()
+    return bool(
+        text
+        and (
+            PROGRESS_FINAL_ANSWER.match(text)
+            or RETRIEVAL_FAILURE_SELF_RECOVERY.match(text)
+        )
+    )
 
 
 def _instance_urls(instances: Sequence[Mapping[str, Any]]) -> list[str]:

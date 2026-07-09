@@ -57,7 +57,6 @@ def default_evo_ops(cases: tuple[str, ...]) -> tuple[type[FixedOp], ...]:
         op_id = 'eval.answer'
         inputs = {
             'case': ArtifactInput(C.EVAL_CASE, partition_spec=partitions),
-            'dataset': ArtifactInput(C.ROOTS['dataset'], partition_mapping=unpartitioned_to_all()),
             'target_config': ArtifactInput(C.EVAL_TARGET_CONFIG, partition_mapping=unpartitioned_to_all()),
         }
         outputs = {'answer': ArtifactOutput(C.EVAL_RAG_ANSWER, partitions)}

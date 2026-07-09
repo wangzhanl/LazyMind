@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from collections import Counter
 from collections.abc import Mapping
 from statistics import fmean
 from typing import Any
@@ -93,22 +92,6 @@ class EvalBody(Contract):
     cases: list[EvalCase]
 
 
-class AnalysisCase(Contract):
-    case_id: StrictStr
-    trace_id: StrictStr
-    source: StrictStr
-    failure_type: StrictStr
-    reason: StrictStr
-
-
-class AnalysisSummary(Contract):
-    run_id: StrictStr
-    case_num: StrictInt
-    algo_id: StrictStr
-    type_count: dict[StrictStr, StrictInt]
-    cases: list[AnalysisCase]
-
-
 class RepairPatch(Contract):
     run_id: StrictStr
     algo_id: StrictStr
@@ -188,25 +171,6 @@ def build_eval_summary_root(
     return dump_contract(EvalSummary, payload)
 
 
-def build_analysis_summary_root(run_id: str, classifications: tuple[Mapping[str, Any], ...]) -> dict[str, Any]:
-    rows = sorted(classifications, key=lambda row: str(row.get('case_id') or ''))
-    cases = [{
-        'case_id': str(row.get('case_id') or ''),
-        'trace_id': str(row.get('trace_id') or ''),
-        'source': str(row.get('source') or ''),
-        'failure_type': str(row.get('issue_type') or ''),
-        'reason': str(row.get('root_cause_reason') or row.get('reason') or ''),
-    } for row in rows]
-    payload = {
-        'run_id': str(run_id),
-        'case_num': len(rows),
-        'algo_id': next((str(row.get('algo_id') or '') for row in rows if row.get('algo_id')), ''),
-        'type_count': dict(Counter(case['failure_type'] for case in cases)),
-        'cases': cases,
-    }
-    return dump_contract(AnalysisSummary, payload)
-
-
 def build_abtest_comparison_root(
     run_id: str,
     baseline: Mapping[str, Any],
@@ -220,12 +184,7 @@ def build_abtest_comparison_root(
     verdict = 'review_candidate'
     status = 'completed'
     reasons: list[str] = []
-    if service.get('status') == 'skipped':
-        verdict = 'skipped'
-        status = 'skipped'
-        reasons.append(_service_skip_reason(service))
-        after = _copy_case_trace_ids(after, origin)
-    elif service.get('status') != 'ready':
+    if service.get('status') != 'ready':
         verdict = 'candidate_service_unavailable'
         status = 'failed'
         reasons.append('candidate service is not ready')
@@ -246,20 +205,6 @@ def build_abtest_comparison_root(
 
 def _eval_body(summary: Mapping[str, Any]) -> dict[str, Any]:
     return {key: summary[key] for key in (*AGGREGATES, 'cases') if key in summary}
-
-
-def _copy_case_trace_ids(candidate: Mapping[str, Any], baseline: Mapping[str, Any]) -> dict[str, Any]:
-    trace_by_case = {row['case_id']: row['trace_id'] for row in baseline.get('cases', ())}
-    return dict(candidate) | {'cases': [
-        dict(row) | {'trace_id': trace_by_case.get(row['case_id'], row['trace_id'])}
-        for row in candidate.get('cases', ())
-    ]}
-
-
-def _service_skip_reason(service: Mapping[str, Any]) -> str:
-    health = service.get('healthcheck') if isinstance(service.get('healthcheck'), Mapping) else {}
-    message = str(health.get('message') or '').strip()
-    return message or 'candidate evaluation skipped'
 
 
 def _score(value: object) -> float:
