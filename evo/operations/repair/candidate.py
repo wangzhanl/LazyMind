@@ -3,9 +3,11 @@ from __future__ import annotations
 import math
 from collections.abc import Mapping
 from pathlib import Path
+from statistics import fmean
 from typing import Any
 
 from evo.operations.abtest.materializers import (
+    GOODCASE_MAX_OVERALL_DROP,
     candidate_rag_answer,
     candidate_service,
     compare_eval_detail_for_repair,
@@ -26,6 +28,8 @@ PUBLIC_SERVICE_KEYS = {
     'router_admin_url',
     'code_path',
 }
+EPSILON = 0.0001
+BADCASE_MIN_OVERALL_GAIN = 0.10
 
 
 def validate_candidate_patch(
@@ -270,14 +274,15 @@ def _analysis_delta_from(
     resolved = not remaining and not target_badcases
     improved = target_remaining_delta > 0
     status = 'resolved' if resolved else 'improved' if improved else 'unchanged'
-    goodcase_guard = comparison.get('goodcase_guard') if isinstance(comparison.get('goodcase_guard'), Mapping) else {}
-    if goodcase_guard.get('status') == 'failed':
+    score_gate = _overall_score_gate(comparison)
+    if score_gate['goodcase_status'] == 'failed':
         status = 'regressed'
-    recommended_action = (
-        'accept_patch'
-        if resolved and not new_groups else 'continue_current_patch'
-        if improved and goodcase_guard.get('status') != 'failed' else 'rollback_to_baseline'
+    score_ready = (
+        score_gate['overall_status'] == 'passed'
+        and score_gate['badcase_status'] == 'passed'
+        and score_gate['goodcase_status'] != 'failed'
     )
+    recommended_action = 'accept_patch' if score_ready else 'rollback_to_baseline'
     return {
         'status': 'completed',
         'target_group_status': status,
@@ -287,9 +292,10 @@ def _analysis_delta_from(
         'target_total': len(target),
         'new_group_count': len(new_groups),
         'new_groups': new_groups[:5],
-        'goodcase_guard_status': goodcase_guard.get('status') or '',
+        'goodcase_guard_status': score_gate['goodcase_status'],
         'metric_delta': delta,
         'target_metric_delta': target_metric_delta,
+        'overall_score_gate': score_gate,
         'primary_metrics': list(selected.get('primary_metrics') or ()),
         'execution_failures': candidate_summary.get('execution_failures') or [],
         'recommended_action': recommended_action,
@@ -305,16 +311,10 @@ def _candidate_gate(
         return False, _text(comparison.get('verdict')) or 'comparison_not_completed'
     if candidate_summary.get('execution_failures'):
         return False, 'candidate_execution_failed'
-    if comparison.get('goodcase_guard', {}).get('status') == 'failed':
-        return False, 'goodcase_guard_failed'
-    if delta.get('new_group_count'):
-        return False, 'target_followup_groups_detected'
-    if delta.get('target_group_status') not in {'resolved', 'improved'}:
-        return False, 'target_group_not_improved'
-    metric_status = _metric_gate(delta)
+    metric_status = _metric_gate(comparison)
     if metric_status:
         return False, metric_status
-    return True, 'target_group_improved'
+    return True, 'overall_score_improved'
 
 
 def _target_metric_delta(selected: Mapping[str, Any], rows: list[Mapping[str, Any]]) -> dict[str, float]:
@@ -337,22 +337,65 @@ def _target_metric_delta(selected: Mapping[str, Any], rows: list[Mapping[str, An
     return {key: round(sum(values) / len(values), 4) for key, values in result.items() if values}
 
 
-def _metric_gate(delta: Mapping[str, Any]) -> str:
-    target_metrics = delta.get('target_metric_delta') if isinstance(delta.get('target_metric_delta'), Mapping) else {}
-    primary = [_text(item) for item in delta.get('primary_metrics') or () if _text(item)]
-    if not primary:
-        return 'primary_metrics_missing'
-    missing_primary = [metric for metric in primary if metric not in target_metrics]
-    primary_values = [_float(target_metrics.get(metric)) for metric in primary if metric in target_metrics]
-    if missing_primary or any(not math.isfinite(value) or value < 0.0001 for value in primary_values):
-        return 'metric_not_improved'
-    aggregate = delta.get('metric_delta') if isinstance(delta.get('metric_delta'), Mapping) else {}
-    aggregate_values = [_float(value) for value in aggregate.values()]
-    if aggregate_values and any(not math.isfinite(value) or value < 0.0001 for value in aggregate_values):
-        return 'metric_regressed'
-    if not aggregate_values:
-        return 'metric_not_improved'
+def _metric_gate(comparison: Mapping[str, Any]) -> str:
+    score_gate = _overall_score_gate(comparison)
+    if score_gate['overall_status'] == 'failed':
+        return 'overall_score_not_improved'
+    if score_gate['badcase_status'] != 'passed':
+        return 'badcase_overall_not_improved'
+    if score_gate['goodcase_status'] == 'failed':
+        return 'goodcase_overall_regressed'
     return ''
+
+
+def _overall_score_gate(comparison: Mapping[str, Any]) -> dict[str, Any]:
+    metrics = comparison.get('metrics') if isinstance(comparison.get('metrics'), Mapping) else {}
+    delta = metrics.get('delta') if isinstance(metrics.get('delta'), Mapping) else {}
+    overall_delta = _float(delta.get('overall_score'))
+    result = {
+        'overall_delta': round(overall_delta, 4) if math.isfinite(overall_delta) else overall_delta,
+        'overall_status': 'passed' if math.isfinite(overall_delta) and overall_delta > EPSILON else 'failed',
+        'badcase_status': 'missing',
+        'goodcase_status': 'not_applicable',
+    }
+    badcase, goodcase = [], []
+    for row in comparison.get('case_deltas') or ():
+        if not isinstance(row, Mapping):
+            continue
+        before = row.get('before') if isinstance(row.get('before'), Mapping) else {}
+        after = row.get('after') if isinstance(row.get('after'), Mapping) else {}
+        pair = (_float(before.get('overall_score')), _float(after.get('overall_score')))
+        if not all(math.isfinite(value) for value in pair):
+            return result | {'badcase_status': 'failed', 'goodcase_status': 'failed'}
+        if _text(row.get('baseline_quality')) == 'good':
+            goodcase.append(pair)
+        else:
+            badcase.append(pair)
+    if badcase:
+        before = fmean(item[0] for item in badcase)
+        after = fmean(item[1] for item in badcase)
+        gain = after - before
+        result |= {
+            'badcase_count': len(badcase),
+            'badcase_baseline_overall_avg': round(before, 4),
+            'badcase_candidate_overall_avg': round(after, 4),
+            'badcase_overall_delta': round(gain, 4),
+            'badcase_required_delta': BADCASE_MIN_OVERALL_GAIN,
+            'badcase_status': 'passed' if gain + EPSILON >= BADCASE_MIN_OVERALL_GAIN else 'failed',
+        }
+    if goodcase:
+        before = fmean(item[0] for item in goodcase)
+        after = fmean(item[1] for item in goodcase)
+        drop = before - after
+        result |= {
+            'goodcase_count': len(goodcase),
+            'goodcase_baseline_overall_avg': round(before, 4),
+            'goodcase_candidate_overall_avg': round(after, 4),
+            'goodcase_overall_delta': round(after - before, 4),
+            'goodcase_allowed_drop': GOODCASE_MAX_OVERALL_DROP,
+            'goodcase_status': 'passed' if drop <= GOODCASE_MAX_OVERALL_DROP + EPSILON else 'failed',
+        }
+    return result
 
 
 def _float(value: Any) -> float:
