@@ -73,7 +73,7 @@ class EvoService:
     def __init__(self, root: Path) -> None:
         self.root = root
         self.threads = ThreadService(root)
-        self.projections = ProjectionService(root, self.threads.runtime, self.threads.is_active)
+        self.projections = ProjectionService(root, self.threads.runtime)
 
 
 def create_app() -> FastAPI:
@@ -356,7 +356,6 @@ def _event_stream(
                 payload = {
                     'thread_id': thread_id,
                     'last_event_id': last_event_id,
-                    'status': public['status'],
                     'current_step': public['current_step'],
                     'checkpoint_state': public['checkpoint_state'],
                     'first_missing_step': public['first_missing_step'],
@@ -381,6 +380,9 @@ def _event_stream(
 
 def _sse_payload(event_type: str, payload: Mapping[str, Any]) -> dict[str, Any]:
     data = dict(payload)
+    if event_type == 'done':
+        data.pop('status', None)
+        data.pop('thread_status', None)
     data.setdefault('event_type', event_type)
     data.setdefault('type', data['event_type'])
     return data
