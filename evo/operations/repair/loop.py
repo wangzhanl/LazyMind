@@ -14,7 +14,6 @@ from evo.operations.public_contracts import RepairPatch, algo_id, dump_contract
 
 from .candidate import validate_candidate_patch
 from .code_index import build_code_index
-from .fallback import generate_fallback_patch
 from .localize import localize_repair
 from .opencode import run_opencode_streaming
 from .report import read_worker_report
@@ -33,14 +32,6 @@ from .workspace import (
 
 DEFAULT_SOURCE = '/app/algorithm'
 PROVIDER_NAME = re.compile(r'^[a-z0-9][a-z0-9_-]*$')
-PATCH_STATUSES = {
-    'candidate_rejected_patch',
-    'external_blocked_with_patch',
-    'fallback_patch_generated',
-    'pre_validation_failed_patch',
-    'protocol_failed_with_patch',
-    'verified',
-}
 
 
 def prepare_candidate_workspace(
@@ -48,7 +39,12 @@ def prepare_candidate_workspace(
     repair_policy: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     if plan.get('status') != 'planned':
-        return {'status': 'skipped', 'repair_plan_ref': _plan_ref(plan), 'workspace_kind': 'managed_worktree'}
+        return {
+            'status': 'failed',
+            'reason': f"repair plan is not planned: {_text(plan.get('status')) or 'missing_status'}",
+            'repair_plan_ref': _plan_ref(plan),
+            'workspace_kind': 'managed_worktree',
+        }
     policy = _runtime_policy(plan, repair_policy)
     source = algorithm_source_root(policy.get('candidate_source_dir') or os.getenv('LAZYMIND_EVO_CHAT_SOURCE')
                                    or DEFAULT_SOURCE)
@@ -77,12 +73,9 @@ def run_repair_loop(workspace: Mapping[str, Any], cases: tuple[Mapping[str, Any]
     baseline_algo_id = next((text for judge in baseline_judges for text in (algo_id(judge),) if text), '')
     ready = _ready_workspace(workspace, plan, repair_policy)
     if ready.get('status') != 'ready':
-        forced = _force_protocol_patch(plan, repair_policy, trace, _text(ready.get('reason')))
-        attempts = [forced] if forced.get('diff') else []
-        status = _text(forced.get('status')) if attempts else 'protocol_failed'
-        if attempts and status not in PATCH_STATUSES:
-            status = 'protocol_failed_with_patch'
-        return _result(status, plan, workspace, attempts, forced, ready['reason'], baseline_algo_id,
+        reason = _text(ready.get('reason')) or 'repair workspace is not ready'
+        safe_emit(trace, 'repair.loop_completed', status='failed', terminal=True, payload={'reason': reason})
+        return _result('failed', plan, workspace, [], {}, reason, baseline_algo_id,
                        trace_cursor(trace))
     root = Path(str(workspace['workspace_ref'])).resolve()
     case_map = {_text(case.get('id')): case for case in cases
@@ -90,60 +83,51 @@ def run_repair_loop(workspace: Mapping[str, Any], cases: tuple[Mapping[str, Any]
     baseline_map = {_text(judge.get('case_id')): judge for judge in baseline_judges
                     if isinstance(judge, Mapping) and _text(judge.get('case_id'))}
     policy = _runtime_policy(plan, repair_policy)
+    missing_validation = _validation_input_gap(plan, case_map, baseline_map)
+    if missing_validation:
+        safe_emit(trace, 'repair.loop_completed', status='failed', terminal=True,
+                  payload={'reason': missing_validation})
+        return _result('failed', plan, workspace, [], {}, missing_validation, baseline_algo_id, trace_cursor(trace))
     index = build_code_index(root)
     localization = localize_repair(index, plan)
     opencode_config = _opencode_config_from_policy(policy)
+    if not opencode_config:
+        reason = 'missing opencode model configuration'
+        safe_emit(trace, 'repair.loop_completed', status='failed', terminal=True, payload={'reason': reason})
+        return _result('failed', plan, workspace, [], {}, reason, baseline_algo_id, trace_cursor(trace))
     attempts, session_id = [], ''
     budget = _int(policy.get('repair_attempt_budget'), 3, 1, 20)
-    best_patch: Mapping[str, Any] = {}
 
     for attempt_no in range(1, budget + 1):
         safe_emit(trace, 'repair.attempt_started', status='started', attempt=attempt_no,
                   payload={'budget': budget, 'localization_status': localization.get('status')})
         reset_workspace(root)
         artifact_dir = root / '.evo_repair_logs' / 'opencode' / f'attempt_{attempt_no}'
-        run = None
-        if opencode_config:
-            task = _task_card(plan, workspace, localization, attempt_no, artifact_dir / 'worker_report.json')
-            run = run_opencode_streaming(
-                workdir=str(root),
-                prompt=json.dumps(task, ensure_ascii=False, indent=2),
-                artifact_dir=artifact_dir,
-                session_id=session_id,
-                config=opencode_config,
-                timeout_s=_int(policy.get('opencode_timeout_s') or os.getenv('LAZYMIND_EVO_CODE_TIMEOUT_S'),
-                               900, 30, 7200),
-                trace=trace,
-                attempt=attempt_no,
-            )
-            session_id = run.session_id or session_id
+        task = _task_card(plan, workspace, localization, attempt_no, artifact_dir / 'worker_report.json', attempts)
+        run = run_opencode_streaming(
+            workdir=str(root),
+            prompt=json.dumps(task, ensure_ascii=False, indent=2),
+            artifact_dir=artifact_dir,
+            session_id=session_id,
+            config=opencode_config,
+            timeout_s=_int(policy.get('opencode_timeout_s') or os.getenv('LAZYMIND_EVO_CODE_TIMEOUT_S'),
+                           900, 30, 7200),
+            trace=trace,
+            attempt=attempt_no,
+        )
+        session_id = run.session_id or session_id
         report = read_worker_report(artifact_dir / 'worker_report.json')
         diff_info = workspace_diff(root)
-        fallback = {}
-        if not diff_info['diff'].strip():
-            fallback = generate_fallback_patch(root, index, localization)
-            diff_info = workspace_diff(root)
-        pre = pre_validate(root, diff_info, plan, policy, trace, attempt_no) if diff_info['diff'].strip() else {
-            'status': 'failed',
-            'reason': 'fallback_failed_to_create_diff',
-            'commands': [],
-        }
-        if _must_replace_with_fallback(pre, fallback):
-            reset_workspace(root)
-            fallback = generate_fallback_patch(root, index, localization)
-            diff_info = workspace_diff(root)
-            pre = pre_validate(root, diff_info, plan, policy, trace, attempt_no) if diff_info['diff'].strip() else {
-                'status': 'failed',
-                'reason': 'fallback_failed_to_create_diff',
-                'commands': [],
-            }
-        candidate = (
-            validate_candidate_patch(root, diff_info['diff'], plan, case_map, baseline_map, eval_policy,
-                                     candidate_config, ctx, trace, attempt_no)
-            if pre.get('status') == 'passed' and case_map and baseline_map
-            else {'status': 'skipped', 'accepted': False, 'reason': _text(pre.get('reason')) or 'pre_validation_failed'}
-        )
-        status = _attempt_status(pre, candidate, run, fallback)
+        worker_failure = _worker_failure(run)
+        pre = pre_validate(root, diff_info, plan, policy, trace, attempt_no)
+        if worker_failure:
+            candidate = _rejected_candidate('worker_failed', worker_failure)
+        elif pre.get('status') != 'passed':
+            candidate = _rejected_candidate('pre_validation_failed', _text(pre.get('reason')) or 'pre_validation_failed')
+        else:
+            candidate = validate_candidate_patch(root, diff_info['diff'], plan, case_map, baseline_map, eval_policy,
+                                                 candidate_config, ctx, trace, attempt_no)
+        status = 'validated' if candidate.get('accepted') is True else 'failed'
         attempt = {
             'attempt': attempt_no,
             'status': status,
@@ -154,7 +138,6 @@ def run_repair_loop(workspace: Mapping[str, Any], cases: tuple[Mapping[str, Any]
             },
             'worker_report': report,
             'localization': localization,
-            'fallback': fallback,
             'pre_validation': pre,
             'candidate_validation': candidate,
             'workspace_ref': str(root),
@@ -162,119 +145,42 @@ def run_repair_loop(workspace: Mapping[str, Any], cases: tuple[Mapping[str, Any]
             'diff': diff_info['diff'],
         }
         attempts.append(attempt)
-        if diff_info['diff'].strip() and not best_patch:
-            best_patch = attempt
-        if status == 'verified':
+        if status == 'validated':
             safe_emit(trace, 'repair.loop_completed', status='completed', terminal=True,
                       payload={'status': 'validated', 'attempt_count': len(attempts)})
             return _result('validated', plan, workspace, attempts, attempt, 'validated repair patch',
                            baseline_algo_id, trace_cursor(trace))
-        if diff_info['diff'].strip():
-            best_patch = _prefer_patch(best_patch, attempt)
-    if not best_patch:
-        forced = _force_patch(root, plan, policy, trace, 'final_empty_patch')
-        if forced.get('diff'):
-            attempts.append(forced)
-            best_patch = forced
-    winner = best_patch or {}
-    status = _text(winner.get('status')) or 'protocol_failed'
     safe_emit(trace, 'repair.loop_completed', status='failed', terminal=True,
-              payload={'status': status, 'attempt_count': len(attempts)})
-    return _result(status, plan, workspace, attempts, winner, f'repair ended with {status}',
+              payload={'status': 'failed', 'attempt_count': len(attempts)})
+    reset_workspace(root)
+    return _result('failed', plan, workspace, attempts, {}, 'repair exhausted attempts without a validated patch',
                    baseline_algo_id, trace_cursor(trace))
 
 
 def build_verified_patch(run_id: str, loop: Mapping[str, Any]) -> dict[str, Any]:
+    if loop.get('status') != 'validated':
+        raise ValueError(f"repair did not produce a validated patch: {_text(loop.get('status')) or 'missing_status'}")
+    attempts = loop.get('attempts') if isinstance(loop.get('attempts'), list) else []
+    final = attempts[-1] if attempts and isinstance(attempts[-1], Mapping) else {}
+    candidate = final.get('candidate_validation') if isinstance(final.get('candidate_validation'), Mapping) else {}
+    if candidate.get('accepted') is not True:
+        raise ValueError('validated repair patch requires accepted candidate validation')
     raw_diff = loop.get('winning_patch_diff')
     diff = raw_diff if isinstance(raw_diff, str) else str(raw_diff or '')
-    status = 'verified' if loop.get('status') == 'validated' else _text(loop.get('status'))
-    if status not in PATCH_STATUSES:
-        status = 'protocol_failed_with_patch'
     diff_by_file = _diff_by_file(diff)
     if not diff_by_file:
-        raise ValueError('repair patch contract requires a non-empty diff')
+        raise ValueError('validated repair patch requires a non-empty diff')
+    workspace_ref = _text(loop.get('workspace_ref'))
+    if not workspace_ref:
+        raise ValueError('validated repair patch requires workspace_ref')
     return dump_contract(RepairPatch, {
         'run_id': run_id,
         'algo_id': _text(loop.get('algo_id')),
         'candidate_algo_id': _text(loop.get('candidate_algo_id')),
-        'status': status,
-        'workspace_ref': _text(loop.get('workspace_ref')),
+        'status': 'verified',
+        'workspace_ref': workspace_ref,
         'diff': diff_by_file,
     })
-
-
-def _must_replace_with_fallback(pre: Mapping[str, Any], fallback: Mapping[str, Any]) -> bool:
-    if fallback.get('status') == 'patched':
-        return False
-    return _text(pre.get('reason')) in {
-        'ast_unchanged',
-        'diff_scope_violation',
-        'forbidden_trivial_construct',
-        'no_domain_python_change',
-        'python_ast_parse_failed',
-        'trivial_patch_only',
-    }
-
-
-def _force_protocol_patch(
-    plan: Mapping[str, Any],
-    repair_policy: Mapping[str, Any],
-    trace: Any | None,
-    reason: str,
-) -> Mapping[str, Any]:
-    policy = _runtime_policy(plan, repair_policy)
-    try:
-        source = algorithm_source_root(policy.get('candidate_source_dir') or os.getenv('LAZYMIND_EVO_CHAT_SOURCE')
-                                       or DEFAULT_SOURCE)
-        root = workspace_path(policy, plan)
-        objective_hash = hashlib.sha1(json.dumps(plan.get('objective') or {}, sort_keys=True).encode()).hexdigest()[:12]
-        prepare_workspace(source, root, objective_hash)
-    except (OSError, RuntimeError, ValueError):
-        return {}
-    return _force_patch(root.resolve(), plan, policy, trace, reason)
-
-
-def _force_patch(
-    root: Path,
-    plan: Mapping[str, Any],
-    policy: Mapping[str, Any],
-    trace: Any | None,
-    reason: str,
-) -> Mapping[str, Any]:
-    if not _patchable_workspace(root):
-        return {}
-    try:
-        reset_workspace(root)
-        index = build_code_index(root)
-        localization = localize_repair(index, plan)
-        fallback = generate_fallback_patch(root, index, localization)
-        diff_info = workspace_diff(root)
-    except (OSError, RuntimeError, ValueError):
-        return {}
-    if not diff_info['diff'].strip():
-        return {}
-    pre = pre_validate(root, diff_info, plan, policy, trace, 0)
-    return {
-        'attempt': 0,
-        'status': 'protocol_failed_with_patch' if pre.get('status') != 'passed' else 'fallback_patch_generated',
-        'opencode': {'returncode': None, 'last_error': reason, 'configured': False},
-        'worker_report': {},
-        'localization': localization,
-        'fallback': fallback,
-        'pre_validation': pre,
-        'candidate_validation': {'status': 'skipped', 'accepted': False, 'reason': reason},
-        'workspace_ref': str(root),
-        'files_changed': diff_info['files'],
-        'diff': diff_info['diff'],
-    }
-
-
-def _patchable_workspace(root: Path) -> bool:
-    return (
-        root.exists()
-        and (root / '.git').exists()
-        and any((root / base).exists() for base in ('lazymind/chat', 'lazymind/parsing'))
-    )
 
 
 def _ready_workspace(workspace: Mapping[str, Any], plan: Mapping[str, Any],
@@ -296,60 +202,62 @@ def _ready_workspace(workspace: Mapping[str, Any], plan: Mapping[str, Any],
         or fingerprint.get('source_dir') != workspace.get('source_dir')
         or fingerprint.get('objective_hash') != objective_hash
         or workspace_head != workspace.get('git_head')
-        or not (root / 'lazymind' / 'chat').exists()
+        or not (root / 'algorithm' / 'lazymind' / 'chat').exists()
     ):
         return {'status': 'failed', 'reason': 'candidate workspace artifact failed integrity check'}
     return {'status': 'ready', 'reason': ''}
 
 
-def _attempt_status(pre: Mapping[str, Any], candidate: Mapping[str, Any], run: Any, fallback: Mapping[str, Any]) -> str:
-    if candidate.get('accepted'):
-        return 'verified'
-    if pre.get('status') != 'passed':
-        return 'pre_validation_failed_patch'
-    if fallback.get('status') == 'patched' and candidate.get('status') == 'skipped':
-        return 'fallback_patch_generated'
-    if getattr(run, 'returncode', 0) or getattr(run, 'last_error', None):
-        return 'external_blocked_with_patch'
-    return 'candidate_rejected_patch'
-
-
-def _prefer_patch(current: Mapping[str, Any], attempt: Mapping[str, Any]) -> Mapping[str, Any]:
-    rank = {
-        'verified': 5,
-        'candidate_rejected_patch': 4,
-        'fallback_patch_generated': 3,
-        'pre_validation_failed_patch': 2,
-        'external_blocked_with_patch': 1,
-    }
-    return attempt if rank.get(_text(attempt.get('status')), 0) > rank.get(_text(current.get('status')), 0) else current
+def _validation_input_gap(
+    plan: Mapping[str, Any],
+    cases: Mapping[str, Mapping[str, Any]],
+    baseline: Mapping[str, Mapping[str, Any]],
+) -> str:
+    objective = plan.get('objective') if isinstance(plan.get('objective'), Mapping) else {}
+    required = [_text(item) for item in objective.get('validation_case_ids') or [] if _text(item)]
+    if not required:
+        return 'repair plan does not define validation cases'
+    missing_cases = [case_id for case_id in required if case_id not in cases]
+    missing_baseline = [case_id for case_id in required if case_id in cases and case_id not in baseline]
+    if missing_cases:
+        return f"repair validation cases missing: {', '.join(missing_cases[:5])}"
+    if missing_baseline:
+        return f"repair baseline judges missing: {', '.join(missing_baseline[:5])}"
+    return ''
 
 
 def _task_card(plan: Mapping[str, Any], workspace: Mapping[str, Any], localization: Mapping[str, Any],
-               attempt: int, report_path: Path) -> dict[str, Any]:
+               attempt: int, report_path: Path, previous_attempts: list[Mapping[str, Any]] | None = None) -> dict[str, Any]:
+    prior = _attempt_feedback(previous_attempts or [])
     return {
-        'mode': 'lazyrag_force_patch_repair_v2',
+        'mode': 'lazyrag_validated_repair_v3',
         'attempt': attempt,
         'objective': plan.get('objective'),
         'brief': plan.get('brief') if isinstance(plan.get('brief'), Mapping) else {},
         'workspace': {'path': workspace.get('workspace_ref'), 'source_dir': workspace.get('source_dir')},
+        'previous_attempts': prior,
         'localization': {
             'domain': localization.get('domain'),
             'ranked_symbols': list(localization.get('ranked_symbols') or ())[:12],
             'weak_hints': localization.get('weak_hints'),
         },
         'hard_constraints': [
-            'Leave a non-empty git diff. Do not stop without editing code.',
-            'Edit only under lazymind/chat or lazymind/parsing.',
+            'Leave a non-empty git diff that directly addresses the selected repair group.',
+            'Edit only under algorithm/lazymind/chat or algorithm/lazymind/parsing.',
             'Do not edit tests, eval, data, generated files, secrets, or vendored lazyllm.',
+            'Do not add fallback, retry, second-pass, or "if empty then try original query" retrieval behavior.',
+            'Do not treat validation failure by broadening search breadth or bypassing the selected evidence contract.',
+            'If retrieved evidence is present but ids are missing, repair evidence propagation, source serialization, or parsing contracts instead of adding retrieval fallbacks.',
             'Use ranked symbols as localization evidence, not as a hard file whitelist.',
-            'The host repair loop runs verification; do not claim to run commands you cannot run.',
+            'The host repair loop will reject the patch unless validation cases improve and guards do not regress.',
+            'Read previous_attempts before editing; do not repeat a rejected strategy, file-only retry tweak, or metric-neutral change.',
+            'If a previous attempt left target_metric_delta unchanged or failed goodcase_guard, change the root-cause hypothesis before editing.',
             f'Write a JSON worker report to {report_path.as_posix()}.',
         ],
         'worker_report_schema': {
             'status': 'edited',
             'mode': 'patch',
-            'files_changed': ['lazymind/chat/... or lazymind/parsing/...'],
+            'files_changed': ['algorithm/lazymind/chat/... or algorithm/lazymind/parsing/...'],
             'confirmed_locations': [{'path': '...', 'symbol': '...', 'line_start': 1, 'line_end': 2,
                                      'evidence': '...'}],
             'touched_symbols': ['...'],
@@ -360,28 +268,104 @@ def _task_card(plan: Mapping[str, Any], workspace: Mapping[str, Any], localizati
     }
 
 
+def _attempt_feedback(attempts: list[Mapping[str, Any]]) -> list[dict[str, Any]]:
+    return [_attempt_feedback_item(attempt) for attempt in attempts[-3:]]
+
+
+def _attempt_feedback_item(attempt: Mapping[str, Any]) -> dict[str, Any]:
+    candidate = attempt.get('candidate_validation') if isinstance(attempt.get('candidate_validation'), Mapping) else {}
+    delta = candidate.get('analysis_delta') if isinstance(candidate.get('analysis_delta'), Mapping) else {}
+    analysis = candidate.get('candidate_analysis') if isinstance(candidate.get('candidate_analysis'), Mapping) else {}
+    return {
+        'attempt': attempt.get('attempt'),
+        'status': _text(attempt.get('status')),
+        'files_changed': list(attempt.get('files_changed') or [])[:8],
+        'pre_validation': _pick(_mapping(attempt.get('pre_validation')), ('status', 'reason')),
+        'candidate_validation': _pick(candidate, ('status', 'accepted', 'reason')),
+        'analysis_delta': _pick(delta, (
+            'target_group_status',
+            'target_remaining_badcase_count',
+            'target_remaining_delta',
+            'target_badcase_count',
+            'new_group_count',
+            'goodcase_guard_status',
+            'target_metric_delta',
+            'metric_delta',
+            'recommended_action',
+        )),
+        'failed_cases': _failed_case_feedback(analysis),
+    }
+
+
+def _failed_case_feedback(analysis: Mapping[str, Any]) -> list[dict[str, Any]]:
+    rows = analysis.get('rows') if isinstance(analysis.get('rows'), list) else []
+    result = []
+    for row in rows:
+        if not isinstance(row, Mapping) or _text(row.get('issue_type')) == 'correct':
+            continue
+        answer = row.get('rag_answer') if isinstance(row.get('rag_answer'), Mapping) else {}
+        judge = row.get('judge') if isinstance(row.get('judge'), Mapping) else {}
+        trace = row.get('trace_summary') if isinstance(row.get('trace_summary'), Mapping) else {}
+        result.append({
+            'case_id': _text(row.get('case_id')),
+            'issue_type': _text(row.get('issue_type')),
+            'affected_block': _text(row.get('affected_block')),
+            'failure_mode': _text(row.get('failure_mode')),
+            'quality_label': _text(judge.get('quality_label')),
+            'failure_type': _text(judge.get('failure_type')),
+            'retrieval_failure_type': _text(judge.get('retrieval_failure_type')),
+            'overall_score': judge.get('overall_score'),
+            'answer_correctness': judge.get('answer_correctness'),
+            'retrieval_quality_score': judge.get('retrieval_quality_score'),
+            'doc_ids': len(answer.get('doc_ids') or []),
+            'chunk_ids': len(answer.get('chunk_ids') or []),
+            'retrieval_steps': len(trace.get('retrieval_steps') or []),
+            'error_stage_count': len(trace.get('error_stages') or []),
+            'judge_reason': _clip(judge.get('reason'), 260),
+            'answer_excerpt': _clip(answer.get('answer'), 260),
+        })
+    return result[:6]
+
+
 def _result(status: str, plan: Mapping[str, Any], workspace: Mapping[str, Any], attempts: list[Mapping[str, Any]],
             best: Mapping[str, Any], message: str, algo_id_value: str = '',
             trace_cursor: Mapping[str, Any] | None = None) -> dict[str, Any]:
-    candidate = best.get('candidate_validation') if isinstance(best.get('candidate_validation'), Mapping) else {}
+    winner = best if status == 'validated' else {}
+    candidate = winner.get('candidate_validation') if isinstance(winner.get('candidate_validation'), Mapping) else {}
     service = candidate.get('service') if isinstance(candidate.get('service'), Mapping) else {}
-    diff = str(best.get('diff') or '')
-    if status.endswith('_with_patch') and not diff.strip():
-        status = 'protocol_failed'
-    workspace_ref = _text(best.get('workspace_ref')) or _text(workspace.get('workspace_ref'))
+    diff = str(winner.get('diff') or '')
+    workspace_ref = _text(winner.get('workspace_ref')) or _text(workspace.get('workspace_ref'))
     return {
         'id': 'repair.loop_result',
         'status': status,
         'message': message,
         'algo_id': algo_id_value,
         'attempt_count': len(attempts),
-        'files_changed': best.get('files_changed') or [],
+        'files_changed': winner.get('files_changed') or [],
         'workspace_ref': workspace_ref,
         'candidate_algo_id': _text(service.get('algorithm_id')),
         'winning_patch_diff': diff,
         'selected_group': _group_summary(plan.get('selected_group')),
         'attempts': attempts,
         'trace_cursor': dict(trace_cursor or {}),
+    }
+
+
+def _worker_failure(run: Any) -> str:
+    if getattr(run, 'last_error', None):
+        return _text(getattr(run, 'last_error'))
+    returncode = getattr(run, 'returncode', 0)
+    if returncode:
+        return f'opencode exited with {returncode}'
+    return ''
+
+
+def _rejected_candidate(reason: str, detail: str = '') -> dict[str, Any]:
+    return {
+        'status': 'rejected',
+        'accepted': False,
+        'reason': reason,
+        'detail': detail,
     }
 
 
@@ -495,5 +479,14 @@ def _text(value: Any) -> str:
     return str(value or '').strip()
 
 
+def _mapping(value: Any) -> Mapping[str, Any]:
+    return value if isinstance(value, Mapping) else {}
+
+
 def _pick(value: Mapping[str, Any], keys: tuple[str, ...]) -> dict[str, Any]:
     return {key: value[key] for key in keys if key in value}
+
+
+def _clip(value: Any, limit: int) -> str:
+    text = ' '.join(str(value or '').split())
+    return text if len(text) <= limit else text[:limit - 1] + '…'

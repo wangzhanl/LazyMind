@@ -13,11 +13,12 @@ from .artifact import ArtifactKey, ArtifactRef
 from .errors import ArtifactStoreCorruptionError, IdempotencyConflictError, MaterializerContractError
 from .graph import DAGGraph, NextOp
 from .materializer import Materializer, MaterializerInput, MaterializerOutput, MaterializerContext
-from .scheduler import ConcurrencyLimits, ReadyOrder, select_ready_op
+from .scheduler import ConcurrencyLimits, select_ready_op
 from .store import SQLiteArtifactStore
 
 
 TickInterruptionChecker = Callable[[], bool]
+OpSelector = Callable[[NextOp], bool]
 TickStatus = Literal['idle', 'ok', 'stopped', 'stale', 'failed', 'conflict']
 OpStatus = Literal['ok', 'stale', 'failed', 'conflict']
 _RunStatus = Literal['ok', 'stale', 'failed', 'conflict', 'busy', 'already_done']
@@ -68,13 +69,23 @@ class ArtifactRuntime:
         run_id: str,
         *,
         should_interrupt: TickInterruptionChecker | None = None,
-        ready_order: ReadyOrder = 'partition_pipeline',
+        op_selector: OpSelector | None = None,
     ) -> TickResult:
         tick_id = self._next_tick_id
         self._next_tick_id += 1
         if self._concurrency_limits.max_in_flight == 1:
-            return self._tick_serial(run_id, tick_id, should_interrupt=should_interrupt, ready_order=ready_order)
-        return self._tick_concurrent(run_id, tick_id, should_interrupt=should_interrupt, ready_order=ready_order)
+            return self._tick_serial(
+                run_id,
+                tick_id,
+                should_interrupt=should_interrupt,
+                op_selector=op_selector,
+            )
+        return self._tick_concurrent(
+            run_id,
+            tick_id,
+            should_interrupt=should_interrupt,
+            op_selector=op_selector,
+        )
 
     def _tick_serial(
         self,
@@ -82,19 +93,18 @@ class ArtifactRuntime:
         tick_id: int,
         *,
         should_interrupt: TickInterruptionChecker | None,
-        ready_order: ReadyOrder,
+        op_selector: OpSelector | None,
     ) -> TickResult:
         results: list[OpResult] = []
-        recent: NextOp | None = None
         busy_ops: set[str] = set()
         while True:
             if should_interrupt is not None and should_interrupt():
                 return TickResult('stopped', tuple(results))
             ready = tuple(
                 op for op in self._graph.next_ops(self._store.effective_artifacts(run_id))
-                if op.op_id not in busy_ops
+                if op.op_id not in busy_ops and (op_selector is None or op_selector(op))
             )
-            op = select_ready_op(ready, recent, ready_order)
+            op = select_ready_op(ready)
             if op is None:
                 return TickResult('idle' if not results else 'ok', tuple(results))
             run_result = self._run_op(self._store, run_id, tick_id, op)
@@ -103,13 +113,11 @@ class ArtifactRuntime:
                 continue
             busy_ops.clear()
             if run_result.status == 'already_done':
-                recent = op
                 continue
             op_result = OpResult(run_result.op_id, run_result.status, run_result.output_refs, run_result.error)
             results.append(op_result)
             if op_result.status != 'ok':
                 return TickResult(op_result.status, tuple(results))
-            recent = op
 
     def _tick_concurrent(
         self,
@@ -117,10 +125,9 @@ class ArtifactRuntime:
         tick_id: int,
         *,
         should_interrupt: TickInterruptionChecker | None,
-        ready_order: ReadyOrder,
+        op_selector: OpSelector | None,
     ) -> TickResult:
         results: list[OpResult] = []
-        recent: NextOp | None = None
         stop_requested = False
         busy_ops: set[str] = set()
         terminal_status: TickStatus | None = None
@@ -135,14 +142,15 @@ class ArtifactRuntime:
                     ready = tuple(
                         op
                         for op in self._graph.next_ops(self._store.effective_artifacts(run_id))
-                        if op.op_id not in busy_ops and op.op_id not in {item.op_id for item in in_flight.values()}
+                        if (
+                            op.op_id not in busy_ops
+                            and op.op_id not in {item.op_id for item in in_flight.values()}
+                            and (op_selector is None or op_selector(op))
+                        )
                     )
                     while len(in_flight) < self._concurrency_limits.max_in_flight:
-                        op = select_ready_op(
-                            tuple(candidate for candidate in ready if self._can_submit(candidate, in_flight)),
-                            recent,
-                            ready_order,
-                        )
+                        candidates = tuple(candidate for candidate in ready if self._can_submit(candidate, in_flight))
+                        op = select_ready_op(candidates)
                         if op is None:
                             break
                         future = executor.submit(self._run_op_in_worker, run_id, tick_id, op)
@@ -166,12 +174,10 @@ class ArtifactRuntime:
                         continue
                     busy_ops.clear()
                     if run_result.status == 'already_done':
-                        recent = op
                         continue
                     op_result = OpResult(run_result.op_id, run_result.status, run_result.output_refs, run_result.error)
                     results.append(op_result)
                     if op_result.status == 'ok':
-                        recent = op
                         continue
                     if terminal_status is None:
                         terminal_status = op_result.status

@@ -12,12 +12,14 @@ from typing import Any
 from .code_index import DOMAIN_ROOTS
 from .trace import safe_emit
 
-DEFAULT_VERIFY = ('python -m compileall -q lazymind/chat lazymind/parsing',)
+DEFAULT_VERIFY = ('python -m compileall -q algorithm/lazymind/chat algorithm/lazymind/parsing',)
 PATCH_BYTE_LIMIT = 64 * 1024
 SECRET_LITERAL = re.compile(
     r'(?i)[\'"]?(api[_-]?key|token|secret|password|authorization)[\'"]?\s*[:=]\s*'
     r'([\'"]?)(?!<redacted>|unused\b|os\.getenv\b|getenv\b)[A-Za-z0-9._~+/=-]{8,}\2'
 )
+FALLBACK_TEXT = re.compile(r'(?i)\b(fallback|fall\s+back|original\s+query|retry\s+with\s+original)\b')
+RETRIEVAL_CALL = re.compile(r'(?i)(search|retrieve|retriev|rerank|kb|query|expand)')
 
 
 def pre_validate(
@@ -41,6 +43,10 @@ def pre_validate(
     safe_emit(trace, 'verify.hardcode_check_completed',
           status='completed' if hardcode['status'] == 'passed' else 'failed', attempt=attempt, payload=hardcode)
     patch_safety = _patch_safety_check(diff, policy)
+    patch_policy = _patch_policy_check(root, diff, files)
+    safe_emit(trace, 'verify.patch_policy_completed',
+          status='completed' if patch_policy['status'] == 'passed' else 'failed', attempt=attempt,
+          payload=patch_policy)
     behavior = _behaviorful_check(root, diff, files)
     safe_emit(trace, 'verify.behaviorful_diff_completed',
           status='completed' if behavior['status'] == 'passed' else 'failed', attempt=attempt, payload=behavior)
@@ -48,15 +54,18 @@ def pre_validate(
         scope['status'] != 'passed'
         or hardcode['status'] != 'passed'
         or patch_safety['status'] != 'passed'
+        or patch_policy['status'] != 'passed'
         or behavior['status'] != 'passed'
     ):
         reason = next(
-            item['reason'] for item in (scope, hardcode, patch_safety, behavior) if item['status'] != 'passed'
+            item['reason'] for item in (scope, hardcode, patch_safety, patch_policy, behavior)
+            if item['status'] != 'passed'
         )
         safe_emit(trace, 'verify.pre_validation_completed', status='failed', attempt=attempt,
               payload={'reason': reason})
         return {'status': 'failed', 'reason': reason, 'diff_scope': scope, 'hardcode_check': hardcode,
-                'patch_safety': patch_safety, 'behaviorful_check': behavior, 'commands': []}
+                'patch_safety': patch_safety, 'patch_policy': patch_policy, 'behaviorful_check': behavior,
+                'commands': []}
     commands = _verify(root, policy, trace, attempt)
     status = (
         'passed'
@@ -69,13 +78,14 @@ def pre_validate(
     safe_emit(trace, 'verify.pre_validation_completed', status='completed' if status == 'passed' else 'failed',
           attempt=attempt, payload={'outcome': status, 'reason': reason})
     return {'status': status, 'reason': reason, 'diff_scope': scope, 'hardcode_check': hardcode,
-            'patch_safety': patch_safety, 'behaviorful_check': behavior, 'commands': commands['results']}
+            'patch_safety': patch_safety, 'patch_policy': patch_policy, 'behaviorful_check': behavior,
+            'commands': commands['results']}
 
 
 def _diff_scope(files: list[str], plan: Mapping[str, Any]) -> dict[str, Any]:
     brief = plan.get('brief') if isinstance(plan.get('brief'), Mapping) else {}
     violations: list[Any] = []
-    allowed = _scope_roots(brief.get('allowed_roots') or DOMAIN_ROOTS, violations)
+    allowed = _allowed_scope_roots(brief.get('allowed_roots') or DOMAIN_ROOTS, violations)
     blocked = _scope_roots(brief.get('blocked_roots'), violations)
     file_paths = [(path, _relative_path(path)) for path in files]
     for path, normalized in file_paths:
@@ -102,6 +112,24 @@ def _patch_safety_check(diff: str, policy: Mapping[str, Any]) -> dict[str, Any]:
     reason = 'patch_too_large' if size > limit else 'secret_literal_in_patch' if leaked else ''
     return {'status': 'failed' if reason else 'passed', 'reason': reason, 'bytes': size,
             'limit': limit, 'secret_keys': leaked}
+
+
+def _patch_policy_check(root: Path, diff: str, files: list[str]) -> dict[str, Any]:
+    added = [
+        line[1:].strip() for line in diff.splitlines()
+        if line.startswith('+') and not line.startswith('+++') and line[1:].strip()
+    ]
+    text_hits = [
+        line for line in added
+        if not line.startswith('#') and FALLBACK_TEXT.search(line)
+    ]
+    ast_hits = _new_empty_result_fallbacks(root, files)
+    hits = [*text_hits, *ast_hits]
+    return {
+        'status': 'failed' if hits else 'passed',
+        'reason': 'fallback_patch_detected' if hits else '',
+        'hits': hits[:10],
+    }
 
 
 def _behaviorful_check(root: Path, diff: str, files: list[str]) -> dict[str, Any]:
@@ -135,6 +163,202 @@ def _behaviorful_check(root: Path, diff: str, files: list[str]) -> dict[str, Any
     return {'status': 'passed' if changed else 'failed',
             'reason': '' if changed else 'ast_unchanged',
             'files': py_files, 'behaviorful_files': changed}
+
+
+def _new_empty_result_fallbacks(root: Path, files: list[str]) -> list[str]:
+    hits: list[str] = []
+    for rel in [path for path in files if path.endswith('.py') and _in_domain(path)]:
+        current = root / rel
+        try:
+            new_tree = ast.parse(current.read_text(encoding='utf-8'), filename=rel)
+        except (OSError, SyntaxError):
+            continue
+        old_text = _git_show(root, rel)
+        old_tree = None
+        old_nodes = set()
+        old_sequences = set()
+        if old_text is not None:
+            try:
+                old_tree = ast.parse(old_text, filename=rel)
+                old_nodes = {
+                    ast.dump(node, include_attributes=False)
+                    for node in ast.walk(old_tree)
+                    if isinstance(node, (ast.If, ast.Assign, ast.AnnAssign, ast.AugAssign, ast.Return, ast.Expr))
+                }
+                old_sequences = {item['signature'] for item in _guarded_successor_fallbacks(old_tree)}
+            except SyntaxError:
+                old_nodes = set()
+                old_sequences = set()
+        for node in ast.walk(new_tree):
+            if not isinstance(node, (ast.If, ast.Assign, ast.AnnAssign, ast.AugAssign, ast.Return, ast.Expr)):
+                continue
+            if ast.dump(node, include_attributes=False) in old_nodes:
+                continue
+            if _fallback_construct(node):
+                hits.append(f'{rel}:{node.lineno}')
+        for item in _guarded_successor_fallbacks(new_tree):
+            if item['signature'] not in old_sequences:
+                hits.append(f"{rel}:{item['lineno']}")
+    return hits
+
+
+def _fallback_construct(node: ast.stmt) -> bool:
+    if isinstance(node, ast.If):
+        return _empty_result_retry_branch(node)
+    if isinstance(node, ast.Assign):
+        return _fallback_expr(node.value)
+    if isinstance(node, ast.AnnAssign) and node.value is not None:
+        return _fallback_expr(node.value)
+    if isinstance(node, ast.AugAssign):
+        return _fallback_expr(node.value)
+    if isinstance(node, (ast.Return, ast.Expr)) and node.value is not None:
+        return _fallback_expr(node.value)
+    return False
+
+
+def _empty_result_retry_branch(node: ast.If) -> bool:
+    return (
+        _empty_result_test(node.test) and _contains_retrieval_call(node.body)
+    ) or (
+        _truthy_result_test(node.test) and bool(node.orelse) and _contains_retrieval_call(node.orelse)
+    )
+
+
+def _contains_retrieval_call(nodes: list[ast.stmt]) -> bool:
+    return any(
+        _retrieval_call_name(call)
+        for child in nodes
+        for call in ast.walk(child)
+        if isinstance(call, ast.Call)
+    )
+
+
+def _guarded_successor_fallbacks(tree: ast.AST) -> list[dict[str, Any]]:
+    hits: list[dict[str, Any]] = []
+    for parent in ast.walk(tree):
+        body = getattr(parent, 'body', None)
+        if not isinstance(body, list):
+            continue
+        for guard, successor in zip(body, body[1:]):
+            if not isinstance(guard, ast.If):
+                continue
+            if (
+                _truthy_result_test(guard.test)
+                and not guard.orelse
+                and _guard_returns_result(guard.body)
+                and _stmt_contains_retrieval_call(successor)
+            ):
+                signature = ast.dump(ast.Module(body=[guard, successor], type_ignores=[]), include_attributes=False)
+                hits.append({'lineno': guard.lineno, 'signature': signature})
+    return hits
+
+
+def _guard_returns_result(nodes: list[ast.stmt]) -> bool:
+    return any(
+        isinstance(item, ast.Return)
+        and item.value is not None
+        and _truthy_result_test(item.value)
+        for item in nodes
+    )
+
+
+def _stmt_contains_retrieval_call(node: ast.stmt) -> bool:
+    return any(_retrieval_call_name(item) for item in ast.walk(node) if isinstance(item, ast.Call))
+
+
+def _fallback_expr(node: ast.AST) -> bool:
+    if isinstance(node, ast.BoolOp) and isinstance(node.op, ast.Or):
+        return any(_expr_contains_retrieval_call(value) for value in node.values[1:])
+    if isinstance(node, ast.IfExp):
+        return (
+            _empty_result_test(node.test) and _expr_contains_retrieval_call(node.body)
+        ) or (
+            _truthy_result_test(node.test) and _expr_contains_retrieval_call(node.orelse)
+        )
+    return False
+
+
+def _expr_contains_retrieval_call(node: ast.AST) -> bool:
+    return any(_retrieval_call_name(item) for item in ast.walk(node) if isinstance(item, ast.Call))
+
+
+def _empty_result_test(node: ast.AST) -> bool:
+    if isinstance(node, ast.UnaryOp) and isinstance(node.op, ast.Not):
+        return _truthy_result_test(node.operand) or _len_call(node.operand)
+    if isinstance(node, ast.Compare) and len(node.ops) == 1:
+        return _empty_compare(node.left, node.ops[0], node.comparators[0])
+    if isinstance(node, ast.BoolOp):
+        return any(_empty_result_test(value) for value in node.values)
+    return False
+
+
+def _truthy_result_test(node: ast.AST) -> bool:
+    if isinstance(node, (ast.Name, ast.Attribute, ast.Subscript)):
+        return True
+    if _len_call(node):
+        return True
+    if isinstance(node, ast.Compare) and len(node.ops) == 1:
+        return _positive_compare(node.left, node.ops[0], node.comparators[0])
+    if isinstance(node, ast.BoolOp):
+        return any(_truthy_result_test(value) for value in node.values)
+    return False
+
+
+def _empty_compare(left: ast.AST, op: ast.cmpop, right: ast.AST) -> bool:
+    if isinstance(op, (ast.Eq, ast.Is)):
+        return (
+            _truthy_result_test(left) and _empty_literal(right)
+            or _truthy_result_test(right) and _empty_literal(left)
+        )
+    if isinstance(op, (ast.LtE, ast.Lt)):
+        return _len_call(left) and _zeroish_limit(right)
+    if isinstance(op, (ast.GtE, ast.Gt)):
+        return _len_call(right) and _zeroish_limit(left)
+    return False
+
+
+def _positive_compare(left: ast.AST, op: ast.cmpop, right: ast.AST) -> bool:
+    if isinstance(op, (ast.NotEq, ast.IsNot)):
+        return (
+            _truthy_result_test(left) and _empty_literal(right)
+            or _truthy_result_test(right) and _empty_literal(left)
+        )
+    if isinstance(op, (ast.Gt, ast.GtE)):
+        return _len_call(left) and _zero_literal(right)
+    if isinstance(op, (ast.Lt, ast.LtE)):
+        return _len_call(right) and _zero_literal(left)
+    return False
+
+
+def _len_call(node: ast.AST) -> bool:
+    return isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == 'len'
+
+
+def _empty_literal(node: ast.AST) -> bool:
+    return (
+        _zero_literal(node)
+        or isinstance(node, ast.Constant) and node.value is None
+        or isinstance(node, (ast.List, ast.Tuple, ast.Set)) and not node.elts
+        or isinstance(node, ast.Dict) and not node.keys
+    )
+
+
+def _zero_literal(node: ast.AST) -> bool:
+    return isinstance(node, ast.Constant) and node.value == 0
+
+
+def _zeroish_limit(node: ast.AST) -> bool:
+    return isinstance(node, ast.Constant) and node.value in {0, 1}
+
+
+def _retrieval_call_name(node: ast.Call) -> bool:
+    name = ''
+    func = node.func
+    if isinstance(func, ast.Name):
+        name = func.id
+    elif isinstance(func, ast.Attribute):
+        name = func.attr
+    return bool(RETRIEVAL_CALL.search(name))
 
 
 def _only_trivial_added_lines(diff: str) -> bool:
@@ -315,6 +539,16 @@ def _scope_roots(values: Any, violations: list[Any]) -> list[str]:
         else:
             violations.append(str(value))
     return roots
+
+
+def _allowed_scope_roots(values: Any, violations: list[Any]) -> list[str]:
+    roots = _scope_roots(values, violations)
+    invalid = [
+        root for root in roots
+        if not any(root == domain or root.startswith(f'{domain}/') for domain in DOMAIN_ROOTS)
+    ]
+    violations.extend(invalid)
+    return [root for root in roots if root not in set(invalid)]
 
 
 def _int(value: Any, default: int, low: int, high: int) -> int:

@@ -6,7 +6,7 @@ from dataclasses import asdict, dataclass
 from pathlib import Path, PurePosixPath
 from typing import Any
 
-DOMAIN_ROOTS = ('lazymind/chat', 'lazymind/parsing')
+DOMAIN_ROOTS = ('algorithm/lazymind/chat', 'algorithm/lazymind/parsing')
 BLOCKED_PARTS = {'__pycache__', '.git', 'artifacts', 'cache', 'generated'}
 MAX_FILE_BYTES = 512 * 1024
 MAX_INDEX_FILES = 120

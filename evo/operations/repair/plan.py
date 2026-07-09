@@ -5,7 +5,7 @@ from collections.abc import Mapping
 from hashlib import sha1
 from typing import Any
 
-DEFAULT_ALLOWED_ROOTS = ('lazymind/chat', 'lazymind/parsing')
+DEFAULT_ALLOWED_ROOTS = ('algorithm/lazymind/chat', 'algorithm/lazymind/parsing')
 DEFAULT_BLOCKED_ROOTS = ('tests', '.git', 'lazyllm', 'evo', 'data')
 BUDGET_LIMITS = {
     'target_case_budget': (8, 1, 30),
@@ -38,7 +38,9 @@ def build_repair_plan(analysis: Mapping[str, Any], policy: Mapping[str, Any]) ->
         }
 
     if not rows:
-        return empty_plan('skipped_no_analysis_rows')
+        return empty_plan('blocked_no_analysis_rows', blocked=True)
+    if not _inside_domain_roots(allowed_roots):
+        return empty_plan('blocked_invalid_allowed_roots', blocked=True)
     if 'repair_group_queue' not in analysis:
         return empty_plan('blocked_missing_repair_group_queue', blocked=True)
 
@@ -107,7 +109,7 @@ def build_repair_plan(analysis: Mapping[str, Any], policy: Mapping[str, Any]) ->
         groups.append(group)
 
     if not groups:
-        return empty_plan('skipped_no_repairable_group')
+        return empty_plan('blocked_no_repairable_group', blocked=True)
 
     selected_rank, selected = next(
         ((rank, group) for rank, group in enumerate(groups, start=1) if not group.get('deeper_analysis_reason')),
@@ -259,6 +261,13 @@ def _path(value: Any) -> str:
     if any(part in {'', '.', '..'} for part in parts):
         return ''
     return '/'.join(parts)
+
+
+def _inside_domain_roots(roots: list[str]) -> bool:
+    return bool(roots) and all(
+        any(root == domain or root.startswith(f'{domain}/') for domain in DEFAULT_ALLOWED_ROOTS)
+        for root in roots
+    )
 
 
 def _items(value: Any) -> list[Any]:

@@ -167,6 +167,8 @@ class ProjectionService:
         try:
             rows = _source_event_rows(thread_id, store)
             state = self.runtime.gate_state(thread_id)
+            step_items = _step_items(thread_id, rows, state)
+            gate_step_id = next((item['step_id'] for item in reversed(step_items) if item['active']), '')
             step_id = _normalized_step_id(step_id)
             if step_id and step_id not in {row['step_id'] for row in rows}:
                 raise HTTPException(422, 'unknown step_id for thread')
@@ -174,6 +176,7 @@ class ProjectionService:
                 [row for row in rows if not step_id or row['step_id'] == step_id],
                 _num_case(config),
                 state,
+                append_gate_boundary=not step_id or step_id == gate_step_id,
             )
             if after_event_id:
                 sliced = _events_after_id(items, after_event_id)
@@ -650,7 +653,13 @@ def _refs_by_step(refs: Iterable[ArtifactRef]) -> dict[str, list[ArtifactRef]]:
     return {step: grouped[step] for step in C.STEPS if grouped[step]}
 
 
-def _display_events(rows: list[dict[str, Any]], num_case: int, state: FlowRunState) -> list[dict[str, Any]]:
+def _display_events(
+    rows: list[dict[str, Any]],
+    num_case: int,
+    state: FlowRunState,
+    *,
+    append_gate_boundary: bool,
+) -> list[dict[str, Any]]:
     items: list[dict[str, Any]] = []
     case_counts: dict[str, int] = {}
     ordered = sorted(rows, key=lambda item: item['order'])
@@ -671,7 +680,8 @@ def _display_events(rows: list[dict[str, Any]], num_case: int, state: FlowRunSta
             )
         if row['order'] == last_order_by_step[row['step_id']]:
             _append_transition(items, row)
-    _append_gate_boundary(items, ordered, state)
+    if append_gate_boundary:
+        _append_gate_boundary(items, ordered, state)
     return items
 
 
@@ -691,6 +701,7 @@ def _step_items(thread_id: str, rows: list[dict[str, Any]], state: FlowRunState)
                 'next_step_id': row.get('next_step_id') or '',
                 'version': None,
                 'status': 'running',
+                'continues_previous': False,
             },
         )
         item['event_count'] += 1
@@ -706,6 +717,8 @@ def _step_items(thread_id: str, rows: list[dict[str, Any]], state: FlowRunState)
         if not item['next_step_id']:
             item['next_step_id'] = ''
         result.append(item)
+    for index in range(1, len(result)):
+        result[index]['continues_previous'] = result[index - 1].get('stage') == result[index].get('stage')
     _apply_gate_step_status(result, state)
     return result
 

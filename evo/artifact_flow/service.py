@@ -61,7 +61,8 @@ class FlowGatePort(Protocol):
 
 
 class FlowAdapterPort(EvoArtifactAccess, Protocol):
-    def tick(self, run_id: str, *, should_interrupt: Callable[[], bool] | None = None) -> object:
+    def tick(self, run_id: str, *, should_interrupt: Callable[[], bool] | None = None,
+             op_selector: Callable[[object], bool] | None = None) -> object:
         ...
 
 
@@ -289,6 +290,7 @@ class FlowService:
         released = dict(state.released_checkpoints)
         try:
             adapter = self._adapter_factory()
+            op_selector = self._op_selector(command.until_step)
             projection = checkpoint_projection(
                 self._spec,
                 adapter.effective_artifacts(run_id),
@@ -337,7 +339,7 @@ class FlowService:
                         return _progress_by_step(progress_now)[target].completed
                     return _checkpoint(progress_now, self._checkpoint_policy, released_now, target) is not None
 
-                tick = adapter.tick(run_id, should_interrupt=should_interrupt)
+                tick = adapter.tick(run_id, should_interrupt=should_interrupt, op_selector=op_selector)
                 if tick.status in {'failed', 'conflict'}:
                     error = _tick_error(tick)
                     return self._record(
@@ -460,6 +462,16 @@ class FlowService:
     def _validate_until_step(self, step: str) -> None:
         if step and step not in self._spec.steps:
             raise ValueError(f'unknown until_step: {step}')
+
+    def _op_selector(self, until_step: str) -> Callable[[object], bool] | None:
+        if not until_step:
+            return None
+        allowed = frozenset(
+            key
+            for step in self._spec.steps[:self._spec.steps.index(until_step) + 1]
+            for key in self._spec.step_output_keys(step)
+        )
+        return lambda op: any(key in allowed for key in op.output_key_by_name.values())
 
     def _from_receipt(self, run_id: str, receipt: CommandReceipt, *, error: str = '') -> FlowCommandResult:
         if receipt.status == 'conflict':

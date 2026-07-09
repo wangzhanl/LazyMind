@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
@@ -199,20 +200,20 @@ def _cleanup_candidate_service(
     attempt: int | None = None,
 ) -> dict[str, Any]:
     if not service:
-        return {'status': 'skipped', 'reason': 'missing_service'}
+        return {'status': 'not_applicable', 'reason': 'missing_service'}
     if service.get('status') != 'ready':
-        return {'status': 'skipped', 'reason': 'service_not_ready'}
+        return {'status': 'not_applicable', 'reason': 'service_not_ready'}
     if service.get('cleanup_allowed') is not True:
-        return {'status': 'skipped', 'reason': 'cleanup_not_owned'}
+        return {'status': 'not_applicable', 'reason': 'cleanup_not_owned'}
     registered = service.get('register_response') if isinstance(service.get('register_response'), Mapping) else {}
     if registered.get('reused') is True:
-        return {'status': 'skipped', 'reason': 'reused_service'}
+        return {'status': 'not_applicable', 'reason': 'reused_service'}
     algorithm_id = _text(service.get('algorithm_id'))
     admin_url = _text(service.get('router_admin_url'))
     if not algorithm_id or not admin_url:
-        return {'status': 'skipped', 'reason': 'missing_router_target'}
+        return {'status': 'not_applicable', 'reason': 'missing_router_target'}
     if not algorithm_id.startswith('evo_'):
-        return {'status': 'skipped', 'reason': 'non_evo_algorithm', 'algorithm_id': algorithm_id}
+        return {'status': 'not_applicable', 'reason': 'non_evo_algorithm', 'algorithm_id': algorithm_id}
 
     payload = {'algorithm_id': algorithm_id}
     try:
@@ -310,8 +311,9 @@ def _candidate_gate(
         return False, 'target_followup_groups_detected'
     if delta.get('target_group_status') not in {'resolved', 'improved'}:
         return False, 'target_group_not_improved'
-    if _primary_metric_value(delta) < 0.0001:
-        return False, 'metric_not_improved'
+    metric_status = _metric_gate(delta)
+    if metric_status:
+        return False, metric_status
     return True, 'target_group_improved'
 
 
@@ -335,14 +337,22 @@ def _target_metric_delta(selected: Mapping[str, Any], rows: list[Mapping[str, An
     return {key: round(sum(values) / len(values), 4) for key, values in result.items() if values}
 
 
-def _primary_metric_value(delta: Mapping[str, Any]) -> float:
-    metrics = delta.get('target_metric_delta') if isinstance(delta.get('target_metric_delta'), Mapping) else {}
+def _metric_gate(delta: Mapping[str, Any]) -> str:
+    target_metrics = delta.get('target_metric_delta') if isinstance(delta.get('target_metric_delta'), Mapping) else {}
     primary = [_text(item) for item in delta.get('primary_metrics') or () if _text(item)]
-    values = [_float(metrics.get(metric)) for metric in primary if metric in metrics]
-    if values:
-        return max(values)
+    if not primary:
+        return 'primary_metrics_missing'
+    missing_primary = [metric for metric in primary if metric not in target_metrics]
+    primary_values = [_float(target_metrics.get(metric)) for metric in primary if metric in target_metrics]
+    if missing_primary or any(not math.isfinite(value) or value < 0.0001 for value in primary_values):
+        return 'metric_not_improved'
     aggregate = delta.get('metric_delta') if isinstance(delta.get('metric_delta'), Mapping) else {}
-    return max(_float(aggregate.get('answer_correctness')), _float(aggregate.get('overall_score')))
+    aggregate_values = [_float(value) for value in aggregate.values()]
+    if aggregate_values and any(not math.isfinite(value) or value < 0.0001 for value in aggregate_values):
+        return 'metric_regressed'
+    if not aggregate_values:
+        return 'metric_not_improved'
+    return ''
 
 
 def _float(value: Any) -> float:
