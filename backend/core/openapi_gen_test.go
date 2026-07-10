@@ -631,7 +631,7 @@ func TestOpenAPISpecMarksUIPreferencesPatchFieldsOptional(t *testing.T) {
 	}
 }
 
-func TestOpenAPISpecIncludesModelMaxInputTokens(t *testing.T) {
+func TestOpenAPISpecIncludesLLMMaxInputTokens(t *testing.T) {
 	r := mux.NewRouter()
 	registerAllRoutes(r)
 

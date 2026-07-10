@@ -115,8 +115,13 @@ func upsertDefaultModel(tx *gorm.DB, now time.Time, providerID, providerName str
 	if name == "" || modelType == "" {
 		return errors.New("model name and type are required")
 	}
-	if item.MaxInputTokens != nil && *item.MaxInputTokens <= 0 {
-		return errors.New("model max_input_tokens must be greater than zero")
+	if item.MaxInputTokens != nil {
+		if *item.MaxInputTokens <= 0 {
+			return errors.New("model max_input_tokens must be greater than zero")
+		}
+		if modelType != "llm" {
+			return errors.New("model max_input_tokens is only supported for llm models")
+		}
 	}
 
 	var row orm.DefaultModel
@@ -155,22 +160,26 @@ func upsertDefaultModel(tx *gorm.DB, now time.Time, providerID, providerName str
 	return syncDefaultModelMaxInputTokens(tx, now, providerID, name, item.MaxInputTokens)
 }
 
-// syncDefaultModelMaxInputTokens backfills known catalog metadata into default models already
-// copied to user groups. Unknown limits and custom models are intentionally left untouched.
+// syncDefaultModelMaxInputTokens mirrors catalog metadata into default models already
+// copied to user groups. Custom user-added models are intentionally left untouched.
 func syncDefaultModelMaxInputTokens(tx *gorm.DB, now time.Time, providerID, modelName string, maxInputTokens *int64) error {
-	if maxInputTokens == nil {
-		return nil
-	}
 	providerIDs := tx.Model(&orm.UserModelProvider{}).
 		Select("id").
 		Where("default_model_provider_id = ? AND deleted_at IS NULL", providerID)
-	return tx.Model(&orm.UserModelProviderGroupModel{}).
+	query := tx.Model(&orm.UserModelProviderGroupModel{}).
 		Where("is_default = ? AND name = ? AND user_model_provider_id IN (?) AND deleted_at IS NULL", true, modelName, providerIDs).
-		Where("max_input_tokens IS NULL OR max_input_tokens <> ?", *maxInputTokens).
-		Updates(map[string]any{
-			"max_input_tokens": maxInputTokens,
-			"updated_at":       now,
-		}).Error
+		Where("max_input_tokens IS NOT NULL")
+	updates := map[string]any{
+		"max_input_tokens": nil,
+		"updated_at":       now,
+	}
+	if maxInputTokens != nil {
+		query = tx.Model(&orm.UserModelProviderGroupModel{}).
+			Where("is_default = ? AND name = ? AND user_model_provider_id IN (?) AND deleted_at IS NULL", true, modelName, providerIDs).
+			Where("max_input_tokens IS NULL OR max_input_tokens <> ?", *maxInputTokens)
+		updates["max_input_tokens"] = maxInputTokens
+	}
+	return query.Updates(updates).Error
 }
 
 // syncRemovedDefaultModels soft-deletes catalog models that are no longer present in YAML.
