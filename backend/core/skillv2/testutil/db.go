@@ -31,6 +31,7 @@ func NewTestDB(t *testing.T) *TestDB {
 		&SkillDraftReviewActionBatchRow{},
 		&SkillDraftReviewActionItemRow{},
 		&SkillMarketItemRow{},
+		&SkillSearchIndexRow{},
 		&SkillShareItemRow{},
 	); err != nil {
 		t.Fatalf("auto migrate skill v2 test tables: %v", err)
@@ -50,6 +51,7 @@ func ResetSkillTables(t *testing.T, db *TestDB) {
 		"skill_revision_entries",
 		"skill_revisions",
 		"skill_market_items",
+		"skill_search_indexes",
 		"skill_share_items",
 		"skills",
 		"skill_blobs",
@@ -87,7 +89,7 @@ func TimeFixture() time.Time {
 
 type SkillRow struct {
 	ID                    string     `gorm:"column:id;type:varchar(36);primaryKey"`
-	OwnerUserID           string     `gorm:"column:owner_user_id;type:text;not null;uniqueIndex:uk_skills_owner_identity,priority:1"`
+	OwnerUserID           string     `gorm:"column:owner_user_id;type:text;not null;uniqueIndex:uk_skills_owner_identity,priority:1;uniqueIndex:uk_skills_owner_relative_root,priority:1"`
 	OwnerUserName         string     `gorm:"column:owner_user_name;type:text;not null;default:''"`
 	CreateUserID          string     `gorm:"column:create_user_id;type:text;not null"`
 	CreateUserName        string     `gorm:"column:create_user_name;type:text;not null;default:''"`
@@ -116,6 +118,16 @@ type SkillRow struct {
 }
 
 func (SkillRow) TableName() string { return "skills" }
+
+type SkillSearchIndexRow struct {
+	SkillID        string    `gorm:"column:skill_id;type:varchar(36);primaryKey"`
+	OwnerUserID    string    `gorm:"column:owner_user_id;type:text;not null;index:idx_skill_search_owner"`
+	HeadRevisionID string    `gorm:"column:head_revision_id;type:varchar(36);not null"`
+	Content        string    `gorm:"column:content;type:text;not null"`
+	UpdatedAt      time.Time `gorm:"column:updated_at;not null"`
+}
+
+func (SkillSearchIndexRow) TableName() string { return "skill_search_indexes" }
 
 type SkillBlobRow struct {
 	Hash           string    `gorm:"column:hash;type:text;primaryKey"`

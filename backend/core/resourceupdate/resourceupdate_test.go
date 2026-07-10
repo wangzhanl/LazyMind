@@ -20,6 +20,7 @@ import (
 	"lazymind/core/algo"
 	"lazymind/core/common/orm"
 	"lazymind/core/evolution"
+	"lazymind/core/preferencefile"
 	"lazymind/core/store"
 )
 
@@ -1091,7 +1092,7 @@ func TestScannerCreatesAutoApplyTasksAndExpiresOlderSkillPatches(t *testing.T) {
 	if status := skillReviewResultStatus(t, db, "new-skill"); status != reviewStatusAccepted {
 		t.Fatalf("expected new-skill accepted, got %s", status)
 	}
-	var createdSkill orm.SkillResource
+	var createdSkill orm.SkillV2Skill
 	if err := db.Take(&createdSkill, "owner_user_id = ? AND skill_name = ?", "user-1", "brand-new").Error; err != nil {
 		t.Fatalf("read auto-created skill: %v", err)
 	}
@@ -1279,15 +1280,13 @@ func TestAutoApplyReviewRechecksAutoEvoAndAppliesWhenStillValid(t *testing.T) {
 	if result.Done != 1 {
 		t.Fatalf("expected done auto apply, got %#v", result)
 	}
-	var updated orm.SkillResource
+	var updated orm.SkillV2Skill
 	if err := db.Take(&updated, "id = ?", "skill-apply").Error; err != nil {
 		t.Fatalf("read skill: %v", err)
 	}
-	if updated.Content != newContent || updated.Version != 3 || updated.ContentHash != evolution.HashContent(newContent) {
-		t.Fatalf("skill not applied correctly: %#v", updated)
-	}
-	if strings.Contains(string(updated.Ext), "draft_suggestion_ids") || !strings.Contains(string(updated.Ext), `"keep":"yes"`) {
-		t.Fatalf("expected legacy draft suggestion refs cleared while preserving ext, got %s", string(updated.Ext))
+	updatedContent := readSkillV2HeadContent(t, db, updated.ID)
+	if updatedContent != newContent || updated.Version != 3 {
+		t.Fatalf("skill not applied correctly: version=%d content=%q", updated.Version, updatedContent)
 	}
 	if status := skillReviewResultStatus(t, db, "patch-apply"); status != reviewStatusAccepted {
 		t.Fatalf("expected accepted result, got %s", status)
@@ -1346,12 +1345,13 @@ func TestAutoApplyReviewSkipsWhenAutoEvoDisabledAtExecution(t *testing.T) {
 	if task.Status != orm.ResourceUpdateTaskStatusSkipped {
 		t.Fatalf("expected skipped task, got %s", task.Status)
 	}
-	var updated orm.SkillResource
+	var updated orm.SkillV2Skill
 	if err := db.Take(&updated, "id = ?", "skill-skip").Error; err != nil {
 		t.Fatalf("read skill: %v", err)
 	}
-	if updated.Content != oldContent || updated.Version != 1 {
-		t.Fatalf("skill should remain unchanged, got content=%q version=%d", updated.Content, updated.Version)
+	updatedContent := readSkillV2HeadContent(t, db, updated.ID)
+	if updatedContent != oldContent || updated.Version != 1 {
+		t.Fatalf("skill should remain unchanged, got content=%q version=%d", updatedContent, updated.Version)
 	}
 	if status := skillReviewResultStatus(t, db, "patch-skip"); status != reviewStatusPending {
 		t.Fatalf("expected result pending, got %s", status)
@@ -1384,12 +1384,13 @@ func TestSkillAcceptRejectAndUserFiltering(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("accept new skill failed: code=%d body=%s", rec.Code, rec.Body.String())
 	}
-	var row orm.SkillResource
+	var row orm.SkillV2Skill
 	if err := db.Take(&row, "owner_user_id = ? AND skill_name = ?", "user-1", "new-skill").Error; err != nil {
 		t.Fatalf("read created skill: %v", err)
 	}
-	if row.Content != rawNewContent || row.Category != "system" || row.AutoEvo {
-		t.Fatalf("created skill mismatch: category=%q auto_evo=%v content=%q", row.Category, row.AutoEvo, row.Content)
+	rowContent := readSkillV2HeadContent(t, db, row.ID)
+	if rowContent != strings.TrimSpace(rawNewContent) || row.Category != "system" || row.AutoEvo {
+		t.Fatalf("created skill mismatch: category=%q auto_evo=%v content=%q", row.Category, row.AutoEvo, rowContent)
 	}
 	if status := skillReviewResultStatus(t, db, "new-1"); status != reviewStatusAccepted {
 		t.Fatalf("expected new result accepted, got %s", status)
@@ -1528,12 +1529,9 @@ func TestMemoryAcceptRejectTaskAPIAndNoAsyncJobID(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("accept memory failed: code=%d body=%s", rec.Code, rec.Body.String())
 	}
-	var memory orm.SystemMemory
-	if err := db.Take(&memory, "id = ?", "memory-1").Error; err != nil {
-		t.Fatalf("read memory: %v", err)
-	}
-	if memory.Content != "new memory" || memory.Version != 2 || memory.ContentHash != evolution.HashContent("new memory") {
-		t.Fatalf("memory not updated: %#v", memory)
+	memoryContent, memoryResource := readPersonalResourceHeadContent(t, db, "memory-1")
+	if memoryContent != "new memory" || memoryResource.Version != 2 {
+		t.Fatalf("memory not updated: version=%d content=%q", memoryResource.Version, memoryContent)
 	}
 
 	otherReq := mux.SetURLVars(httptest.NewRequest(http.MethodGet, "/api/core/memory-review-results/memory-other", nil), map[string]string{"review_result_id": "memory-other"})
@@ -1654,18 +1652,13 @@ func TestAcceptUserPreferenceReviewResultParsesFrontmatter(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("accept user_preference failed: code=%d body=%s", rec.Code, rec.Body.String())
 	}
-	var updated orm.SystemUserPreference
-	if err := db.Take(&updated, "id = ?", "preference-1").Error; err != nil {
-		t.Fatalf("read preference: %v", err)
+	updatedContent, _ := readPersonalResourceHeadContent(t, db, "preference-1")
+	updated, err := preferencefile.ParseFileContent(updatedContent)
+	if err != nil {
+		t.Fatalf("parse updated preference: %v", err)
 	}
 	if updated.Content != "新正文" || updated.AgentPersona != "新角色" || updated.PreferredName != "用户称谓" || updated.ResponseStyle != "回复风格" {
-		t.Fatalf("expected frontmatter to be split into preference columns, got %#v", updated)
-	}
-	if strings.Contains(updated.Content, "agent_persona") || strings.Contains(updated.Content, "---") {
-		t.Fatalf("content should not keep raw frontmatter, got %q", updated.Content)
-	}
-	if updated.ContentHash != evolution.HashSystemUserPreference(updated) {
-		t.Fatalf("expected hash over split preference, got %q", updated.ContentHash)
+		t.Fatalf("expected frontmatter in preference file, got %#v", updated)
 	}
 	if status := memoryReviewStatus(t, db, "preference-accept"); status != reviewStatusAccepted {
 		t.Fatalf("expected accepted status, got %s", status)
@@ -1683,10 +1676,23 @@ func newResourceUpdateTestDB(t *testing.T) *gorm.DB {
 		&orm.ChatHistory{},
 		&orm.ResourceUpdateTask{},
 		&orm.SkillReviewSchedulerState{},
-		&orm.SkillResource{},
-		&orm.SystemMemory{},
-		&orm.SystemUserPreference{},
-		&orm.ResourceVersion{},
+		&orm.PersonalResource{},
+		&orm.PersonalResourceBlob{},
+		&orm.PersonalResourceRevision{},
+		&orm.PersonalResourceDraft{},
+		&orm.PersonalResourceReviewSession{},
+		&orm.PersonalResourceReviewActionBatch{},
+		&orm.PersonalResourceReviewActionItem{},
+		&orm.SkillV2Skill{},
+		&orm.SkillV2Blob{},
+		&orm.SkillV2Revision{},
+		&orm.SkillV2RevisionEntry{},
+		&orm.SkillV2Draft{},
+		&orm.SkillV2DraftEntry{},
+		&orm.SkillDraftReviewSession{},
+		&orm.SkillDraftReviewActionBatch{},
+		&orm.SkillDraftReviewActionItem{},
+		&orm.SkillSearchIndex{},
 	); err != nil {
 		t.Fatalf("auto migrate: %v", err)
 	}
@@ -1815,6 +1821,15 @@ func marshalJSON(t *testing.T, v any) json.RawMessage {
 
 func ptrTime(v time.Time) *time.Time {
 	return &v
+}
+
+func firstNonEmptyTest(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return value
+		}
+	}
+	return ""
 }
 
 func assertRequestJSONHasNoSensitiveFields(t *testing.T, body json.RawMessage) {
@@ -1973,65 +1988,237 @@ func memoryReviewStatus(t *testing.T, db *gorm.DB, id string) string {
 	return row.ReviewStatus
 }
 
+func readSkillV2HeadContent(t *testing.T, db *gorm.DB, skillID string) string {
+	t.Helper()
+	var skill orm.SkillV2Skill
+	if err := db.Take(&skill, "id = ?", skillID).Error; err != nil {
+		t.Fatalf("read skill %s: %v", skillID, err)
+	}
+	if skill.HeadRevisionID == nil {
+		t.Fatalf("skill %s has no head revision", skillID)
+	}
+	var entry orm.SkillV2RevisionEntry
+	if err := db.Take(&entry, "revision_id = ? AND path = ?", *skill.HeadRevisionID, "SKILL.md").Error; err != nil {
+		t.Fatalf("read skill head entry %s: %v", skillID, err)
+	}
+	if entry.BlobHash == nil {
+		t.Fatalf("skill %s SKILL.md has no blob", skillID)
+	}
+	var blob orm.SkillV2Blob
+	if err := db.Take(&blob, "hash = ?", *entry.BlobHash).Error; err != nil {
+		t.Fatalf("read skill blob %s: %v", skillID, err)
+	}
+	return string(blob.Content)
+}
+
+func readPersonalResourceHeadContent(t *testing.T, db *gorm.DB, resourceID string) (string, orm.PersonalResource) {
+	t.Helper()
+	var resource orm.PersonalResource
+	if err := db.Take(&resource, "id = ?", resourceID).Error; err != nil {
+		t.Fatalf("read personal resource %s: %v", resourceID, err)
+	}
+	if resource.HeadRevisionID == nil {
+		t.Fatalf("personal resource %s has no head revision", resourceID)
+	}
+	var revision orm.PersonalResourceRevision
+	if err := db.Take(&revision, "id = ? AND resource_id = ?", *resource.HeadRevisionID, resource.ID).Error; err != nil {
+		t.Fatalf("read personal resource revision %s: %v", resourceID, err)
+	}
+	var blob orm.PersonalResourceBlob
+	if err := db.Take(&blob, "hash = ?", revision.BlobHash).Error; err != nil {
+		t.Fatalf("read personal resource blob %s: %v", resourceID, err)
+	}
+	return string(blob.Content), resource
+}
+
 func insertSkillResource(t *testing.T, db *gorm.DB, row orm.SkillResource) {
 	t.Helper()
-	if row.RelativePath == "" && row.NodeType == evolution.SkillNodeTypeParent {
-		row.RelativePath = evolution.ParentSkillRelativePath(row.Category, row.SkillName)
-	}
-	if row.FileExt == "" {
-		row.FileExt = "md"
-	}
-	if row.MimeType == "" {
-		row.MimeType = "text/markdown; charset=utf-8"
-	}
-	if row.ContentSize == 0 && row.Content != "" {
-		row.ContentSize = int64(len([]byte(row.Content)))
-	}
-	if row.UpdateStatus == "" {
-		row.UpdateStatus = evolution.UpdateStatusUpToDate
-	}
 	if row.CreatedAt.IsZero() {
 		row.CreatedAt = time.Now()
 	}
 	if row.UpdatedAt.IsZero() {
 		row.UpdatedAt = row.CreatedAt
 	}
-	if err := db.Create(&row).Error; err != nil {
-		t.Fatalf("insert skill resource %s: %v", row.ID, err)
+	if row.Category == "" {
+		row.Category = "system"
+	}
+	if row.ContentHash == "" {
+		row.ContentHash = evolution.HashContent(row.Content)
+	}
+	if row.Version <= 0 {
+		row.Version = 1
+	}
+	hash := row.ContentHash
+	revisionID := row.ID + "-rev"
+	head := revisionID
+	blobHash := hash
+	if err := db.Create(&orm.SkillV2Blob{
+		Hash:           hash,
+		Size:           int64(len([]byte(row.Content))),
+		Mime:           "text/markdown; charset=utf-8",
+		FileType:       "markdown",
+		Binary:         false,
+		StorageBackend: "postgres",
+		Content:        []byte(row.Content),
+		CreatedAt:      row.CreatedAt,
+	}).Error; err != nil {
+		t.Fatalf("insert skill blob %s: %v", row.ID, err)
+	}
+	if err := db.Create(&orm.SkillV2Skill{
+		ID:                 row.ID,
+		OwnerUserID:        row.OwnerUserID,
+		OwnerUserName:      row.OwnerUserName,
+		CreateUserID:       firstNonEmptyTest(row.CreateUserID, row.OwnerUserID),
+		CreateUserName:     row.CreateUserName,
+		Category:           row.Category,
+		SkillName:          row.SkillName,
+		Description:        row.Description,
+		RelativeRoot:       row.Category + "/" + row.SkillName,
+		SkillMDPath:        "SKILL.md",
+		HeadRevisionID:     &head,
+		Version:            row.Version,
+		AutoEvo:            row.AutoEvo,
+		AutoEvoGeneration:  row.AutoEvoGeneration,
+		AutoEvoApplyStatus: "idle",
+		IsEnabled:          row.IsEnabled,
+		UpdateStatus:       evolution.UpdateStatusUpToDate,
+		Ext:                []byte(row.Ext),
+		CreatedAt:          row.CreatedAt,
+		UpdatedAt:          row.UpdatedAt,
+	}).Error; err != nil {
+		t.Fatalf("insert skill v2 %s: %v", row.ID, err)
+	}
+	if err := db.Create(&orm.SkillV2Revision{
+		ID:         revisionID,
+		SkillID:    row.ID,
+		RevisionNo: row.Version,
+		TreeHash:   hash,
+		Message:    "seed",
+		CreatedAt:  row.CreatedAt,
+	}).Error; err != nil {
+		t.Fatalf("insert skill revision %s: %v", row.ID, err)
+	}
+	if err := db.Create(&orm.SkillV2RevisionEntry{
+		RevisionID: revisionID,
+		Path:       "SKILL.md",
+		EntryType:  "file",
+		BlobHash:   &blobHash,
+		Size:       int64(len([]byte(row.Content))),
+		Mime:       "text/markdown; charset=utf-8",
+		FileType:   "markdown",
+		Binary:     false,
+		Mode:       0o644,
+	}).Error; err != nil {
+		t.Fatalf("insert skill revision entry %s: %v", row.ID, err)
+	}
+	if err := db.Create(&orm.SkillV2Draft{
+		SkillID:        row.ID,
+		BaseRevisionID: &head,
+		Version:        1,
+		CreatedAt:      row.CreatedAt,
+		UpdatedAt:      row.UpdatedAt,
+	}).Error; err != nil {
+		t.Fatalf("insert skill draft %s: %v", row.ID, err)
 	}
 }
 
 func insertMemoryResource(t *testing.T, db *gorm.DB, row orm.SystemMemory) {
 	t.Helper()
-	autoEvo := row.AutoEvo
 	if row.CreatedAt.IsZero() {
 		row.CreatedAt = time.Now()
 	}
 	if row.UpdatedAt.IsZero() {
 		row.UpdatedAt = row.CreatedAt
 	}
-	if err := db.Create(&row).Error; err != nil {
-		t.Fatalf("insert memory resource %s: %v", row.ID, err)
-	}
-	if err := db.Model(&orm.SystemMemory{}).Where("id = ?", row.ID).Update("auto_evo", autoEvo).Error; err != nil {
-		t.Fatalf("set memory auto_evo %s: %v", row.ID, err)
-	}
+	insertPersonalResource(t, db, row.ID, row.UserID, orm.ResourceUpdateResourceTypeMemory, row.Content, row.Version, row.AutoEvo, row.AutoEvoGeneration, row.CreatedAt, row.UpdatedAt)
 }
 
 func insertPreferenceResource(t *testing.T, db *gorm.DB, row orm.SystemUserPreference) {
 	t.Helper()
-	autoEvo := row.AutoEvo
 	if row.CreatedAt.IsZero() {
 		row.CreatedAt = time.Now()
 	}
 	if row.UpdatedAt.IsZero() {
 		row.UpdatedAt = row.CreatedAt
 	}
-	if err := db.Create(&row).Error; err != nil {
-		t.Fatalf("insert preference resource %s: %v", row.ID, err)
+	insertPersonalResource(t, db, row.ID, row.UserID, orm.ResourceUpdateResourceTypeUserPreference, evolution.FormatSystemUserPreferenceForChat(row), row.Version, row.AutoEvo, row.AutoEvoGeneration, row.CreatedAt, row.UpdatedAt)
+}
+
+func insertPersonalResource(t *testing.T, db *gorm.DB, id, userID, resourceType, content string, version int64, autoEvo bool, autoEvoGeneration int64, createdAt, updatedAt time.Time) {
+	t.Helper()
+	if version <= 0 {
+		version = 1
 	}
-	if err := db.Model(&orm.SystemUserPreference{}).Where("id = ?", row.ID).Update("auto_evo", autoEvo).Error; err != nil {
-		t.Fatalf("set preference auto_evo %s: %v", row.ID, err)
+	path := "memory/memory.md"
+	if resourceType == orm.ResourceUpdateResourceTypeUserPreference {
+		path = "memory/user.md"
+	}
+	hash := evolution.HashContent(content)
+	revisionID := id + "-rev"
+	head := revisionID
+	if err := db.Create(&orm.PersonalResourceBlob{
+		Hash:           hash,
+		Size:           int64(len([]byte(content))),
+		Mime:           "text/markdown; charset=utf-8",
+		FileType:       "markdown",
+		Binary:         false,
+		StorageBackend: "postgres",
+		Content:        []byte(content),
+		CreatedAt:      createdAt,
+	}).Error; err != nil {
+		t.Fatalf("insert personal resource blob %s: %v", id, err)
+	}
+	if err := db.Create(&orm.PersonalResource{
+		ID:                 id,
+		UserID:             userID,
+		ResourceType:       resourceType,
+		HeadRevisionID:     &head,
+		Version:            version,
+		AutoEvo:            autoEvo,
+		AutoEvoGeneration:  autoEvoGeneration,
+		AutoEvoApplyStatus: evolution.AutoEvoApplyStatusIdle,
+		CreatedAt:          createdAt,
+		UpdatedAt:          updatedAt,
+	}).Error; err != nil {
+		t.Fatalf("insert personal resource %s: %v", id, err)
+	}
+	if err := db.Model(&orm.PersonalResource{}).Where("id = ?", id).Updates(map[string]any{
+		"auto_evo":            autoEvo,
+		"auto_evo_generation": autoEvoGeneration,
+	}).Error; err != nil {
+		t.Fatalf("set personal resource auto_evo %s: %v", id, err)
+	}
+	if err := db.Create(&orm.PersonalResourceRevision{
+		ID:          revisionID,
+		ResourceID:  id,
+		RevisionNo:  version,
+		Path:        path,
+		BlobHash:    hash,
+		ContentHash: hash,
+		Size:        int64(len([]byte(content))),
+		Mime:        "text/markdown; charset=utf-8",
+		FileType:    "markdown",
+		Binary:      false,
+		Message:     "seed",
+		CreatedAt:   createdAt,
+	}).Error; err != nil {
+		t.Fatalf("insert personal resource revision %s: %v", id, err)
+	}
+	if err := db.Create(&orm.PersonalResourceDraft{
+		ResourceID:     id,
+		BaseRevisionID: &head,
+		Path:           path,
+		BlobHash:       hash,
+		ContentHash:    hash,
+		Size:           int64(len([]byte(content))),
+		Mime:           "text/markdown; charset=utf-8",
+		FileType:       "markdown",
+		Binary:         false,
+		Version:        1,
+		CreatedAt:      createdAt,
+		UpdatedAt:      updatedAt,
+	}).Error; err != nil {
+		t.Fatalf("insert personal resource draft %s: %v", id, err)
 	}
 }
 

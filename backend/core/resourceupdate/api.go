@@ -558,7 +558,6 @@ func RejectMemoryReviewResult(w http.ResponseWriter, r *http.Request) {
 }
 
 func acceptSkillReviewResult(ctx context.Context, db *gorm.DB, userID, userName, resultID string) (SkillReviewResult, error) {
-	now := time.Now().UTC()
 	var out SkillReviewResult
 	err := db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		row, err := lockSkillReviewResultForUser(ctx, tx, resultID, userID)
@@ -580,34 +579,10 @@ func acceptSkillReviewResult(ctx context.Context, db *gorm.DB, userID, userName,
 			if !errors.Is(err, gorm.ErrRecordNotFound) {
 				return err
 			}
-			resource, err := mapSkillPatchResultToResource(withUpdateLock(tx).WithContext(ctx), row)
-			if err != nil {
-				if errors.Is(err, gorm.ErrRecordNotFound) {
-					return errReviewNotFound
-				}
-				return err
-			}
-			if err := applySkillPatchResult(ctx, tx, row, resource, now, resourcechange.Source{
-				ChangeSource:  resourcechange.ChangeSourceReviewAccept,
-				SourceRefType: resourcechange.SourceRefTypeSkillReviewResult,
-				SourceRefID:   row.ID,
-				ChangedAt:     now,
-			}); err != nil {
-				return err
-			}
+			return errReviewNotFound
 		case skillReviewTypeNew:
 			if _, err := createSkillV2FromNewResult(ctx, tx, row, userName); err != nil {
-				if !errors.Is(err, gorm.ErrRecordNotFound) {
-					return err
-				}
-				if _, err := createSkillFromNewResult(ctx, tx, row, userName, now, resourcechange.Source{
-					ChangeSource:  resourcechange.ChangeSourceReviewAccept,
-					SourceRefType: resourcechange.SourceRefTypeSkillReviewResult,
-					SourceRefID:   row.ID,
-					ChangedAt:     now,
-				}); err != nil {
-					return err
-				}
+				return err
 			}
 			if err := updateSkillReviewStatus(ctx, tx, row.ID, reviewStatusAccepted); err != nil {
 				return err
@@ -666,14 +641,14 @@ func acceptMemoryReviewResult(ctx context.Context, db *gorm.DB, userID, resultID
 		}
 		switch normalizeReviewTarget(row.Target) {
 		case orm.ResourceUpdateResourceTypeMemory:
-			resource, err := mapMemoryReviewResultToMemory(withUpdateLock(tx).WithContext(ctx), row)
+			resource, err := mapMemoryReviewResultToPersonalResource(withUpdateLock(tx).WithContext(ctx), orm.ResourceUpdateResourceTypeMemory, row)
 			if err != nil {
 				if errors.Is(err, gorm.ErrRecordNotFound) {
 					return errReviewNotFound
 				}
 				return err
 			}
-			if err := applyMemoryReviewResult(ctx, tx, row, resource, now, false, resourcechange.Source{
+			if err := applyPersonalResourceReviewResult(ctx, tx, orm.ResourceUpdateResourceTypeMemory, row, resource, now, false, resourcechange.Source{
 				ChangeSource:  resourcechange.ChangeSourceReviewAccept,
 				SourceRefType: resourcechange.SourceRefTypeMemoryReview,
 				SourceRefID:   row.ID,
@@ -682,14 +657,14 @@ func acceptMemoryReviewResult(ctx context.Context, db *gorm.DB, userID, resultID
 				return err
 			}
 		case orm.ResourceUpdateResourceTypeUserPreference:
-			resource, err := mapMemoryReviewResultToPreference(withUpdateLock(tx).WithContext(ctx), row)
+			resource, err := mapMemoryReviewResultToPersonalResource(withUpdateLock(tx).WithContext(ctx), orm.ResourceUpdateResourceTypeUserPreference, row)
 			if err != nil {
 				if errors.Is(err, gorm.ErrRecordNotFound) {
 					return errReviewNotFound
 				}
 				return err
 			}
-			if err := applyPreferenceReviewResult(ctx, tx, row, resource, now, false, resourcechange.Source{
+			if err := applyPersonalResourceReviewResult(ctx, tx, orm.ResourceUpdateResourceTypeUserPreference, row, resource, now, false, resourcechange.Source{
 				ChangeSource:  resourcechange.ChangeSourceReviewAccept,
 				SourceRefType: resourcechange.SourceRefTypeMemoryReview,
 				SourceRefID:   row.ID,
@@ -758,11 +733,6 @@ func LatestPendingSkillPatchReviewResult(ctx context.Context, db *gorm.DB, userI
 		} else if !errors.Is(err, gorm.ErrRecordNotFound) {
 			return SkillReviewResult{}, err
 		}
-		if _, err := mapSkillPatchResultToResource(db.WithContext(ctx), row); err == nil {
-			return row, nil
-		} else if !errors.Is(err, gorm.ErrRecordNotFound) {
-			return SkillReviewResult{}, err
-		}
 	}
 	return SkillReviewResult{}, errReviewNotFound
 }
@@ -789,9 +759,9 @@ func LatestPendingMemoryReviewResult(ctx context.Context, db *gorm.DB, userID, t
 		var err error
 		switch target {
 		case orm.ResourceUpdateResourceTypeMemory:
-			_, err = mapMemoryReviewResultToMemory(db.WithContext(ctx), row)
+			_, err = mapMemoryReviewResultToPersonalResource(db.WithContext(ctx), orm.ResourceUpdateResourceTypeMemory, row)
 		case orm.ResourceUpdateResourceTypeUserPreference:
-			_, err = mapMemoryReviewResultToPreference(db.WithContext(ctx), row)
+			_, err = mapMemoryReviewResultToPersonalResource(db.WithContext(ctx), orm.ResourceUpdateResourceTypeUserPreference, row)
 		default:
 			return MemoryReviewResult{}, errReviewInvalid
 		}
@@ -890,21 +860,7 @@ func skillResultDetailResponse(ctx context.Context, db *gorm.DB, row SkillReview
 		resp.DiffEntryLines = buildReviewDiffEntryLines(ctx, current, row.SkillContent)
 		return resp, nil
 	}
-	resource, err := mapSkillPatchResultToResource(db.WithContext(ctx), row)
-	if err != nil {
-		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return skillReviewResultResponse{}, errReviewNotFound
-		}
-		return skillReviewResultResponse{}, err
-	}
-	resp.CurrentContent = resource.Content
-	diff, err := evolution.BuildContentDiff(resource.Content, row.SkillContent)
-	if err != nil {
-		return skillReviewResultResponse{}, err
-	}
-	resp.Diff = diff
-	resp.DiffEntryLines = buildReviewDiffEntryLines(ctx, resource.Content, row.SkillContent)
-	return resp, nil
+	return skillReviewResultResponse{}, errReviewNotFound
 }
 
 func buildReviewDiffEntryLines(ctx context.Context, currentContent, draftContent string) []reviewDiffEntryLineResponse {
@@ -973,23 +929,31 @@ func memoryResultDetailResponse(ctx context.Context, db *gorm.DB, row MemoryRevi
 	var currentContent string
 	switch normalizeReviewTarget(row.Target) {
 	case orm.ResourceUpdateResourceTypeMemory:
-		resource, err := mapMemoryReviewResultToMemory(db.WithContext(ctx), row)
+		resource, err := mapMemoryReviewResultToPersonalResource(db.WithContext(ctx), orm.ResourceUpdateResourceTypeMemory, row)
 		if err != nil {
 			if errors.Is(err, gorm.ErrRecordNotFound) {
 				return memoryReviewResultResponse{}, errReviewNotFound
 			}
 			return memoryReviewResultResponse{}, err
 		}
-		currentContent = resource.Content
+		content, _, err := personalResourceHeadContent(ctx, db, resource)
+		if err != nil {
+			return memoryReviewResultResponse{}, err
+		}
+		currentContent = content
 	case orm.ResourceUpdateResourceTypeUserPreference:
-		resource, err := mapMemoryReviewResultToPreference(db.WithContext(ctx), row)
+		resource, err := mapMemoryReviewResultToPersonalResource(db.WithContext(ctx), orm.ResourceUpdateResourceTypeUserPreference, row)
 		if err != nil {
 			if errors.Is(err, gorm.ErrRecordNotFound) {
 				return memoryReviewResultResponse{}, errReviewNotFound
 			}
 			return memoryReviewResultResponse{}, err
 		}
-		currentContent = evolution.FormatSystemUserPreferenceForChat(resource)
+		content, _, err := personalResourceHeadContent(ctx, db, resource)
+		if err != nil {
+			return memoryReviewResultResponse{}, err
+		}
+		currentContent = content
 	default:
 		return memoryReviewResultResponse{}, errReviewInvalid
 	}
@@ -1006,9 +970,9 @@ func memoryReviewResultMapped(ctx context.Context, db *gorm.DB, row MemoryReview
 	var err error
 	switch normalizeReviewTarget(row.Target) {
 	case orm.ResourceUpdateResourceTypeMemory:
-		_, err = mapMemoryReviewResultToMemory(db.WithContext(ctx), row)
+		_, err = mapMemoryReviewResultToPersonalResource(db.WithContext(ctx), orm.ResourceUpdateResourceTypeMemory, row)
 	case orm.ResourceUpdateResourceTypeUserPreference:
-		_, err = mapMemoryReviewResultToPreference(db.WithContext(ctx), row)
+		_, err = mapMemoryReviewResultToPersonalResource(db.WithContext(ctx), orm.ResourceUpdateResourceTypeUserPreference, row)
 	default:
 		return false
 	}

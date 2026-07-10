@@ -16,8 +16,6 @@ func newResourceFSTestDB(t *testing.T) *orm.DB {
 		t.Fatalf("connect db: %v", err)
 	}
 	if err := db.AutoMigrate(
-		&orm.SystemMemory{},
-		&orm.SystemUserPreference{},
 		&orm.PersonalResource{},
 		&orm.PersonalResourceBlob{},
 		&orm.PersonalResourceRevision{},
@@ -78,12 +76,20 @@ func TestServiceDraftCommitRevisionRollback(t *testing.T) {
 		Message:              "accept draft",
 		ExpectedDraftVersion: draft.DraftVersion,
 		CreatedBy:            "u1",
+		CreatedByName:        "Alice",
 	})
 	if err != nil {
 		t.Fatalf("CommitDraft returned error: %v", err)
 	}
 	if commit.Content != "updated memory" || commit.RevisionNo != 2 {
 		t.Fatalf("unexpected commit: %#v", commit)
+	}
+	var resource orm.PersonalResource
+	if err := db.Take(&resource, "id = ?", state.ID).Error; err != nil {
+		t.Fatalf("read resource after commit: %v", err)
+	}
+	if resource.UpdatedBy != "u1" || resource.UpdatedByName != "Alice" {
+		t.Fatalf("commit did not update actor fields: updated_by=%q updated_by_name=%q", resource.UpdatedBy, resource.UpdatedByName)
 	}
 
 	revisions, err := service.ListRevisions(context.Background(), ListRevisionsRequest{Ref: ref})
@@ -108,12 +114,19 @@ func TestServiceDraftCommitRevisionRollback(t *testing.T) {
 		RevisionID:             initialRevisionID,
 		ExpectedHeadRevisionID: commit.RevisionID,
 		CreatedBy:              "u1",
+		CreatedByName:          "Bob",
 	})
 	if err != nil {
 		t.Fatalf("Rollback returned error: %v", err)
 	}
 	if rollback.Content != "initial memory" || rollback.RevisionNo != 3 {
 		t.Fatalf("unexpected rollback: %#v", rollback)
+	}
+	if err := db.Take(&resource, "id = ?", state.ID).Error; err != nil {
+		t.Fatalf("read resource after rollback: %v", err)
+	}
+	if resource.UpdatedBy != "u1" || resource.UpdatedByName != "Bob" {
+		t.Fatalf("rollback did not update actor fields: updated_by=%q updated_by_name=%q", resource.UpdatedBy, resource.UpdatedByName)
 	}
 
 	rolledBackHead, err := service.ReadFile(context.Background(), ReadFileRequest{Ref: ref, RefType: FileRefHead})
@@ -263,34 +276,6 @@ func TestResourceTypeForPathNormalizesLeadingSlash(t *testing.T) {
 	}
 	if resourceType != ResourceTypeUserPreference {
 		t.Fatalf("expected user_preference, got %q", resourceType)
-	}
-}
-
-func TestSyncBusinessColumnsParsesPreferenceFileWithMissingMetadata(t *testing.T) {
-	db := newResourceFSTestDB(t)
-	row := orm.SystemUserPreference{
-		ID:            "preference-1",
-		UserID:        "u1",
-		Content:       "old",
-		AgentPersona:  "old agent",
-		PreferredName: "old name",
-		ResponseStyle: "old style",
-		Version:       1,
-	}
-	if err := db.Create(&row).Error; err != nil {
-		t.Fatalf("create preference: %v", err)
-	}
-	content := "---\nagent_persona: new agent\n---\n\nnew body"
-	err := syncBusinessColumns(context.Background(), db.DB, ResourceRef{UserID: "u1", ResourceType: ResourceTypeUserPreference}, content, 2)
-	if err != nil {
-		t.Fatalf("syncBusinessColumns returned error: %v", err)
-	}
-	var updated orm.SystemUserPreference
-	if err := db.Where("id = ?", row.ID).Take(&updated).Error; err != nil {
-		t.Fatalf("query updated preference: %v", err)
-	}
-	if updated.Content != "new body" || updated.AgentPersona != "new agent" || updated.PreferredName != "" || updated.ResponseStyle != "" || updated.Version != 2 {
-		t.Fatalf("unexpected synced preference: %#v", updated)
 	}
 }
 

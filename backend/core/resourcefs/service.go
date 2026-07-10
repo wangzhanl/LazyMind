@@ -76,13 +76,16 @@ func (s *Service) EnsureResource(ctx context.Context, ref ResourceRef, initialCo
 		revisionID := uuid.NewString()
 		head := revisionID
 		resource := orm.PersonalResource{
-			ID:             resourceID,
-			UserID:         ref.UserID,
-			ResourceType:   string(ref.ResourceType),
-			HeadRevisionID: &head,
-			Version:        1,
-			CreatedAt:      now,
-			UpdatedAt:      now,
+			ID:                 resourceID,
+			UserID:             ref.UserID,
+			ResourceType:       string(ref.ResourceType),
+			HeadRevisionID:     &head,
+			Version:            1,
+			AutoEvo:            true,
+			AutoEvoApplyStatus: "idle",
+			UpdatedBy:          ref.UserID,
+			CreatedAt:          now,
+			UpdatedAt:          now,
 		}
 		if err := tx.Create(&resource).Error; err != nil {
 			return err
@@ -272,6 +275,60 @@ func (s *Service) WriteDraft(ctx context.Context, req WriteDraftRequest) (DraftR
 	return out, normalizeGormErr(err)
 }
 
+func (s *Service) UpdateMetadata(ctx context.Context, req UpdateMetadataRequest) (MetadataResponse, error) {
+	if err := validateRef(req.Ref); err != nil {
+		return MetadataResponse{}, err
+	}
+	if req.AutoEvo == nil {
+		return MetadataResponse{}, ErrInvalidResourceType
+	}
+	var out MetadataResponse
+	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		resource, err := findResource(ctx, tx.Clauses(clause.Locking{Strength: "UPDATE"}), req.Ref)
+		if err != nil {
+			return err
+		}
+		now := s.clock.Now()
+		enabledFromOff := !resource.AutoEvo && *req.AutoEvo
+		updates := map[string]any{
+			"auto_evo":              *req.AutoEvo,
+			"auto_evo_generation":   gorm.Expr("auto_evo_generation + 1"),
+			"auto_evo_apply_status": "idle",
+			"auto_evo_error":        "",
+			"updated_by":            strings.TrimSpace(req.UpdatedBy),
+			"updated_by_name":       strings.TrimSpace(req.UpdatedByName),
+			"updated_at":            now,
+		}
+		if *req.AutoEvo {
+			updates["auto_evo_finished_at"] = nil
+		} else {
+			updates["auto_evo_started_at"] = nil
+			updates["auto_evo_finished_at"] = now
+		}
+		if err := tx.Model(&orm.PersonalResource{}).Where("id = ?", resource.ID).Updates(updates).Error; err != nil {
+			return err
+		}
+		var updated orm.PersonalResource
+		if err := tx.Where("id = ?", resource.ID).Take(&updated).Error; err != nil {
+			return err
+		}
+		out = MetadataResponse{
+			Ref:                req.Ref,
+			ResourceID:         updated.ID,
+			AutoEvo:            updated.AutoEvo,
+			AutoEvoApplyStatus: updated.AutoEvoApplyStatus,
+			AutoEvoGeneration:  updated.AutoEvoGeneration,
+			AutoEvoError:       updated.AutoEvoError,
+			UpdatedBy:          updated.UpdatedBy,
+			UpdatedByName:      updated.UpdatedByName,
+			UpdatedAt:          updated.UpdatedAt,
+			EnabledFromOff:     enabledFromOff,
+		}
+		return nil
+	})
+	return out, normalizeGormErr(err)
+}
+
 func (s *Service) DraftPreview(ctx context.Context, req DraftPreviewRequest) (DraftPreviewResponse, error) {
 	head, err := s.ReadFile(ctx, ReadFileRequest{Ref: req.Ref, RefType: FileRefHead})
 	if err != nil {
@@ -332,6 +389,15 @@ func (s *Service) CommitDraft(ctx context.Context, req CommitDraftRequest) (Comm
 	})
 	if err != nil {
 		return CommitResponse{}, normalizeVersionFSErr(err)
+	}
+	if strings.TrimSpace(req.CreatedBy) != "" {
+		if err := s.db.WithContext(ctx).Model(&orm.PersonalResource{}).Where("id = ?", resource.ID).Updates(map[string]any{
+			"updated_by":      strings.TrimSpace(req.CreatedBy),
+			"updated_by_name": strings.TrimSpace(req.CreatedByName),
+			"updated_at":      s.clock.Now(),
+		}).Error; err != nil {
+			return CommitResponse{}, normalizeGormErr(err)
+		}
 	}
 	revision, err := findRevisionByID(ctx, s.db, resource.ID, resp.RevisionID)
 	if err != nil {
@@ -452,6 +518,15 @@ func (s *Service) Rollback(ctx context.Context, req RollbackRequest) (RollbackRe
 	})
 	if err != nil {
 		return RollbackResponse{}, normalizeVersionFSErr(err)
+	}
+	if strings.TrimSpace(req.CreatedBy) != "" {
+		if err := s.db.WithContext(ctx).Model(&orm.PersonalResource{}).Where("id = ?", resource.ID).Updates(map[string]any{
+			"updated_by":      strings.TrimSpace(req.CreatedBy),
+			"updated_by_name": strings.TrimSpace(req.CreatedByName),
+			"updated_at":      s.clock.Now(),
+		}).Error; err != nil {
+			return RollbackResponse{}, normalizeGormErr(err)
+		}
 	}
 	revision, err := findRevisionByID(ctx, s.db, resource.ID, resp.RevisionID)
 	if err != nil {
