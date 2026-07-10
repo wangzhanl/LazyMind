@@ -12,7 +12,7 @@ import (
 	"lazymind/core/common/orm"
 )
 
-func TestModelCatalogDefinesMaxInputTokensForEveryEmbeddingModel(t *testing.T) {
+func TestModelCatalogMaxInputTokensOnlyForLLMModels(t *testing.T) {
 	yamlBytes, err := os.ReadFile(filepath.Join("..", "config", "model_catalog.yaml"))
 	if err != nil {
 		t.Fatalf("read model catalog: %v", err)
@@ -22,22 +22,25 @@ func TestModelCatalogDefinesMaxInputTokensForEveryEmbeddingModel(t *testing.T) {
 		t.Fatalf("parse model catalog: %v", err)
 	}
 
-	embedCount := 0
+	llmLimitCount := 0
 	for _, section := range catalog {
 		for _, supplier := range section.Suppliers {
 			for _, model := range supplier.Models {
-				if model.Type != "embed" {
+				if model.MaxInputTokens == nil {
 					continue
 				}
-				embedCount++
-				if model.MaxInputTokens == nil || *model.MaxInputTokens <= 0 {
-					t.Errorf("embedding model %s/%s has invalid max_input_tokens", supplier.Name, model.Name)
+				if model.Type != "llm" {
+					t.Errorf("non-llm model %s/%s has max_input_tokens", supplier.Name, model.Name)
+				}
+				llmLimitCount++
+				if *model.MaxInputTokens <= 0 {
+					t.Errorf("llm model %s/%s has invalid max_input_tokens", supplier.Name, model.Name)
 				}
 			}
 		}
 	}
-	if embedCount == 0 {
-		t.Fatal("model catalog contains no embedding models")
+	if llmLimitCount == 0 {
+		t.Fatal("model catalog contains no llm max_input_tokens entries")
 	}
 }
 
@@ -119,8 +122,8 @@ func TestUpsertDefaultModelPersistsAndBackfillsMaxInputTokens(t *testing.T) {
 		UserModelProviderID:      "user-provider-qwen",
 		UserModelProviderGroupID: "group-qwen",
 		ProviderName:             "Qwen",
-		Name:                     "text-embedding-v4",
-		ModelType:                "embed",
+		Name:                     "qwen2.5-7b-instruct-1m",
+		ModelType:                "llm",
 		IsDefault:                true,
 		BaseModel: orm.BaseModel{
 			CreateUserID: "user-1", CreatedAt: now, UpdatedAt: now,
@@ -129,15 +132,15 @@ func TestUpsertDefaultModelPersistsAndBackfillsMaxInputTokens(t *testing.T) {
 		t.Fatalf("create user model: %v", err)
 	}
 
-	limit := int64(8192)
+	limit := int64(1048576)
 	if err := upsertDefaultModel(db, now.Add(time.Minute), "default-qwen", "Qwen", catalogModel{
-		Name: "text-embedding-v4", Type: "embed", MaxInputTokens: &limit,
+		Name: "qwen2.5-7b-instruct-1m", Type: "llm", MaxInputTokens: &limit,
 	}); err != nil {
 		t.Fatalf("upsert default model: %v", err)
 	}
 
 	var defaultModel orm.DefaultModel
-	if err := db.Where("default_model_provider_id = ? AND name = ?", "default-qwen", "text-embedding-v4").Take(&defaultModel).Error; err != nil {
+	if err := db.Where("default_model_provider_id = ? AND name = ?", "default-qwen", "qwen2.5-7b-instruct-1m").Take(&defaultModel).Error; err != nil {
 		t.Fatalf("query default model: %v", err)
 	}
 	if defaultModel.MaxInputTokens == nil || *defaultModel.MaxInputTokens != limit {
@@ -153,13 +156,108 @@ func TestUpsertDefaultModelPersistsAndBackfillsMaxInputTokens(t *testing.T) {
 	}
 }
 
+func TestUpsertDefaultModelClearsRemovedMaxInputTokens(t *testing.T) {
+	dbName := "seed_clear_model_" + time.Now().Format("150405.000000000")
+	db, err := gorm.Open(sqlite.Open("file:"+dbName+"?mode=memory&cache=shared"), &gorm.Config{})
+	if err != nil {
+		t.Fatalf("open sqlite: %v", err)
+	}
+	if err := db.AutoMigrate(
+		&orm.DefaultModelProvider{},
+		&orm.DefaultModel{},
+		&orm.UserModelProvider{},
+		&orm.UserModelProviderGroupModel{},
+	); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+
+	now := time.Now().UTC()
+	if err := db.Create(&orm.DefaultModelProvider{
+		ID: "default-qwen", Name: "Qwen", Description: "Qwen", CreatedAt: now, UpdatedAt: now,
+	}).Error; err != nil {
+		t.Fatalf("create default provider: %v", err)
+	}
+	if err := db.Create(&orm.UserModelProvider{
+		ID:                     "user-provider-qwen",
+		DefaultModelProviderID: "default-qwen",
+		Name:                   "Qwen",
+		Capabilities:           "has_models",
+		BaseModel: orm.BaseModel{
+			CreateUserID: "user-1", CreatedAt: now, UpdatedAt: now,
+		},
+	}).Error; err != nil {
+		t.Fatalf("create user provider: %v", err)
+	}
+
+	limit := int64(1048576)
+	if err := db.Create(&orm.DefaultModel{
+		ID:                     "default-model-qwen",
+		DefaultModelProviderID: "default-qwen",
+		ProviderName:           "Qwen",
+		Name:                   "qwen2.5-7b-instruct-1m",
+		ModelType:              "llm",
+		MaxInputTokens:         &limit,
+		CreatedAt:              now,
+		UpdatedAt:              now,
+	}).Error; err != nil {
+		t.Fatalf("create default model: %v", err)
+	}
+	if err := db.Create(&orm.UserModelProviderGroupModel{
+		ID:                       "user-model-qwen",
+		UserModelProviderID:      "user-provider-qwen",
+		UserModelProviderGroupID: "group-qwen",
+		ProviderName:             "Qwen",
+		Name:                     "qwen2.5-7b-instruct-1m",
+		ModelType:                "llm",
+		MaxInputTokens:           &limit,
+		IsDefault:                true,
+		BaseModel: orm.BaseModel{
+			CreateUserID: "user-1", CreatedAt: now, UpdatedAt: now,
+		},
+	}).Error; err != nil {
+		t.Fatalf("create user model: %v", err)
+	}
+
+	if err := upsertDefaultModel(db, now.Add(time.Minute), "default-qwen", "Qwen", catalogModel{
+		Name: "qwen2.5-7b-instruct-1m", Type: "llm",
+	}); err != nil {
+		t.Fatalf("upsert default model: %v", err)
+	}
+
+	var defaultModel orm.DefaultModel
+	if err := db.Where("id = ?", "default-model-qwen").Take(&defaultModel).Error; err != nil {
+		t.Fatalf("query default model: %v", err)
+	}
+	if defaultModel.MaxInputTokens != nil {
+		t.Fatalf("default max_input_tokens = %d, want null", *defaultModel.MaxInputTokens)
+	}
+
+	var userModel orm.UserModelProviderGroupModel
+	if err := db.Where("id = ?", "user-model-qwen").Take(&userModel).Error; err != nil {
+		t.Fatalf("query user model: %v", err)
+	}
+	if userModel.MaxInputTokens != nil {
+		t.Fatalf("user max_input_tokens = %d, want null", *userModel.MaxInputTokens)
+	}
+}
+
 func TestUpsertDefaultModelRejectsNonPositiveMaxInputTokens(t *testing.T) {
 	zero := int64(0)
 	err := upsertDefaultModel(&gorm.DB{}, time.Now(), "provider", "Provider", catalogModel{
-		Name: "embedding-model", Type: "embed", MaxInputTokens: &zero,
+		Name: "llm-model", Type: "llm", MaxInputTokens: &zero,
 	})
 	if err == nil || err.Error() != "model max_input_tokens must be greater than zero" {
 		t.Fatalf("error = %v, want max_input_tokens validation error", err)
+	}
+}
+
+func TestUpsertDefaultModelRejectsMaxInputTokensForNonLLM(t *testing.T) {
+	limit := int64(8192)
+	err := upsertDefaultModel(&gorm.DB{}, time.Now(), "provider", "Provider", catalogModel{
+		Name: "embedding-model", Type: "embed", MaxInputTokens: &limit,
+	})
+	if err == nil || err.Error() != "model max_input_tokens is only supported for llm models" {
+		t.Fatalf("error = %v, want max_input_tokens llm-only validation error", err)
 	}
 }
 
