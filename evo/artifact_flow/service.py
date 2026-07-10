@@ -290,7 +290,8 @@ class FlowService:
         released = dict(state.released_checkpoints)
         try:
             adapter = self._adapter_factory()
-            op_selector = self._op_selector(command.until_step)
+            target_step = self._execution_target_step(command.until_step, state)
+            op_selector = self._op_selector(target_step)
             projection = checkpoint_projection(
                 self._spec,
                 adapter.effective_artifacts(run_id),
@@ -320,11 +321,13 @@ class FlowService:
                     return self._record(run_id, command, request_hash, interrupted)
 
                 progress = progress_view(adapter, self._spec, run_id)
-                released.update(_released_before(command.until_step, progress))
+                released.update(_released_before(target_step, progress))
                 interrupted = self._interrupted(run_id, state)
                 if interrupted is not None:
                     return self._record(run_id, command, request_hash, interrupted)
-                boundary = self._record_if_boundary(run_id, command, request_hash, state, progress, released)
+                boundary = self._record_if_boundary(
+                    run_id, command, request_hash, state, progress, released, target_step
+                )
                 if boundary is not None:
                     return boundary
 
@@ -333,11 +336,10 @@ class FlowService:
                         return True
                     progress_now = progress_view(adapter, self._spec, run_id)
                     released_now = dict(released)
-                    released_now.update(_released_before(command.until_step, progress_now))
-                    target = command.until_step
-                    if target == self._spec.steps[-1]:
-                        return _progress_by_step(progress_now)[target].completed
-                    return _checkpoint(progress_now, self._checkpoint_policy, released_now, target) is not None
+                    released_now.update(_released_before(target_step, progress_now))
+                    if target_step == self._spec.steps[-1]:
+                        return _progress_by_step(progress_now)[target_step].completed
+                    return _checkpoint(progress_now, self._checkpoint_policy, released_now, target_step) is not None
 
                 tick = adapter.tick(run_id, should_interrupt=should_interrupt, op_selector=op_selector)
                 if tick.status in {'failed', 'conflict'}:
@@ -356,8 +358,10 @@ class FlowService:
                     if interrupted is not None:
                         return self._record(run_id, command, request_hash, interrupted)
                     progress = progress_view(adapter, self._spec, run_id)
-                    released.update(_released_before(command.until_step, progress))
-                    boundary = self._record_if_boundary(run_id, command, request_hash, state, progress, released)
+                    released.update(_released_before(target_step, progress))
+                    boundary = self._record_if_boundary(
+                        run_id, command, request_hash, state, progress, released, target_step
+                    )
                     if boundary is not None:
                         return boundary
                     error = 'runtime stopped without gate change'
@@ -372,11 +376,13 @@ class FlowService:
                     )
 
                 progress = progress_view(adapter, self._spec, run_id)
-                released.update(_released_before(command.until_step, progress))
+                released.update(_released_before(target_step, progress))
                 interrupted = self._interrupted(run_id, state)
                 if interrupted is not None:
                     return self._record(run_id, command, request_hash, interrupted)
-                boundary = self._record_if_boundary(run_id, command, request_hash, state, progress, released)
+                boundary = self._record_if_boundary(
+                    run_id, command, request_hash, state, progress, released, target_step
+                )
                 if boundary is not None:
                     return boundary
                 if tick.status == 'idle':
@@ -413,8 +419,8 @@ class FlowService:
 
     def _record_if_boundary(self, run_id: str, command: ContinueFlow, request_hash: str,
                             state: FlowRunState, progress: tuple[StepProgress, ...],
-                            released: Mapping[str, ArtifactRef]) -> FlowCommandResult | None:
-        target = command.until_step
+                            released: Mapping[str, ArtifactRef], target: str
+                            ) -> FlowCommandResult | None:
         if target == self._spec.steps[-1]:
             if _progress_by_step(progress)[target].completed:
                 return self._record(
@@ -462,6 +468,14 @@ class FlowService:
     def _validate_until_step(self, step: str) -> None:
         if step and step not in self._spec.steps:
             raise ValueError(f'unknown until_step: {step}')
+
+    def _execution_target_step(self, until_step: str, state: FlowRunState) -> str:
+        if until_step:
+            return until_step
+        for step in self._checkpoint_policy.pause_after_steps:
+            if step not in state.released_checkpoints:
+                return step
+        return self._spec.steps[-1]
 
     def _op_selector(self, until_step: str) -> Callable[[object], bool] | None:
         if not until_step:

@@ -1,12 +1,15 @@
 from __future__ import annotations
 
 import asyncio
+import ast
 import json
 import math
+import os
 import re
 import time
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, replace
+from pathlib import Path
 from typing import Any
 from urllib.parse import quote, urlparse, urlunparse
 from uuid import uuid4
@@ -30,6 +33,8 @@ EVO_EVAL_MEMORY = (
 TRACE_ID = re.compile(r'^[0-9a-f]{32}$')
 SSE_FIELD = re.compile(r'^[A-Za-z][A-Za-z0-9_-]*:')
 CONTROL_TAG = re.compile(r'<(?:tp|trp|tool_call|tool_result)(?:\s[^>]*)?>.*?</(?:tp|trp|tool_call|tool_result)>', re.S)
+TOOL_RESULT_TAG = re.compile(r'<tool_result(?:\s[^>]*)?>(.*?)</tool_result>', re.S)
+KB_TOOL_NAMES = frozenset({'kb_search', 'kb_keyword_search', 'kb_get_parent_node', 'kb_get_window_nodes'})
 INVALID_FINAL_ANSWER_APOLOGY = re.compile(r'^(?:抱歉|很抱歉|对不起|sorry)[，,。.!:\s]*')
 INVALID_FINAL_ANSWER_MARKERS = (
     '知识库检索服务暂时不可用',
@@ -76,6 +81,7 @@ ROUTER_ADMIN_TIMEOUT_SECONDS = 10.0
 ROUTER_CANCEL_TIMEOUT_SECONDS = 2.0
 STREAM_CLOSE_TIMEOUT_SECONDS = 2.0
 INVALID_FINAL_ANSWER_MAX_CHARS = 180
+TRACE_LOCAL_STORAGE_DIR = 'LAZYLLM_TRACE_LOCAL_STORAGE_DIR'
 
 
 @dataclass(frozen=True)
@@ -387,7 +393,12 @@ def _normalize(target: Mapping[str, Any], stream: Mapping[str, Any] | ChatStream
     if isinstance(stream, ChatStreamState):
         finished = stream.finished
         answer = _answer_text(stream.answer)
-        sources = _unique_sources(stream.sources)
+        data_frames = [_frame_data(frame) for frame in stream.frames]
+        sources = _unique_sources([
+            *stream.sources,
+            *_trace_sources(data_frames),
+            *_local_trace_sources(str(target.get('trace_id') or '')),
+        ])
     else:
         finished = bool(stream.get('finished'))
         frames = [frame for frame in stream.get('frames', []) if isinstance(frame, Mapping)]
@@ -397,7 +408,11 @@ def _normalize(target: Mapping[str, Any], stream: Mapping[str, Any] | ChatStream
             or stream.get('answer')
             or _answer_from_data_frames(data_frames)
         ))
-        sources = _unique_sources(_sources(data_frames))
+        sources = _unique_sources([
+            *_sources(data_frames),
+            *_trace_sources(data_frames),
+            *_local_trace_sources(str(target.get('trace_id') or '')),
+        ])
 
     if not finished:
         return _failed({'answer': ''}, target, 'chat_protocol_error', 'stream ended before FINISHED')
@@ -675,24 +690,162 @@ def _sources(frames: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
     return sources
 
 
+def _trace_sources(frames: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
+    sources: list[dict[str, Any]] = []
+    for data in frames:
+        for payload in _tool_result_payloads(str(data.get('text') or '')):
+            if not _is_kb_tool(str(payload.get('name') or '')):
+                continue
+            _extend_trace_sources(sources, payload.get('result'))
+    return sources
+
+
+def _local_trace_sources(trace_id: str) -> list[dict[str, Any]]:
+    if not TRACE_ID.fullmatch(str(trace_id or '')):
+        return []
+    root = Path(os.getenv(TRACE_LOCAL_STORAGE_DIR) or '')
+    if not root.is_dir():
+        return []
+    sources: list[dict[str, Any]] = []
+    for path in sorted(root.glob(f'*_{trace_id}.jsonl')):
+        _extend_local_trace_sources(sources, path)
+    return sources
+
+
+def _extend_local_trace_sources(target: list[dict[str, Any]], path: Path) -> None:
+    try:
+        with path.open(encoding='utf-8', errors='ignore') as file:
+            for line in file:
+                try:
+                    span = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if not isinstance(span, Mapping):
+                    continue
+                attrs = span.get('attributes') if isinstance(span.get('attributes'), Mapping) else {}
+                if not _trace_span_may_have_kb_result(span, attrs):
+                    continue
+                _extend_trace_sources(target, attrs.get('lazyllm.io.output'))
+    except OSError:
+        return
+
+
+def _trace_span_may_have_kb_result(span: Mapping[str, Any], attrs: Mapping[str, Any]) -> bool:
+    if str(attrs.get('lazyllm.status') or '').lower() not in {'', 'ok'}:
+        return False
+    name = str(span.get('name') or attrs.get('lazyllm.entity.name') or '')
+    if _is_kb_tool(name):
+        return True
+    if str(attrs.get('lazyllm.semantic_type') or '') != 'tool':
+        return False
+    text = str(attrs.get('lazyllm.io.input') or '') + str(attrs.get('lazyllm.io.output') or '')
+    return 'KBToolGroup' in text or any(tool in text for tool in KB_TOOL_NAMES)
+
+
+def _tool_result_payloads(text: str) -> list[Mapping[str, Any]]:
+    payloads: list[Mapping[str, Any]] = []
+    for match in TOOL_RESULT_TAG.finditer(str(text or '')):
+        try:
+            payload = json.loads(match.group(1))
+        except json.JSONDecodeError:
+            continue
+        if isinstance(payload, Mapping):
+            payloads.append(payload)
+    return payloads
+
+
+def _is_kb_tool(name: str) -> bool:
+    value = str(name or '')
+    return value in KB_TOOL_NAMES or any(value.endswith(f'_{tool}') for tool in KB_TOOL_NAMES)
+
+
+def _extend_trace_sources(target: list[dict[str, Any]], value: Any) -> None:
+    if isinstance(value, str):
+        parsed = _structured_trace_value(value)
+        if parsed is None:
+            return
+        _extend_trace_sources(target, parsed)
+        return
+    if isinstance(value, Mapping):
+        if value.get('success') is False:
+            return
+        if value.get('ok') is False:
+            return
+        if 'value' in value and (value.get('ok') is True or 'ok' in value):
+            _extend_trace_sources(target, value.get('value'))
+            return
+        if 'result' in value and (value.get('success') is True or value.get('tool') or value.get('meta')):
+            _extend_trace_sources(target, value.get('result'))
+            return
+        if _looks_like_source(value):
+            target.append(dict(value))
+        for key in ('items', 'sources', 'current_node'):
+            _extend_trace_sources(target, value.get(key))
+        return
+    if isinstance(value, list):
+        for item in value:
+            _extend_trace_sources(target, item)
+
+
+def _structured_trace_value(value: str) -> Any | None:
+    text = str(value or '').strip()
+    if not text or text[0] not in '[{':
+        return None
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        try:
+            return ast.literal_eval(text)
+        except (SyntaxError, ValueError):
+            return None
+
+
+def _looks_like_source(value: Mapping[str, Any]) -> bool:
+    metadata = value.get('global_metadata') if isinstance(value.get('global_metadata'), Mapping) else {}
+    return bool(
+        value.get('uid')
+        or value.get('segement_id')
+        or value.get('segment_id')
+        or value.get('chunk_id')
+        or value.get('docid')
+        or value.get('doc_id')
+        or value.get('document_id')
+        or value.get('text')
+        or value.get('content')
+        or metadata.get('docid')
+    )
+
+
 def _extend_sources(target: list[dict[str, Any]], value: Any) -> None:
     if isinstance(value, list):
         target.extend(dict(item) for item in value if isinstance(item, Mapping))
+
+
+def _source_identity(source: Mapping[str, Any]) -> str:
+    metadata = source.get('global_metadata') if isinstance(source.get('global_metadata'), Mapping) else {}
+    doc = source.get('docid') or source.get('doc_id') or source.get('document_id') or metadata.get('docid')
+    group = source.get('group') or source.get('group_name')
+    number = source.get('number') or source.get('segment_number')
+    if doc and group and number is not None:
+        return f'{doc}:{group}:{number}'
+    return str(
+        source.get('index')
+        or source.get('segement_id')
+        or source.get('segment_id')
+        or source.get('chunk_id')
+        or source.get('uid')
+        or source.get('document_id')
+        or source.get('doc_id')
+        or source.get('docid')
+        or id(source)
+    )
 
 
 def _unique_sources(sources: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
     seen: set[str] = set()
     result: list[dict[str, Any]] = []
     for source in sources:
-        key = str(
-            source.get('index')
-            or source.get('segement_id')
-            or source.get('segment_id')
-            or source.get('chunk_id')
-            or source.get('document_id')
-            or source.get('doc_id')
-            or id(source)
-        )
+        key = _source_identity(source)
         if key in seen:
             continue
         seen.add(key)
