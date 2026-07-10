@@ -363,7 +363,11 @@ def _event_stream(
                     'data': json.dumps(_sse_payload('done', payload), ensure_ascii=False),
                 }
                 break
-            if not snapshot['items'] and await asyncio.to_thread(_thread_events_done, service, thread_id):
+            if (
+                not snapshot.get('step_id')
+                and not snapshot['items']
+                and await asyncio.to_thread(_thread_events_done, service, thread_id)
+            ):
                 public = await asyncio.to_thread(service.threads.public_thread, thread_id, include_inputs=False)
                 payload = _done_payload(thread_id, last_event_id, snapshot)
                 payload.update({
