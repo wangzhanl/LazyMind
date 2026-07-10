@@ -167,7 +167,14 @@ def create_app() -> FastAPI:
         unsupported = set(request.query_params) - {'step_id'}
         if unsupported:
             raise HTTPException(422, f'unsupported query param: {sorted(unsupported)[0]}')
-        return _event_stream(service, thread_id, step_id, request, service.projections.events)
+        return _event_stream(
+            service,
+            thread_id,
+            step_id,
+            request,
+            service.projections.events,
+            step_terminal_done=True,
+        )
 
     @app.get('/threads/{thread_id}/event-trace:stream')
     def event_trace_stream(thread_id: str, request: Request, step_id: str = '') -> EventSourceResponse:
@@ -339,12 +346,14 @@ def _event_stream(
     step_id: str,
     request: Request,
     snapshot_fn,
+    *,
+    step_terminal_done: bool = False,
 ) -> EventSourceResponse:
     async def events():
         last_event_id = request.headers.get('last-event-id', '').strip()
+        pending_step_done = False
         while True:
             snapshot = await asyncio.to_thread(snapshot_fn, thread_id, step_id, last_event_id)
-            step_stream_done = False
             for item in snapshot['items']:
                 last_event_id = str(item['event_id'])
                 event_type = str(item['event_type'])
@@ -353,9 +362,9 @@ def _event_stream(
                     'event': event_type,
                     'data': json.dumps(_sse_payload(event_type, item), ensure_ascii=False),
                 }
-                if _step_stream_terminal_event(snapshot, item):
-                    step_stream_done = True
-            if step_stream_done:
+                if step_terminal_done and _step_stream_terminal_event(snapshot, item):
+                    pending_step_done = True
+            if pending_step_done and await asyncio.to_thread(_thread_events_done, service, thread_id):
                 payload = _done_payload(thread_id, last_event_id, snapshot)
                 yield {
                     'id': last_event_id,
@@ -364,7 +373,7 @@ def _event_stream(
                 }
                 break
             if (
-                not snapshot.get('step_id')
+                (not snapshot.get('step_id') or not step_terminal_done)
                 and not snapshot['items']
                 and await asyncio.to_thread(_thread_events_done, service, thread_id)
             ):
