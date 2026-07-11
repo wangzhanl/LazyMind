@@ -316,8 +316,7 @@ func TestCreateManualSkillReviewTaskReleasesTerminalActiveTask(t *testing.T) {
 
 func TestSkillReviewTaskListIncludesPendingAndDoneCoreTaskUntilRunStats(t *testing.T) {
 	db := newResourceUpdateTestDB(t)
-	createSkillReviewResultsTable(t, db)
-	createSkillReviewRunStatsTable(t, db)
+	createSkillReviewStatsTable(t, db)
 	ctx := context.Background()
 	now := time.Date(2026, 6, 9, 10, 0, 0, 0, time.UTC)
 	insertTask(t, db, orm.ResourceUpdateTask{
@@ -384,8 +383,7 @@ func TestSkillReviewTaskListIncludesPendingAndDoneCoreTaskUntilRunStats(t *testi
 
 func TestSkillReviewTaskListDropsCompletedRunFromRunningFilter(t *testing.T) {
 	db := newResourceUpdateTestDB(t)
-	createSkillReviewResultsTable(t, db)
-	createSkillReviewRunStatsTable(t, db)
+	createSkillReviewStatsTable(t, db)
 	ctx := context.Background()
 	now := time.Date(2026, 6, 9, 10, 0, 0, 0, time.UTC)
 	insertTask(t, db, orm.ResourceUpdateTask{
@@ -407,24 +405,18 @@ func TestSkillReviewTaskListDropsCompletedRunFromRunningFilter(t *testing.T) {
 		StartedAt:  ptrTime(now),
 		FinishedAt: ptrTime(now.Add(time.Second)),
 	})
-	insertFullSkillReviewResult(t, db, SkillReviewResult{
-		ID:           "result-1",
-		SkillName:    "bill-check",
-		Type:         skillReviewTypeNew,
-		UserID:       "user-1",
-		RequestID:    "req-1",
-		SkillContent: skillContent("bill-check", "Use calculator tools."),
-		ReviewStatus: reviewStatusAccepted,
-		Time:         now.Add(time.Minute),
-	})
-	insertSkillReviewRunStats(t, db, map[string]any{
+	insertSkillReviewStats(t, db, map[string]any{
 		"id":          "stats-1",
 		"requestid":   "req-1",
 		"userid":      "user-1",
 		"status":      "completed",
 		"started_at":  "2026-06-09T10:00:00Z",
 		"duration_ms": 94000,
-		"summary":     `{"error":null}`,
+		"summary": map[string]any{
+			"skill_count":   1,
+			"created_count": 1,
+			"updated_count": 0,
+		},
 	})
 
 	running, err := buildSkillReviewTaskList(ctx, db, "user-1", orm.ResourceUpdateTaskStatusRunning, "req-1", 1, 1000)
@@ -1409,76 +1401,41 @@ func TestSkillAcceptRejectAndUserFiltering(t *testing.T) {
 	}
 }
 
-func TestListSkillReviewResultsFiltersSkillName(t *testing.T) {
+func TestSkillReviewResultDetailReturnsRunStats(t *testing.T) {
 	db := newResourceUpdateTestDB(t)
-	createSkillReviewResultsTable(t, db)
+	createSkillReviewStatsTable(t, db)
 	store.Init(db, nil, nil)
 	t.Cleanup(func() { store.Init(nil, nil, nil) })
 	now := time.Date(2026, 6, 9, 10, 0, 0, 0, time.UTC)
-	insertFullSkillReviewResult(t, db, SkillReviewResult{ID: "target-1", UserID: "user-1", RequestID: "request-a", SkillName: "git-workflow", Type: skillReviewTypePatch, ReviewStatus: reviewStatusPending, SkillContent: skillContent("git-workflow", "target"), Time: now})
-	insertFullSkillReviewResult(t, db, SkillReviewResult{ID: "target-other-request", UserID: "user-1", RequestID: "request-b", SkillName: "git-workflow", Type: skillReviewTypePatch, ReviewStatus: reviewStatusPending, SkillContent: skillContent("git-workflow", "other request"), Time: now})
-	insertFullSkillReviewResult(t, db, SkillReviewResult{ID: "other-skill", UserID: "user-1", SkillName: "release-check", Type: skillReviewTypePatch, ReviewStatus: reviewStatusPending, SkillContent: skillContent("release-check", "other"), Time: now})
-	insertFullSkillReviewResult(t, db, SkillReviewResult{ID: "other-user", UserID: "user-2", SkillName: "git-workflow", Type: skillReviewTypePatch, ReviewStatus: reviewStatusPending, SkillContent: skillContent("git-workflow", "other user"), Time: now})
-	if err := db.Exec("UPDATE skill_review_results SET summary = NULL WHERE id = ?", "target-1").Error; err != nil {
-		t.Fatalf("set summary null: %v", err)
-	}
-
-	req := httptest.NewRequest(http.MethodGet, "/api/core/skill-review-results?review_status=pending&type=patch&skill_name=git-workflow&requestid=request-a", nil)
-	req.Header.Set("X-User-Id", "user-1")
-	rec := httptest.NewRecorder()
-
-	ListSkillReviewResults(rec, req)
-
-	if rec.Code != http.StatusOK {
-		t.Fatalf("list failed: code=%d body=%s", rec.Code, rec.Body.String())
-	}
-	var resp struct {
-		Code int `json:"code"`
-		Data struct {
-			Items []skillReviewResultResponse `json:"items"`
-			Total int                         `json:"total"`
-		} `json:"data"`
-	}
-	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
-		t.Fatalf("decode list: %v", err)
-	}
-	if resp.Code != 0 {
-		t.Fatalf("expected code 0, got %d", resp.Code)
-	}
-	if resp.Data.Total != 1 || len(resp.Data.Items) != 1 || resp.Data.Items[0].ID != "target-1" {
-		t.Fatalf("expected only target result, got %#v", resp.Data)
-	}
-	if resp.Data.Items[0].Summary != "" {
-		t.Fatalf("expected null summary to be returned as empty string, got %q", resp.Data.Items[0].Summary)
-	}
-}
-
-func TestSkillReviewResultDetailIncludesCurrentContentForPatch(t *testing.T) {
-	db := newResourceUpdateTestDB(t)
-	createSkillReviewResultsTable(t, db)
-	store.Init(db, nil, nil)
-	t.Cleanup(func() { store.Init(nil, nil, nil) })
-	now := time.Date(2026, 6, 9, 10, 0, 0, 0, time.UTC)
-	currentContent := skillContent("patch-skill", "current body")
-	candidateContent := skillContent("patch-skill", "candidate body")
-	insertSkillResource(t, db, orm.SkillResource{
-		ID:           "skill-detail",
-		OwnerUserID:  "user-1",
-		Category:     "system",
-		SkillName:    "patch-skill",
-		NodeType:     evolution.SkillNodeTypeParent,
-		Content:      currentContent,
-		ContentHash:  evolution.HashContent(currentContent),
-		Version:      1,
-		AutoEvo:      false,
-		IsEnabled:    true,
-		CreatedAt:    now.Add(-time.Hour),
-		UpdatedAt:    now.Add(-time.Hour),
-		CreateUserID: "user-1",
+	insertSkillReviewStats(t, db, map[string]any{
+		"id":          "stats-detail",
+		"requestid":   "request-detail",
+		"userid":      "user-1",
+		"status":      "completed",
+		"started_at":  now.Format(time.RFC3339),
+		"duration_ms": 1000,
+		"summary": map[string]any{
+			"skill_count":    5,
+			"created_count":  1,
+			"updated_count":  2,
+			"skipped_count":  1,
+			"failed_count":   1,
+			"accepted_count": 3,
+		},
 	})
-	insertFullSkillReviewResult(t, db, SkillReviewResult{ID: "patch-detail", UserID: "user-1", SkillName: "patch-skill", Type: skillReviewTypePatch, ReviewStatus: reviewStatusPending, SkillContent: candidateContent, Summary: "summary", Time: now})
+	insertSkillReviewStats(t, db, map[string]any{
+		"id":          "stats-other-user",
+		"requestid":   "request-detail",
+		"userid":      "user-2",
+		"status":      "completed",
+		"started_at":  now.Format(time.RFC3339),
+		"duration_ms": 1000,
+		"summary": map[string]any{
+			"skill_count": 99,
+		},
+	})
 
-	req := mux.SetURLVars(httptest.NewRequest(http.MethodGet, "/api/core/skill-review-results/patch-detail", nil), map[string]string{"review_result_id": "patch-detail"})
+	req := mux.SetURLVars(httptest.NewRequest(http.MethodGet, "/api/core/skill-review-results/request-detail", nil), map[string]string{"review_result_id": "request-detail"})
 	req.Header.Set("X-User-Id", "user-1")
 	rec := httptest.NewRecorder()
 	GetSkillReviewResult(rec, req)
@@ -1486,14 +1443,32 @@ func TestSkillReviewResultDetailIncludesCurrentContentForPatch(t *testing.T) {
 		t.Fatalf("detail failed: code=%d body=%s", rec.Code, rec.Body.String())
 	}
 	var resp struct {
-		Code int                       `json:"code"`
-		Data skillReviewResultResponse `json:"data"`
+		Code int                      `json:"code"`
+		Data skillReviewStatsResponse `json:"data"`
 	}
 	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
 		t.Fatalf("decode detail: %v", err)
 	}
-	if resp.Data.SkillContent != candidateContent || resp.Data.CurrentContent != currentContent {
-		t.Fatalf("unexpected detail response: %#v", resp.Data)
+	if resp.Data.ID != "stats-detail" ||
+		resp.Data.RequestID != "request-detail" ||
+		resp.Data.UserID != "user-1" ||
+		resp.Data.Status != "completed" ||
+		resp.Data.DurationMS != 1000 {
+		t.Fatalf("unexpected stats detail response: %#v", resp.Data)
+	}
+	if resp.Data.SkillCount != 5 ||
+		resp.Data.CreatedCount != 1 ||
+		resp.Data.UpdatedCount != 2 ||
+		resp.Data.SkippedCount != 1 ||
+		resp.Data.FailedCount != 1 {
+		t.Fatalf("unexpected stats counts: %#v", resp.Data)
+	}
+	var summary map[string]int
+	if err := json.Unmarshal(resp.Data.Summary, &summary); err != nil {
+		t.Fatalf("decode summary: %v", err)
+	}
+	if summary["accepted_count"] != 3 {
+		t.Fatalf("expected raw summary to be preserved, got %#v", summary)
 	}
 }
 
@@ -1860,10 +1835,10 @@ func createSkillReviewResultsTable(t *testing.T, db *gorm.DB) {
 	}
 }
 
-func createSkillReviewRunStatsTable(t *testing.T, db *gorm.DB) {
+func createSkillReviewStatsTable(t *testing.T, db *gorm.DB) {
 	t.Helper()
 	if err := db.Exec(`
-	CREATE TABLE skill_review_run_stats (
+	CREATE TABLE skill_review_stats (
 		id varchar(128) PRIMARY KEY,
 		requestid varchar(128) NOT NULL,
 		userid varchar(255) NOT NULL,
@@ -1872,7 +1847,7 @@ func createSkillReviewRunStatsTable(t *testing.T, db *gorm.DB) {
 		duration_ms integer NOT NULL DEFAULT 0,
 		summary json NOT NULL
 	)`).Error; err != nil {
-		t.Fatalf("create skill_review_run_stats: %v", err)
+		t.Fatalf("create skill_review_stats: %v", err)
 	}
 }
 
@@ -1895,10 +1870,17 @@ CREATE TABLE memory_review (
 	}
 }
 
-func insertSkillReviewRunStats(t *testing.T, db *gorm.DB, row map[string]any) {
+func insertSkillReviewStats(t *testing.T, db *gorm.DB, row map[string]any) {
 	t.Helper()
-	if err := db.Table("skill_review_run_stats").Create(row).Error; err != nil {
-		t.Fatalf("insert skill review run stats: %v", err)
+	if summary, ok := row["summary"]; ok {
+		switch summary.(type) {
+		case string, []byte:
+		default:
+			row["summary"] = string(marshalJSON(t, summary))
+		}
+	}
+	if err := db.Table("skill_review_stats").Create(row).Error; err != nil {
+		t.Fatalf("insert skill review stats: %v", err)
 	}
 }
 

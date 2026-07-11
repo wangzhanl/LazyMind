@@ -444,6 +444,10 @@ func TestOpenAPISpecCoversEvolutionSkillMemoryPreferenceOperations(t *testing.T)
 		{"get", "/api/core/personal-resource/{resource_type}/revisions", false, true, true},
 		{"get", "/api/core/personal-resource/{resource_type}/revisions/{revision_id}", false, true, true},
 		{"post", "/api/core/personal-resource/{resource_type}:rollback", true, true, true},
+		{"get", "/api/core/skill-review:summary", false, false, false},
+		{"post", "/api/core/skill-review:run", false, false, false},
+		{"get", "/api/core/skill-review/tasks", false, false, false},
+		{"get", "/api/core/skill-review-results/{review_result_id}", false, false, false},
 		{"get", "/api/core/agent/threads", false, true, true},
 		{"get", "/api/core/conversations/{name}:history", false, true, true},
 	}
@@ -507,6 +511,8 @@ func TestOpenAPISpecCoversEvolutionSkillMemoryPreferenceOperations(t *testing.T)
 		"/api/core/user-preference:confirm",
 		"/api/core/user-preference:discard",
 		"/api/core/skill-review-results",
+		"/api/core/skill-review-results/{review_result_id}:accept",
+		"/api/core/skill-review-results/{review_result_id}:reject",
 		"/api/core/memory-review-results",
 		"/api/core/resource-versions",
 	}

@@ -258,11 +258,9 @@ func TestDeprecatedReviewResultRoutesAreNotRegistered(t *testing.T) {
 		method string
 		path   string
 	}{
+		{http.MethodGet, "/skill-review-results"},
 		{http.MethodPost, "/skill-review-results/review-1:accept"},
 		{http.MethodPost, "/skill-review-results/review-1:reject"},
-		{http.MethodGet, "/skill-review:summary"},
-		{http.MethodPost, "/skill-review:run"},
-		{http.MethodGet, "/skill-review/tasks"},
 		{http.MethodPost, "/memory-review-results/review-2:accept"},
 		{http.MethodGet, "/evolution/tasks/task-1"},
 	}
@@ -272,6 +270,36 @@ func TestDeprecatedReviewResultRoutesAreNotRegistered(t *testing.T) {
 		if r.Match(req, &match) {
 			template, _ := match.Route.GetPathTemplate()
 			t.Fatalf("expected deprecated route not to match %s %s, got %q", tc.method, tc.path, template)
+		}
+	}
+}
+
+func TestManualSkillReviewRoutesAreRegistered(t *testing.T) {
+	r := mux.NewRouter()
+	registerAllRoutes(r)
+
+	cases := []struct {
+		method   string
+		path     string
+		template string
+	}{
+		{http.MethodGet, "/skill-review:summary", "/skill-review:summary"},
+		{http.MethodPost, "/skill-review:run", "/skill-review:run"},
+		{http.MethodGet, "/skill-review/tasks", "/skill-review/tasks"},
+		{http.MethodGet, "/skill-review-results/review-1", "/skill-review-results/{review_result_id}"},
+	}
+	for _, tc := range cases {
+		req := httptest.NewRequest(tc.method, tc.path, nil)
+		var match mux.RouteMatch
+		if !r.Match(req, &match) {
+			t.Fatalf("expected route to match %s %s", tc.method, tc.path)
+		}
+		template, err := match.Route.GetPathTemplate()
+		if err != nil {
+			t.Fatalf("get matched route template: %v", err)
+		}
+		if template != tc.template {
+			t.Fatalf("expected template %q, got %q", tc.template, template)
 		}
 	}
 }
