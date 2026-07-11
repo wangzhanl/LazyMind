@@ -88,7 +88,7 @@ func (e *DefaultEngine) prepareBindingList(ctx context.Context, callerID string,
 	changes := bindingListChanges{callerID: callerID, datasetID: src.DatasetID, tenantID: src.TenantID}
 	for _, input := range inputs {
 		if input.BindingID == "" {
-			prepared, err := e.prepareCreateBinding(ctx, src.SourceID, src.DatasetID, src.Name, callerID, src.TenantID, "", len(changes.createdBindings), input, now)
+			prepared, err := e.prepareCreateBinding(ctx, src.SourceID, src.DatasetID, src.Name, callerID, "", src.TenantID, "", len(changes.createdBindings), input, now)
 			if err != nil {
 				compensatePreparedCreates(ctx, e, changes.datasetID, changes.callerID, changes.createdBindings)
 				return bindingListChanges{}, err
