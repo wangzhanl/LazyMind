@@ -2,6 +2,7 @@ package market
 
 import (
 	"context"
+	"path/filepath"
 	"testing"
 
 	"lazymind/core/skillv2/testutil"
@@ -91,6 +92,70 @@ func TestMarketAdminPublishEditUnpublish(t *testing.T) {
 	}
 	if got := testutil.CountRows(t, db, "skill_market_items", "id = ? AND status = ?", published.MarketItemID, "unpublished"); got != 1 {
 		t.Fatalf("unpublished market item count = %d, want 1", got)
+	}
+}
+
+func TestMarketAdminPublish_AllowsSingleTopLevelDirectory(t *testing.T) {
+	db := testutil.NewTestDB(t)
+	zipPath := filepath.Join(t.TempDir(), "wrapped.zip")
+	testutil.WriteSkillZip(t, zipPath, map[string][]byte{
+		"openclaw-openclaw-changelog-update/SKILL.md":        []byte("# OpenClaw\n"),
+		"openclaw-openclaw-changelog-update/references/a.md": []byte("# A\n"),
+	})
+	service := NewAdminService(AdminServiceDeps{DB: db.DB, BlobStore: NewBlobStore(db.DB, NewLocalObjectStore(t.TempDir()))})
+
+	published, err := service.Publish(context.Background(), PublishRequest{
+		AdminUserID: "admin_001",
+		Name:        "openclaw-openclaw-changelog-update",
+		Category:    "team",
+		Source: SourceInput{
+			Type:       "uploaded_zip",
+			UploadID:   "upload_wrapped_market_zip",
+			StoredPath: zipPath,
+		},
+	})
+	if err != nil {
+		t.Fatalf("Publish returned error: %v", err)
+	}
+
+	var skill skillRow
+	if err := db.Where("id = ?", published.SourceSkillID).Take(&skill).Error; err != nil {
+		t.Fatalf("query source skill: %v", err)
+	}
+	if skill.HeadRevisionID == nil {
+		t.Fatal("published source skill missing head revision")
+	}
+	if skill.Category != "team" {
+		t.Fatalf("category = %q, want team", skill.Category)
+	}
+	if skill.SkillName != "openclaw-openclaw-changelog-update" {
+		t.Fatalf("skill_name = %q, want openclaw-openclaw-changelog-update", skill.SkillName)
+	}
+	if skill.RelativeRoot != "team/openclaw-openclaw-changelog-update" {
+		t.Fatalf("relative_root = %q, want team/openclaw-openclaw-changelog-update", skill.RelativeRoot)
+	}
+	if skill.SkillMDPath != "SKILL.md" {
+		t.Fatalf("skill_md_path = %q, want SKILL.md", skill.SkillMDPath)
+	}
+	var skillMDEntry skillRevisionEntryRow
+	if err := db.Where("revision_id = ? AND path = ?", *skill.HeadRevisionID, "SKILL.md").Take(&skillMDEntry).Error; err != nil {
+		t.Fatalf("query normalized SKILL.md entry: %v", err)
+	}
+	if skillMDEntry.BlobHash == nil || *skillMDEntry.BlobHash == "" {
+		t.Fatal("normalized SKILL.md entry has empty blob_hash")
+	}
+	if got := testutil.CountRows(t, db, "skill_revision_entries", "revision_id = ? AND path = ?", *skill.HeadRevisionID, "references/a.md"); got != 1 {
+		t.Fatalf("normalized references/a.md entry count = %d, want 1", got)
+	}
+	if got := testutil.CountRows(t, db, "skill_revision_entries", "revision_id = ? AND path LIKE ?", *skill.HeadRevisionID, "openclaw-openclaw-changelog-update/%"); got != 0 {
+		t.Fatalf("wrapper path entry count = %d, want 0", got)
+	}
+	var skillMDBlob skillBlobRow
+	if err := db.Where("hash = ?", *skillMDEntry.BlobHash).Take(&skillMDBlob).Error; err != nil {
+		t.Fatalf("query SKILL.md blob: %v", err)
+	}
+	if skillMDBlob.StorageBackend != "postgres" || len(skillMDBlob.Content) == 0 || skillMDBlob.StorageKey != nil {
+		t.Fatalf("SKILL.md blob storage invalid: %#v", skillMDBlob)
 	}
 }
 

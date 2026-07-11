@@ -882,7 +882,40 @@ func readZipFiles(zipPath string) (map[string][]byte, error) {
 		}
 		files[name] = data
 	}
-	return files, nil
+	return normalizeSkillPackageRoot(files), nil
+}
+
+func normalizeSkillPackageRoot(files map[string][]byte) map[string][]byte {
+	if _, ok := files["SKILL.md"]; ok {
+		return files
+	}
+	root := ""
+	for filePath := range files {
+		parts := strings.SplitN(filePath, "/", 2)
+		if len(parts) != 2 || parts[1] == "" {
+			return files
+		}
+		if root == "" {
+			root = parts[0]
+			continue
+		}
+		if root != parts[0] {
+			return files
+		}
+	}
+	if root == "" {
+		return files
+	}
+	normalized := make(map[string][]byte, len(files))
+	prefix := root + "/"
+	for filePath, data := range files {
+		relPath := strings.TrimPrefix(filePath, prefix)
+		normalized[relPath] = data
+	}
+	if _, ok := normalized["SKILL.md"]; ok {
+		return normalized
+	}
+	return files
 }
 
 func cleanSkillPath(name string) (string, error) {
