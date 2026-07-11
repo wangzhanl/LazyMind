@@ -19,6 +19,7 @@ import (
 
 	"github.com/google/uuid"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 
 	skillsearch "lazymind/core/skillv2/search"
 )
@@ -133,13 +134,34 @@ func (s *Service) Install(ctx context.Context, req InstallRequest) (InstallRespo
 		if err != nil {
 			return err
 		}
-		if err := skillsearch.RebuildSkillTx(ctx, tx, skillID, time.Now()); err != nil {
+		now := time.Now()
+		if err := skillsearch.RebuildSkillTx(ctx, tx, skillID, now); err != nil {
+			return err
+		}
+		if err := recordMarketInstall(ctx, tx, item.ID, req.UserID, skillID, now); err != nil {
 			return err
 		}
 		out.SkillID = skillID
 		return nil
 	})
 	return out, err
+}
+
+func recordMarketInstall(ctx context.Context, tx *gorm.DB, marketItemID, userID, skillID string, now time.Time) error {
+	row := skillMarketInstallRow{
+		MarketItemID: marketItemID,
+		UserID:       userID,
+		SkillID:      skillID,
+		CreatedAt:    now,
+		UpdatedAt:    now,
+	}
+	return tx.WithContext(ctx).Clauses(clause.OnConflict{
+		Columns: []clause.Column{{Name: "market_item_id"}, {Name: "user_id"}},
+		DoUpdates: clause.Assignments(map[string]any{
+			"skill_id":   skillID,
+			"updated_at": now,
+		}),
+	}).Create(&row).Error
 }
 
 func (s *Service) GetInstalledTree(ctx context.Context, req GetInstalledTreeRequest) (TreeNode, error) {
@@ -726,3 +748,13 @@ type skillMarketItemRow struct {
 }
 
 func (skillMarketItemRow) TableName() string { return "skill_market_items" }
+
+type skillMarketInstallRow struct {
+	MarketItemID string    `gorm:"column:market_item_id;type:varchar(36);primaryKey"`
+	UserID       string    `gorm:"column:user_id;type:text;primaryKey"`
+	SkillID      string    `gorm:"column:skill_id;type:varchar(36);not null"`
+	CreatedAt    time.Time `gorm:"column:created_at;not null"`
+	UpdatedAt    time.Time `gorm:"column:updated_at;not null"`
+}
+
+func (skillMarketInstallRow) TableName() string { return "skill_market_installs" }

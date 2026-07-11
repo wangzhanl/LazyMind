@@ -1503,17 +1503,19 @@ type marketEditOpenAPIRequest struct {
 }
 
 type marketItemOpenAPIResponse struct {
-	ID            string                      `json:"id,omitempty"`
-	MarketItemID  string                      `json:"market_item_id"`
-	SourceSkillID string                      `json:"source_skill_id,omitempty"`
-	Status        string                      `json:"status,omitempty"`
-	Icon          string                      `json:"icon,omitempty"`
-	SortOrder     int                         `json:"sort_order,omitempty"`
-	VersionNote   string                      `json:"version_note,omitempty"`
-	PublishedAt   string                      `json:"published_at,omitempty"`
-	CreatedAt     string                      `json:"created_at,omitempty"`
-	UpdatedAt     string                      `json:"updated_at,omitempty"`
-	Source        *skillDetailOpenAPIResponse `json:"source,omitempty"`
+	ID               string                      `json:"id,omitempty"`
+	MarketItemID     string                      `json:"market_item_id"`
+	SourceSkillID    string                      `json:"source_skill_id,omitempty"`
+	Status           string                      `json:"status,omitempty"`
+	Installed        bool                        `json:"installed,omitempty"`
+	InstalledSkillID string                      `json:"installed_skill_id,omitempty"`
+	Icon             string                      `json:"icon,omitempty"`
+	SortOrder        int                         `json:"sort_order,omitempty"`
+	VersionNote      string                      `json:"version_note,omitempty"`
+	PublishedAt      string                      `json:"published_at,omitempty"`
+	CreatedAt        string                      `json:"created_at,omitempty"`
+	UpdatedAt        string                      `json:"updated_at,omitempty"`
+	Source           *skillDetailOpenAPIResponse `json:"source,omitempty"`
 }
 
 type marketListOpenAPIResponse struct {

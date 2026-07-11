@@ -353,6 +353,9 @@ func (s *SkillService) TrashSkill(ctx context.Context, req DeleteSkillRequest) e
 		if err := tx.Model(&skillRow{}).Where("id = ? AND deleted_at IS NULL", req.SkillID).Updates(updates).Error; err != nil {
 			return err
 		}
+		if err := deleteMarketInstallTx(tx, req.SkillID, req.UserID); err != nil {
+			return err
+		}
 		if tx.Migrator().HasTable(&skillSearchIndexRow{}) {
 			if err := tx.Where("skill_id = ?", req.SkillID).Delete(&skillSearchIndexRow{}).Error; err != nil {
 				return err
@@ -453,10 +456,20 @@ func (s *SkillService) purgeSkillTx(ctx context.Context, tx *gorm.DB, req PurgeS
 			return err
 		}
 	}
+	if err := deleteMarketInstallTx(tx, req.SkillID, req.UserID); err != nil {
+		return err
+	}
 	if err := tx.Where("id = ?", req.SkillID).Delete(&skillRow{}).Error; err != nil {
 		return err
 	}
 	return s.cleanupUnreferencedBlobs(ctx, tx)
+}
+
+func deleteMarketInstallTx(tx *gorm.DB, skillID, userID string) error {
+	if !tx.Migrator().HasTable(&skillMarketInstallRow{}) {
+		return nil
+	}
+	return tx.Where("skill_id = ? AND user_id = ?", skillID, userID).Delete(&skillMarketInstallRow{}).Error
 }
 
 func (s *SkillService) cleanupUnreferencedBlobs(ctx context.Context, tx *gorm.DB) error {

@@ -37,6 +37,9 @@ func TestMarketInstall_CopiesSkillTreeForUser(t *testing.T) {
 	if got := testutil.CountRows(t, db, "skill_revision_entries", "revision_id = ?", *copied.HeadRevisionID); got == 0 {
 		t.Fatal("installed skill revision has no entries")
 	}
+	if got := testutil.CountRows(t, db, "skill_market_installs", "market_item_id = ? AND user_id = ? AND skill_id = ?", "market_item1", "user_002", resp.SkillID); got != 1 {
+		t.Fatalf("market install record count = %d, want 1", got)
+	}
 }
 
 func TestMarketInstall_DoesNotReferenceMarketAsTruth(t *testing.T) {

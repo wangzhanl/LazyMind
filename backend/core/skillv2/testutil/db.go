@@ -31,6 +31,7 @@ func NewTestDB(t *testing.T) *TestDB {
 		&SkillDraftReviewActionBatchRow{},
 		&SkillDraftReviewActionItemRow{},
 		&SkillMarketItemRow{},
+		&SkillMarketInstallRow{},
 		&SkillSearchIndexRow{},
 		&SkillShareItemRow{},
 	); err != nil {
@@ -50,6 +51,7 @@ func ResetSkillTables(t *testing.T, db *TestDB) {
 		"skill_drafts",
 		"skill_revision_entries",
 		"skill_revisions",
+		"skill_market_installs",
 		"skill_market_items",
 		"skill_search_indexes",
 		"skill_share_items",
@@ -268,6 +270,16 @@ type SkillMarketItemRow struct {
 }
 
 func (SkillMarketItemRow) TableName() string { return "skill_market_items" }
+
+type SkillMarketInstallRow struct {
+	MarketItemID string    `gorm:"column:market_item_id;type:varchar(36);primaryKey"`
+	UserID       string    `gorm:"column:user_id;type:text;primaryKey"`
+	SkillID      string    `gorm:"column:skill_id;type:varchar(36);not null"`
+	CreatedAt    time.Time `gorm:"column:created_at;not null"`
+	UpdatedAt    time.Time `gorm:"column:updated_at;not null"`
+}
+
+func (SkillMarketInstallRow) TableName() string { return "skill_market_installs" }
 
 type SkillShareItemRow struct {
 	ID            string    `gorm:"column:id;type:varchar(36);primaryKey"`
