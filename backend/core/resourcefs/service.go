@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"html"
 	"strings"
 	"time"
 
@@ -561,11 +562,7 @@ func (s *Service) Action(ctx context.Context, req ReviewActionRequest) (ReviewAc
 		if resource.HeadRevisionID == nil {
 			return ErrRevisionNotFound
 		}
-		head, err := findRevisionByID(ctx, tx, resource.ID, *resource.HeadRevisionID)
-		if err != nil {
-			return err
-		}
-		diff, headContent, draftContent, err := diffForReviewRows(ctx, tx, req.Ref.ResourceType, head, draft)
+		diff, headContent, draftContent, err := diffForReviewSession(ctx, tx, req.Ref.ResourceType, resource.ID, session)
 		if err != nil {
 			return err
 		}
@@ -581,6 +578,7 @@ func (s *Service) Action(ctx context.Context, req ReviewActionRequest) (ReviewAc
 		}
 
 		actionDecisions := map[string]string{}
+		nextDecisions := copyReviewDecisions(decisions)
 		outItems := make([]ReviewActionItem, 0, len(req.Items))
 		rows := make([]orm.PersonalResourceReviewActionItem, 0, len(req.Items))
 		for _, item := range req.Items {
@@ -601,6 +599,7 @@ func (s *Service) Action(ctx context.Context, req ReviewActionRequest) (ReviewAc
 				return err
 			}
 			actionDecisions[hunkID] = decision
+			nextDecisions[hunkID] = decision
 			outItems = append(outItems, ReviewActionItem{Path: session.Path, HunkID: hunkID, Decision: decision})
 			rows = append(rows, orm.PersonalResourceReviewActionItem{
 				ID:       uuid.NewString(),
@@ -613,7 +612,7 @@ func (s *Service) Action(ctx context.Context, req ReviewActionRequest) (ReviewAc
 			})
 		}
 
-		nextContent, err := versionfs.ApplyTextReview(headContent, draftContent, reviewFile, actionDecisions)
+		nextContent, err := versionfs.ApplyTextReview(headContent, draftContent, reviewFile, nextDecisions)
 		if err != nil {
 			return err
 		}
@@ -843,9 +842,15 @@ func (s *Service) prepareReviewDiff(ctx context.Context, ref ResourceRef, diff f
 	if err != nil {
 		return filediff.FileDiff{}, reviewPreviewMeta{}, err
 	}
-	reviewFile := reviewFileFromFileDiff(diff)
+	displayDiff, _, _, err := diffForReviewSession(ctx, s.db, ref.ResourceType, session.ResourceID, session)
+	if err != nil {
+		return filediff.FileDiff{}, reviewPreviewMeta{}, err
+	}
+	reviewFile := reviewFileFromFileDiff(displayDiff)
 	versionfs.AnnotateReviewFile(&reviewFile, reviewSessionMeta(session), decisions, canUndo)
-	return fileDiffFromReviewFile(reviewFile, diff), reviewMetaFromFile(reviewFile), nil
+	out := fileDiffFromReviewFile(reviewFile, displayDiff)
+	out.DiffEntryLines = reviewDisplayDiffEntryLines(out.DiffEntryLines)
+	return out, reviewMetaFromFile(reviewFile), nil
 }
 
 func (s *Service) ensureReviewSession(ctx context.Context, ref ResourceRef) (orm.PersonalResourceReviewSession, error) {
@@ -943,18 +948,30 @@ func validateReviewSnapshot(resource orm.PersonalResource, draft orm.PersonalRes
 	return nil
 }
 
-func diffForReviewRows(ctx context.Context, tx *gorm.DB, resourceType ResourceType, head orm.PersonalResourceRevision, draft orm.PersonalResourceDraft) (filediff.FileDiff, string, string, error) {
+func diffForReviewSession(ctx context.Context, tx *gorm.DB, resourceType ResourceType, resourceID string, session orm.PersonalResourceReviewSession) (filediff.FileDiff, string, string, error) {
+	head, err := findRevisionByID(ctx, tx, resourceID, session.HeadRevisionID)
+	if err != nil {
+		return filediff.FileDiff{}, "", "", err
+	}
+	basisBlobHash, err := reviewBasisDraftBlobHash(ctx, tx, session)
+	if err != nil {
+		return filediff.FileDiff{}, "", "", err
+	}
+	basisBlob, err := findBlob(ctx, tx, basisBlobHash)
+	if err != nil {
+		return filediff.FileDiff{}, "", "", err
+	}
 	headContent, err := readBlobContent(ctx, tx, head.BlobHash)
 	if err != nil {
 		return filediff.FileDiff{}, "", "", err
 	}
-	draftContent, err := readBlobContent(ctx, tx, draft.BlobHash)
+	basisContent, err := readBlobContent(ctx, tx, basisBlob.Hash)
 	if err != nil {
 		return filediff.FileDiff{}, "", "", err
 	}
 	diff, err := filediff.CompareContent(
 		filediff.Content{Path: mustPath(resourceType), Data: headContent, Binary: head.Binary, EditableText: true, Size: head.Size},
-		filediff.Content{Path: mustPath(resourceType), Data: draftContent, Binary: draft.Binary, EditableText: true, Size: draft.Size},
+		filediff.Content{Path: mustPath(resourceType), Data: basisContent, Binary: basisBlob.Binary, EditableText: true, Size: basisBlob.Size},
 		filediff.Options{},
 	)
 	if err != nil {
@@ -963,7 +980,22 @@ func diffForReviewRows(ctx context.Context, tx *gorm.DB, resourceType ResourceTy
 	if !diff.Supported {
 		return filediff.FileDiff{}, "", "", ErrUnsupported
 	}
-	return diff, string(headContent), string(draftContent), nil
+	return diff, string(headContent), string(basisContent), nil
+}
+
+func reviewBasisDraftBlobHash(ctx context.Context, tx *gorm.DB, session orm.PersonalResourceReviewSession) (string, error) {
+	var batch orm.PersonalResourceReviewActionBatch
+	err := tx.WithContext(ctx).
+		Where("session_id = ?", session.ID).
+		Order("created_at ASC, id ASC").
+		Take(&batch).Error
+	if err == nil {
+		return batch.BeforeDraftBlobHash, nil
+	}
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return session.DraftBlobHash, nil
+	}
+	return "", err
 }
 
 func normalizeReviewDecision(value string) (string, error) {
@@ -1048,6 +1080,77 @@ func fileDiffFromReviewFile(review versionfs.ReviewFile, file filediff.FileDiff)
 	file.HunkCount = review.HunkCount
 	file.DiffEntryLines = lines
 	return file
+}
+
+func reviewDisplayDiffEntryLines(lines []filediff.DiffEntryLine) []filediff.DiffEntryLine {
+	out := make([]filediff.DiffEntryLine, 0, len(lines))
+	for i := 0; i < len(lines); {
+		line := lines[i]
+		if line.Type != "HUNK" {
+			out = append(out, line)
+			i++
+			continue
+		}
+		end := len(lines)
+		for j := i + 1; j < len(lines); j++ {
+			if lines[j].Type == "HUNK" {
+				end = j
+				break
+			}
+		}
+		switch strings.TrimSpace(line.Decision) {
+		case decisionAccepted:
+			out = append(out, line)
+			out = append(out, resolvedReviewHunkLines(lines[i+1:end], decisionAccepted)...)
+		case decisionRejected:
+			out = append(out, line)
+			out = append(out, resolvedReviewHunkLines(lines[i+1:end], decisionRejected)...)
+		default:
+			out = append(out, lines[i:end]...)
+		}
+		i = end
+	}
+	return out
+}
+
+func resolvedReviewHunkLines(lines []filediff.DiffEntryLine, decision string) []filediff.DiffEntryLine {
+	out := make([]filediff.DiffEntryLine, 0, len(lines))
+	for _, line := range lines {
+		switch line.Type {
+		case "CONTEXT":
+			out = append(out, line)
+		case "ADDITION":
+			if decision == decisionAccepted {
+				out = append(out, resolvedReviewContextLine(line, line.NewLine))
+			}
+		case "DELETION":
+			if decision == decisionRejected {
+				out = append(out, resolvedReviewContextLine(line, line.OldLine))
+			}
+		default:
+			out = append(out, line)
+		}
+	}
+	return out
+}
+
+func resolvedReviewContextLine(line filediff.DiffEntryLine, lineNo int) filediff.DiffEntryLine {
+	return filediff.DiffEntryLine{
+		Type:                    "CONTEXT",
+		Text:                    line.Text,
+		HTML:                    html.EscapeString(line.Text),
+		OldLine:                 lineNo,
+		NewLine:                 lineNo,
+		DisplayNoNewLineWarning: line.DisplayNoNewLineWarning,
+	}
+}
+
+func copyReviewDecisions(decisions map[string]string) map[string]string {
+	out := make(map[string]string, len(decisions))
+	for key, value := range decisions {
+		out[key] = value
+	}
+	return out
 }
 
 func currentReviewDecisions(ctx context.Context, db *gorm.DB, sessionID string) (map[string]string, error) {
