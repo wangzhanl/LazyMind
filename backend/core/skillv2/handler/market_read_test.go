@@ -137,6 +137,48 @@ func TestMarketListInstalledStateIsScopedByUserAndDelete(t *testing.T) {
 	}
 }
 
+func TestMarketListSkipsDeletedMarketSource(t *testing.T) {
+	db := testutil.NewTestDB(t)
+	testutil.SeedSkillWithRevision(t, db, "market_skill", "market_rev1")
+	testutil.MustCreate(t, db, &testutil.SkillMarketItemRow{
+		ID:            "market_item1",
+		SourceSkillID: "market_skill",
+		Status:        "published",
+		CreatedAt:     testutil.TimeFixture(),
+		UpdatedAt:     testutil.TimeFixture(),
+	})
+	store.Init(db.DB, nil, nil)
+	t.Cleanup(func() { store.Init(nil, nil, nil) })
+
+	skillSvc := skillservice.NewSkillService(skillservice.SkillServiceDeps{DB: db.DB})
+	if err := skillSvc.DeleteSkill(context.Background(), skillservice.DeleteSkillRequest{SkillID: "market_skill", UserID: "user_001"}); err != nil {
+		t.Fatalf("delete market source skill: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/api/core/skill-market?page=1&page_size=100", nil)
+	req.Header.Set("X-User-Id", "user_001")
+	rec := httptest.NewRecorder()
+
+	MarketList(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s, want 200", rec.Code, rec.Body.String())
+	}
+	var resp struct {
+		Code int `json:"code"`
+		Data struct {
+			Items []marketListTestItem `json:"items"`
+			Total int                  `json:"total"`
+		} `json:"data"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if resp.Code != 0 || resp.Data.Total != 0 || len(resp.Data.Items) != 0 {
+		t.Fatalf("unexpected market list response after source delete: %#v", resp)
+	}
+}
+
 type marketListTestItem struct {
 	MarketItemID     string `json:"market_item_id"`
 	Installed        bool   `json:"installed"`

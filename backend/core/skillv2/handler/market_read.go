@@ -2,6 +2,7 @@ package handler
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"strings"
 
@@ -40,6 +41,9 @@ func MarketList(w http.ResponseWriter, r *http.Request) {
 	for _, row := range rows {
 		source, err := newSkillService(db).GetSkill(r.Context(), skillservice.GetSkillRequest{SkillID: row.SourceSkillID})
 		if err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				continue
+			}
 			replyServiceError(w, err)
 			return
 		}
