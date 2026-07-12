@@ -130,11 +130,30 @@ func (s *Service) Install(ctx context.Context, req InstallRequest) (InstallRespo
 		if err := tx.Where("id = ? AND status = ?", req.MarketItemID, "published").Take(&item).Error; err != nil {
 			return err
 		}
+		now := time.Now()
+		installedSkillID, err := existingInstalledSkillID(ctx, tx, item.ID, req.UserID)
+		if err != nil {
+			return err
+		}
+		if installedSkillID != "" {
+			out.SkillID = installedSkillID
+			return nil
+		}
+		sourceOwned, err := sourceSkillOwnedByUser(ctx, tx, item.SourceSkillID, req.UserID)
+		if err != nil {
+			return err
+		}
+		if sourceOwned {
+			if err := recordMarketInstall(ctx, tx, item.ID, req.UserID, item.SourceSkillID, now); err != nil {
+				return err
+			}
+			out.SkillID = item.SourceSkillID
+			return nil
+		}
 		skillID, _, err := copyHeadRevision(ctx, tx, item.SourceSkillID, req.UserID, req.UserName, "market_install", req.UserID)
 		if err != nil {
 			return err
 		}
-		now := time.Now()
 		if err := skillsearch.RebuildSkillTx(ctx, tx, skillID, now); err != nil {
 			return err
 		}
@@ -145,6 +164,37 @@ func (s *Service) Install(ctx context.Context, req InstallRequest) (InstallRespo
 		return nil
 	})
 	return out, err
+}
+
+func existingInstalledSkillID(ctx context.Context, tx *gorm.DB, marketItemID, userID string) (string, error) {
+	var row skillMarketInstallRow
+	result := tx.WithContext(ctx).
+		Table("skill_market_installs AS installs").
+		Select("installs.*").
+		Joins("JOIN skills AS skills ON skills.id = installs.skill_id AND skills.owner_user_id = installs.user_id AND skills.deleted_at IS NULL").
+		Where("installs.market_item_id = ? AND installs.user_id = ?", marketItemID, userID).
+		Limit(1).
+		Find(&row)
+	if result.Error != nil {
+		return "", result.Error
+	}
+	if result.RowsAffected == 0 {
+		return "", nil
+	}
+	return row.SkillID, nil
+}
+
+func sourceSkillOwnedByUser(ctx context.Context, tx *gorm.DB, skillID, userID string) (bool, error) {
+	var source skillRow
+	result := tx.WithContext(ctx).
+		Select("id").
+		Where("id = ? AND owner_user_id = ? AND deleted_at IS NULL", skillID, userID).
+		Limit(1).
+		Find(&source)
+	if result.Error != nil {
+		return false, result.Error
+	}
+	return result.RowsAffected > 0, nil
 }
 
 func recordMarketInstall(ctx context.Context, tx *gorm.DB, marketItemID, userID, skillID string, now time.Time) error {

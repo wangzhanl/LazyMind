@@ -40,6 +40,17 @@ func TestMarketInstall_CopiesSkillTreeForUser(t *testing.T) {
 	if got := testutil.CountRows(t, db, "skill_market_installs", "market_item_id = ? AND user_id = ? AND skill_id = ?", "market_item1", "user_002", resp.SkillID); got != 1 {
 		t.Fatalf("market install record count = %d, want 1", got)
 	}
+
+	resp2, err := service.Install(context.Background(), InstallRequest{MarketItemID: "market_item1", UserID: "user_002", UserName: "李四"})
+	if err != nil {
+		t.Fatalf("second Install returned error: %v", err)
+	}
+	if resp2.SkillID != resp.SkillID {
+		t.Fatalf("second install returned skill %q, want %q", resp2.SkillID, resp.SkillID)
+	}
+	if got := testutil.CountRows(t, db, "skill_market_installs", "market_item_id = ? AND user_id = ?", "market_item1", "user_002"); got != 1 {
+		t.Fatalf("market install row count after reinstall = %d, want 1", got)
+	}
 }
 
 func TestMarketInstall_DoesNotReferenceMarketAsTruth(t *testing.T) {
@@ -169,13 +180,59 @@ func TestMarketInstall_NameConflict(t *testing.T) {
 	db := testutil.NewTestDB(t)
 	testutil.SeedSkillWithRevision(t, db, "user_skill", "user_rev1")
 	testutil.SeedSkillWithRevision(t, db, "market_skill", "market_rev1")
+	if err := db.Model(&testutil.SkillRow{}).Where("id = ?", "market_skill").Updates(map[string]any{
+		"owner_user_id":    "admin_001",
+		"owner_user_name":  "管理员",
+		"create_user_id":   "admin_001",
+		"create_user_name": "管理员",
+	}).Error; err != nil {
+		t.Fatalf("reassign market skill owner: %v", err)
+	}
+	if err := db.Model(&testutil.SkillRow{}).Where("id = ?", "user_skill").Updates(map[string]any{
+		"skill_name":    "论文精读-market_skill",
+		"relative_root": "research/论文精读-market_skill",
+	}).Error; err != nil {
+		t.Fatalf("rename conflicting user skill: %v", err)
+	}
 	testutil.MustCreate(t, db, &testutil.SkillMarketItemRow{ID: "market_item1", SourceSkillID: "market_skill", Status: "published", CreatedAt: testutil.TimeFixture(), UpdatedAt: testutil.TimeFixture()})
 	service := NewService(ServiceDeps{DB: db.DB, BlobStore: NewBlobStore(db.DB, NewLocalObjectStore(t.TempDir()))})
 
 	if _, err := service.Install(context.Background(), InstallRequest{MarketItemID: "market_item1", UserID: "user_001", UserName: "张三"}); err == nil {
 		t.Fatal("Install succeeded despite same category/name conflict")
 	}
-	if got := testutil.CountRows(t, db, "skills", "owner_user_id = ?", "user_001"); got != 2 {
-		t.Fatalf("user skill count = %d, want 2", got)
+	if got := testutil.CountRows(t, db, "skills", "owner_user_id = ?", "user_001"); got != 1 {
+		t.Fatalf("user skill count = %d, want 1", got)
+	}
+}
+
+func TestMarketInstall_ReturnsSourceSkillForPublisher(t *testing.T) {
+	db := testutil.NewTestDB(t)
+	testutil.SeedSkillWithRevision(t, db, "market_skill", "market_rev1")
+	if err := db.Model(&testutil.SkillRow{}).Where("id = ?", "market_skill").Updates(map[string]any{
+		"owner_user_id":    "admin_001",
+		"owner_user_name":  "管理员",
+		"create_user_id":   "admin_001",
+		"create_user_name": "管理员",
+	}).Error; err != nil {
+		t.Fatalf("reassign market skill owner: %v", err)
+	}
+	testutil.MustCreate(t, db, &testutil.SkillMarketItemRow{
+		ID:            "market_item1",
+		SourceSkillID: "market_skill",
+		Status:        "published",
+		CreatedAt:     testutil.TimeFixture(),
+		UpdatedAt:     testutil.TimeFixture(),
+	})
+	service := NewService(ServiceDeps{DB: db.DB, BlobStore: NewBlobStore(db.DB, NewLocalObjectStore(t.TempDir()))})
+
+	resp, err := service.Install(context.Background(), InstallRequest{MarketItemID: "market_item1", UserID: "admin_001", UserName: "管理员"})
+	if err != nil {
+		t.Fatalf("Install returned error: %v", err)
+	}
+	if resp.SkillID != "market_skill" {
+		t.Fatalf("Install returned skill %q, want source skill", resp.SkillID)
+	}
+	if got := testutil.CountRows(t, db, "skill_market_installs", "market_item_id = ? AND user_id = ? AND skill_id = ?", "market_item1", "admin_001", "market_skill"); got != 1 {
+		t.Fatalf("publisher install row count = %d, want 1", got)
 	}
 }
