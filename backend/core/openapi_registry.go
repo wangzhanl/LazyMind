@@ -1016,16 +1016,16 @@ type personalResourceFileQueryParams struct {
 
 type personalResourceWriteDraftOpenAPIRequest struct {
 	Content              *string `json:"content,omitempty"`
-	AgentPersona         *string `json:"agent_persona,omitempty"`
-	PreferredName        *string `json:"preferred_name,omitempty"`
-	ResponseStyle        *string `json:"response_style,omitempty"`
 	ExpectedDraftVersion int64   `json:"expected_draft_version,omitempty"`
 	ConversationID       string  `json:"conversation_id,omitempty"`
 	TaskID               string  `json:"task_id,omitempty"`
 }
 
 type personalResourcePatchOpenAPIRequest struct {
-	AutoEvo *bool `json:"auto_evo,omitempty"`
+	AutoEvo       *bool   `json:"auto_evo,omitempty"`
+	AgentPersona  *string `json:"agent_persona,omitempty"`
+	PreferredName *string `json:"preferred_name,omitempty"`
+	ResponseStyle *string `json:"response_style,omitempty"`
 }
 
 type personalResourceGenerateOpenAPIRequest struct {

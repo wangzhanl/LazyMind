@@ -64,9 +64,6 @@ func WriteDraft(w http.ResponseWriter, r *http.Request) {
 	}
 	var req struct {
 		Content              *string `json:"content"`
-		AgentPersona         *string `json:"agent_persona"`
-		PreferredName        *string `json:"preferred_name"`
-		ResponseStyle        *string `json:"response_style"`
 		ExpectedDraftVersion int64   `json:"expected_draft_version"`
 		ConversationID       string  `json:"conversation_id"`
 		TaskID               string  `json:"task_id"`
@@ -75,13 +72,8 @@ func WriteDraft(w http.ResponseWriter, r *http.Request) {
 		common.ReplyErr(w, "invalid body", http.StatusBadRequest)
 		return
 	}
-	if ref.ResourceType == ResourceTypeMemory && req.Content == nil {
+	if req.Content == nil {
 		common.ReplyErr(w, "content required", http.StatusBadRequest)
-		return
-	}
-	if ref.ResourceType == ResourceTypeUserPreference &&
-		req.Content == nil && req.AgentPersona == nil && req.PreferredName == nil && req.ResponseStyle == nil {
-		common.ReplyErr(w, "content or user_preference metadata required", http.StatusBadRequest)
 		return
 	}
 	content := stringFromPtr(req.Content)
@@ -92,29 +84,8 @@ func WriteDraft(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if ref.ResourceType == ResourceTypeUserPreference {
-		if req.AgentPersona != nil {
-			if err := validateManagedContentLength(*req.AgentPersona); err != nil {
-				common.ReplyErr(w, err.Error(), http.StatusBadRequest)
-				return
-			}
-		}
-		if req.PreferredName != nil {
-			if err := validateManagedContentLength(*req.PreferredName); err != nil {
-				common.ReplyErr(w, err.Error(), http.StatusBadRequest)
-				return
-			}
-		}
-		if req.ResponseStyle != nil {
-			if err := validateManagedContentLength(*req.ResponseStyle); err != nil {
-				common.ReplyErr(w, err.Error(), http.StatusBadRequest)
-				return
-			}
-		}
 		patched, err := patchUserPreferenceDraftContent(r.Context(), service, ref, preferencefile.PreferencePatch{
-			Content:       req.Content,
-			AgentPersona:  req.AgentPersona,
-			PreferredName: req.PreferredName,
-			ResponseStyle: req.ResponseStyle,
+			Content: req.Content,
 		})
 		if err != nil {
 			replyError(w, err)
@@ -143,15 +114,31 @@ func PatchMetadata(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req struct {
-		AutoEvo *bool `json:"auto_evo"`
+		AutoEvo       *bool   `json:"auto_evo"`
+		AgentPersona  *string `json:"agent_persona"`
+		PreferredName *string `json:"preferred_name"`
+		ResponseStyle *string `json:"response_style"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		common.ReplyErr(w, "invalid body", http.StatusBadRequest)
 		return
 	}
-	if req.AutoEvo == nil {
-		common.ReplyErr(w, "auto_evo required", http.StatusBadRequest)
+	if req.AutoEvo == nil && req.AgentPersona == nil && req.PreferredName == nil && req.ResponseStyle == nil {
+		common.ReplyErr(w, "metadata field required", http.StatusBadRequest)
 		return
+	}
+	if ref.ResourceType != ResourceTypeUserPreference &&
+		(req.AgentPersona != nil || req.PreferredName != nil || req.ResponseStyle != nil) {
+		common.ReplyErr(w, "user_preference metadata is only supported for user_preference", http.StatusBadRequest)
+		return
+	}
+	for _, value := range []*string{req.AgentPersona, req.PreferredName, req.ResponseStyle} {
+		if value != nil {
+			if err := validateManagedContentLength(*value); err != nil {
+				common.ReplyErr(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+		}
 	}
 	if _, err := service.EnsureResource(r.Context(), ref, initialContent(ref.ResourceType)); err != nil {
 		replyError(w, err)
@@ -160,6 +147,9 @@ func PatchMetadata(w http.ResponseWriter, r *http.Request) {
 	resp, err := service.UpdateMetadata(r.Context(), UpdateMetadataRequest{
 		Ref:           ref,
 		AutoEvo:       req.AutoEvo,
+		AgentPersona:  req.AgentPersona,
+		PreferredName: req.PreferredName,
+		ResponseStyle: req.ResponseStyle,
 		UpdatedBy:     ref.UserID,
 		UpdatedByName: strings.TrimSpace(store.UserName(r)),
 	})

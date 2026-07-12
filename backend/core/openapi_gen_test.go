@@ -553,7 +553,7 @@ func TestOpenAPISpecCoversEvolutionSkillMemoryPreferenceOperations(t *testing.T)
 	}
 }
 
-func TestOpenAPISpecAssignsMetadataFieldsToPersonalResourceDraft(t *testing.T) {
+func TestOpenAPISpecAssignsMetadataFieldsToPersonalResourcePatch(t *testing.T) {
 	r := mux.NewRouter()
 	registerAllRoutes(r)
 
@@ -590,9 +590,20 @@ func TestOpenAPISpecAssignsMetadataFieldsToPersonalResourceDraft(t *testing.T) {
 	}
 
 	draftRequestProps := schemaProperties("personalResourceWriteDraftOpenAPIRequest")
-	for _, name := range []string{"content", "agent_persona", "preferred_name", "response_style", "expected_draft_version"} {
+	for _, name := range []string{"content", "expected_draft_version"} {
 		if _, ok := draftRequestProps[name]; !ok {
 			t.Fatalf("personalResourceWriteDraftOpenAPIRequest expected property %q", name)
+		}
+	}
+	for _, name := range []string{"agent_persona", "preferred_name", "response_style"} {
+		if _, ok := draftRequestProps[name]; ok {
+			t.Fatalf("personalResourceWriteDraftOpenAPIRequest must not include property %q", name)
+		}
+	}
+	patchRequestProps := schemaProperties("personalResourcePatchOpenAPIRequest")
+	for _, name := range []string{"auto_evo", "agent_persona", "preferred_name", "response_style"} {
+		if _, ok := patchRequestProps[name]; !ok {
+			t.Fatalf("personalResourcePatchOpenAPIRequest expected property %q", name)
 		}
 	}
 

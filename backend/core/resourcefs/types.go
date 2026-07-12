@@ -108,6 +108,9 @@ type DraftResponse struct {
 type UpdateMetadataRequest struct {
 	Ref           ResourceRef
 	AutoEvo       *bool
+	AgentPersona  *string
+	PreferredName *string
+	ResponseStyle *string
 	UpdatedBy     string
 	UpdatedByName string
 }
@@ -123,6 +126,9 @@ type MetadataResponse struct {
 	UpdatedByName      string      `json:"updated_by_name,omitempty"`
 	UpdatedAt          time.Time   `json:"updated_at"`
 	EnabledFromOff     bool        `json:"enabled_from_off"`
+	AgentPersona       *string     `json:"agent_persona,omitempty"`
+	PreferredName      *string     `json:"preferred_name,omitempty"`
+	ResponseStyle      *string     `json:"response_style,omitempty"`
 }
 
 type DraftPreviewRequest struct {

@@ -16,6 +16,7 @@ import (
 
 	"lazymind/core/common/orm"
 	"lazymind/core/filediff"
+	"lazymind/core/preferencefile"
 	"lazymind/core/versionfs"
 )
 
@@ -280,7 +281,11 @@ func (s *Service) UpdateMetadata(ctx context.Context, req UpdateMetadataRequest)
 	if err := validateRef(req.Ref); err != nil {
 		return MetadataResponse{}, err
 	}
-	if req.AutoEvo == nil {
+	hasPreferencePatch := req.AgentPersona != nil || req.PreferredName != nil || req.ResponseStyle != nil
+	if req.AutoEvo == nil && !hasPreferencePatch {
+		return MetadataResponse{}, ErrInvalidResourceType
+	}
+	if hasPreferencePatch && req.Ref.ResourceType != ResourceTypeUserPreference {
 		return MetadataResponse{}, ErrInvalidResourceType
 	}
 	var out MetadataResponse
@@ -290,21 +295,147 @@ func (s *Service) UpdateMetadata(ctx context.Context, req UpdateMetadataRequest)
 			return err
 		}
 		now := s.clock.Now()
-		enabledFromOff := !resource.AutoEvo && *req.AutoEvo
-		updates := map[string]any{
-			"auto_evo":              *req.AutoEvo,
-			"auto_evo_generation":   gorm.Expr("auto_evo_generation + 1"),
-			"auto_evo_apply_status": "idle",
-			"auto_evo_error":        "",
-			"updated_by":            strings.TrimSpace(req.UpdatedBy),
-			"updated_by_name":       strings.TrimSpace(req.UpdatedByName),
-			"updated_at":            now,
+		enabledFromOff := false
+		var patchedPreference *preferencefile.PreferenceFile
+		if hasPreferencePatch {
+			if resource.HeadRevisionID == nil {
+				return ErrRevisionNotFound
+			}
+			preferencePatch := preferencefile.PreferencePatch{
+				AgentPersona:  req.AgentPersona,
+				PreferredName: req.PreferredName,
+				ResponseStyle: req.ResponseStyle,
+			}
+			patchedBlobs := map[string]orm.PersonalResourceBlob{}
+			patchBlob := func(hash string) (orm.PersonalResourceBlob, preferencefile.PreferenceFile, error) {
+				if blob, ok := patchedBlobs[hash]; ok {
+					parsed, err := preferencefile.ParseFileContent(string(blob.Content))
+					return blob, parsed, err
+				}
+				content, err := readBlobContent(ctx, tx, hash)
+				if err != nil {
+					return orm.PersonalResourceBlob{}, preferencefile.PreferenceFile{}, err
+				}
+				nextContent, parsed, err := preferencefile.PatchFileContent(string(content), preferencePatch)
+				if err != nil {
+					return orm.PersonalResourceBlob{}, preferencefile.PreferenceFile{}, err
+				}
+				blob, err := putBlob(ctx, tx, []byte(nextContent), now)
+				if err != nil {
+					return orm.PersonalResourceBlob{}, preferencefile.PreferenceFile{}, err
+				}
+				patchedBlobs[hash] = blob
+				return blob, parsed, nil
+			}
+			head, err := findRevisionByID(ctx, tx, resource.ID, *resource.HeadRevisionID)
+			if err != nil {
+				return err
+			}
+			headBlob, parsed, err := patchBlob(head.BlobHash)
+			if err != nil {
+				return err
+			}
+			if err := tx.WithContext(ctx).Model(&orm.PersonalResourceRevision{}).
+				Where("id = ? AND resource_id = ?", head.ID, resource.ID).
+				Updates(map[string]any{
+					"blob_hash":    headBlob.Hash,
+					"content_hash": headBlob.Hash,
+					"size":         headBlob.Size,
+					"mime":         headBlob.Mime,
+					"file_type":    headBlob.FileType,
+					"binary":       headBlob.Binary,
+				}).Error; err != nil {
+				return err
+			}
+
+			var draft orm.PersonalResourceDraft
+			if err := tx.WithContext(ctx).Where("resource_id = ?", resource.ID).Take(&draft).Error; err != nil {
+				return err
+			}
+			draftBlob, _, err := patchBlob(draft.BlobHash)
+			if err != nil {
+				return err
+			}
+			result := tx.WithContext(ctx).Model(&orm.PersonalResourceDraft{}).
+				Where("resource_id = ? AND version = ?", resource.ID, draft.Version).
+				Updates(map[string]any{
+					"blob_hash":        draftBlob.Hash,
+					"content_hash":     draftBlob.Hash,
+					"size":             draftBlob.Size,
+					"mime":             draftBlob.Mime,
+					"file_type":        draftBlob.FileType,
+					"binary":           draftBlob.Binary,
+					"draft_updated_at": now,
+					"updated_by":       nullableString(req.UpdatedBy),
+					"version":          draft.Version + 1,
+					"updated_at":       now,
+				})
+			if result.Error != nil {
+				return result.Error
+			}
+			if result.RowsAffected == 0 {
+				return ErrConflict
+			}
+
+			var sessions []orm.PersonalResourceReviewSession
+			if err := tx.WithContext(ctx).
+				Where("resource_id = ? AND status = ?", resource.ID, reviewStatusActive).
+				Find(&sessions).Error; err != nil {
+				return err
+			}
+			for _, session := range sessions {
+				var batches []orm.PersonalResourceReviewActionBatch
+				if err := tx.WithContext(ctx).Where("session_id = ?", session.ID).Find(&batches).Error; err != nil {
+					return err
+				}
+				for _, batch := range batches {
+					beforeBlob, _, err := patchBlob(batch.BeforeDraftBlobHash)
+					if err != nil {
+						return err
+					}
+					afterBlob, _, err := patchBlob(batch.AfterDraftBlobHash)
+					if err != nil {
+						return err
+					}
+					if err := tx.WithContext(ctx).Model(&orm.PersonalResourceReviewActionBatch{}).
+						Where("id = ? AND session_id = ?", batch.ID, session.ID).
+						Updates(map[string]any{
+							"before_draft_blob_hash": beforeBlob.Hash,
+							"after_draft_blob_hash":  afterBlob.Hash,
+						}).Error; err != nil {
+						return err
+					}
+				}
+				if err := tx.WithContext(ctx).Model(&orm.PersonalResourceReviewSession{}).
+					Where("id = ? AND status = ?", session.ID, reviewStatusActive).
+					Updates(map[string]any{
+						"draft_version":   draft.Version + 1,
+						"draft_blob_hash": draftBlob.Hash,
+						"updated_at":      now,
+					}).Error; err != nil {
+					return err
+				}
+			}
+			patchedPreference = &parsed
 		}
-		if *req.AutoEvo {
-			updates["auto_evo_finished_at"] = nil
-		} else {
-			updates["auto_evo_started_at"] = nil
-			updates["auto_evo_finished_at"] = now
+
+		updates := map[string]any{
+			"updated_by":      strings.TrimSpace(req.UpdatedBy),
+			"updated_by_name": strings.TrimSpace(req.UpdatedByName),
+			"updated_at":      now,
+		}
+		if req.AutoEvo != nil {
+			enabledFromOff = !resource.AutoEvo && *req.AutoEvo
+			updates["auto_evo"] = *req.AutoEvo
+			updates["auto_evo_generation"] = gorm.Expr("auto_evo_generation + 1")
+			updates["auto_evo_apply_status"] = "idle"
+			updates["auto_evo_error"] = ""
+			if *req.AutoEvo {
+				updates["auto_evo_finished_at"] = nil
+			} else {
+				updates["auto_evo_started_at"] = nil
+				updates["auto_evo_finished_at"] = now
+			}
 		}
 		if err := tx.Model(&orm.PersonalResource{}).Where("id = ?", resource.ID).Updates(updates).Error; err != nil {
 			return err
@@ -324,6 +455,11 @@ func (s *Service) UpdateMetadata(ctx context.Context, req UpdateMetadataRequest)
 			UpdatedByName:      updated.UpdatedByName,
 			UpdatedAt:          updated.UpdatedAt,
 			EnabledFromOff:     enabledFromOff,
+		}
+		if patchedPreference != nil {
+			out.AgentPersona = &patchedPreference.AgentPersona
+			out.PreferredName = &patchedPreference.PreferredName
+			out.ResponseStyle = &patchedPreference.ResponseStyle
 		}
 		return nil
 	})
