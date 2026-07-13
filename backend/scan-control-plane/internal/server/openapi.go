@@ -99,9 +99,6 @@ func openAPIPaths() map[string]any {
 			"put":    pathOperation("updateSourceBinding", "SourceBindingRequest", "BindingMutationResponse", "source_id", "binding_id"),
 			"delete": pathOperation("deleteSourceBinding", "", "DeleteBindingResponse", "source_id", "binding_id"),
 		},
-		"/api/scan/sources/{source_id}/append": map[string]any{
-			"post": createdPathOperation("appendSource", "AppendSourceRequest", "AppendSourceResponse", "source_id"),
-		},
 		"/api/scan/sources/{source_id}/sync": map[string]any{
 			"post": pathOperation("triggerSourceSync", "TriggerSourceSyncRequest", "TriggerSourceSyncResponse", "source_id"),
 		},
@@ -262,7 +259,7 @@ func openAPISchemas() map[string]any {
 		"AuthConnectionStatus":          authConnectionStatusSchema(),
 		"GetSourceResponse":             object([]string{"source"}, props("source", schemaRef("SourceResponse"), "bindings", arrayOf("SourceBindingResponse"), "summary", objectSchema())),
 		"UpdateSourceRequest":           updateSourceRequestSchema(),
-		"UpdateSourceResponse":          object([]string{"source", "bindings"}, props("source", schemaRef("SourceResponse"), "bindings", arrayOf("SourceBindingResponse"), "created_binding_ids", stringArray(), "updated_binding_ids", stringArray(), "removed_binding_ids", stringArray(), "job_ids", stringArray())),
+		"UpdateSourceResponse":          object([]string{"source", "bindings"}, props("source", schemaRef("SourceResponse"), "bindings", arrayOf("SourceBindingResponse"), "created_binding_ids", stringArray(), "updated_binding_ids", stringArray(), "removed_binding_ids", stringArray(), "job_ids", stringArray(), "job_errors", arrayOf("JobError"))),
 		"DeleteSourceResponse":          object([]string{"deleted", "source_id"}, props("deleted", boolSchema(), "source_id", stringSchema(), "removed_binding_ids", stringArray(), "removed_dataset_id", stringSchema())),
 		"SourceBindingRequest":          sourceBindingRequestSchema(),
 		"AppendSourceRequest":           appendSourceRequestSchema(),
@@ -308,7 +305,7 @@ func openAPISchemas() map[string]any {
 		"BindingStatus":                 enumSchema("ACTIVE", "PAUSED", "DELETING", "ERROR"),
 		"CloudAuthConnectionStatus":     enumSchema("ACTIVE", "EXPIRED", "REVOKED", "ERROR", "PENDING"),
 		"SyncMode":                      enumSchema("manual", "scheduled", "watch"),
-		"SourceState":                   enumSchema("NEW", "MODIFIED", "DELETED", "UNCHANGED", "OUT_OF_SCOPE"),
+		"SourceState":                   enumSchema("NEW", "MODIFIED", "DELETED", "UNCHANGED", "OUT_OF_SCOPE", "PENDING_DELETION"),
 		"SyncState":                     enumSchema("IDLE", "SCHEDULED", "PENDING", "RUNNING", "FAILED"),
 		"TaskAction":                    enumSchema("CREATE", "REPARSE", "DELETE"),
 		"ParseTaskStatus":               enumSchema("PENDING", "RUNNING", "SUBMITTED", "SUCCEEDED", "FAILED", "SUPERSEDED"),
@@ -421,10 +418,18 @@ func updateSourceRequestSchema() map[string]any {
 func sourceResponseSchema() map[string]any {
 	return object([]string{"source_id", "name", "dataset_id", "status", "config_version"}, props(
 		"source_id", stringSchema(),
+		"tenant_id", stringSchema(),
+		"created_by", stringSchema(),
 		"name", stringSchema(),
 		"dataset_id", stringSchema(),
 		"status", schemaRef("SourceStatus"),
+		"source_options", objectSchema(),
+		"include_extensions", stringArray(),
+		"exclude_extensions", stringArray(),
 		"config_version", integerSchema(),
+		"deleted_at", stringSchema(),
+		"created_at", stringSchema(),
+		"updated_at", stringSchema(),
 	))
 }
 
