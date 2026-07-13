@@ -1982,6 +1982,20 @@ func (r *sourceEngineRepoStub) GetSourceByDatasetID(_ context.Context, datasetID
 	}
 	return store.Source{}, store.NewStoreError(store.ErrCodeSourceNotFound, "source not found")
 }
+func (r *sourceEngineRepoStub) ListSourcesByDatasetIDs(_ context.Context, datasetIDs []string) ([]store.Source, error) {
+	idSet := make(map[string]struct{}, len(datasetIDs))
+	for _, id := range datasetIDs {
+		idSet[id] = struct{}{}
+	}
+	var result []store.Source
+	for _, src := range r.sources {
+		if _, ok := idSet[src.DatasetID]; ok && src.DeletedAt == nil {
+			result = append(result, src)
+		}
+	}
+	return result, nil
+}
+
 
 func (r *sourceEngineRepoStub) UpdateSource(context.Context, store.Source) error {
 	panic("sourceEngineRepoStub.UpdateSource is not used by these tests")
