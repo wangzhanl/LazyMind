@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"os"
+	"regexp"
 	"strings"
 	"time"
 
@@ -16,9 +17,9 @@ import (
 )
 
 type catalogModel struct {
-	Name           string `yaml:"name"`
-	Type           string `yaml:"type"`
-	MaxInputTokens *int64 `yaml:"max_input_tokens"`
+	Name           string  `yaml:"name"`
+	Type           string  `yaml:"type"`
+	MaxInputTokens *string `yaml:"max_input_tokens"`
 }
 
 type catalogSupplier struct {
@@ -38,6 +39,8 @@ type catalogSection struct {
 type modelCatalog map[string]catalogSection
 
 var endpointPathMarkers = []string{"/embeddings", "/rerank", "/embed"}
+
+var maxInputTokensPattern = regexp.MustCompile(`^[1-9][0-9]*(K|M)$`)
 
 // normalizeBaseURL appends a trailing slash to generic API roots; endpoint-specific URLs are kept as-is.
 func normalizeBaseURL(raw string) string {
@@ -116,12 +119,14 @@ func upsertDefaultModel(tx *gorm.DB, now time.Time, providerID, providerName str
 		return errors.New("model name and type are required")
 	}
 	if item.MaxInputTokens != nil {
-		if *item.MaxInputTokens <= 0 {
-			return errors.New("model max_input_tokens must be greater than zero")
-		}
 		if modelType != "llm" {
 			return errors.New("model max_input_tokens is only supported for llm models")
 		}
+		maxInputTokens := strings.ToUpper(strings.TrimSpace(*item.MaxInputTokens))
+		if !maxInputTokensPattern.MatchString(maxInputTokens) {
+			return errors.New("model max_input_tokens must use a positive K or M value, for example 128K or 1M")
+		}
+		item.MaxInputTokens = &maxInputTokens
 	}
 
 	var row orm.DefaultModel
@@ -162,7 +167,7 @@ func upsertDefaultModel(tx *gorm.DB, now time.Time, providerID, providerName str
 
 // syncDefaultModelMaxInputTokens mirrors catalog metadata into default models already
 // copied to user groups. Custom user-added models are intentionally left untouched.
-func syncDefaultModelMaxInputTokens(tx *gorm.DB, now time.Time, providerID, modelName string, maxInputTokens *int64) error {
+func syncDefaultModelMaxInputTokens(tx *gorm.DB, now time.Time, providerID, modelName string, maxInputTokens *string) error {
 	providerIDs := tx.Model(&orm.UserModelProvider{}).
 		Select("id").
 		Where("default_model_provider_id = ? AND deleted_at IS NULL", providerID)

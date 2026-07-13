@@ -725,8 +725,8 @@ func TestOpenAPISpecIncludesLLMMaxInputTokens(t *testing.T) {
 	if !ok {
 		t.Fatalf("max_input_tokens property missing")
 	}
-	if got := maxInputTokens["type"]; got != "integer" {
-		t.Fatalf("max_input_tokens type = %v, want integer", got)
+	if got := maxInputTokens["type"]; got != "string" {
+		t.Fatalf("max_input_tokens type = %v, want string", got)
 	}
 	if got := maxInputTokens["nullable"]; got != true {
 		t.Fatalf("max_input_tokens nullable = %v, want true", got)
