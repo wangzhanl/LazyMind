@@ -49,13 +49,13 @@ func TestListGroupModelsIncludesMaxInputTokens(t *testing.T) {
 	models := []orm.UserModelProviderGroupModel{
 		{
 			ID: "model-default", UserModelProviderID: "provider-1", UserModelProviderGroupID: "group-1",
-			ProviderName: "OpenAI", Name: "text-embedding-3-small", ModelType: "embed",
+			ProviderName: "OpenAI", Name: "gpt-4o", ModelType: "llm",
 			MaxInputTokens: &limit, IsDefault: true,
 			BaseModel: orm.BaseModel{CreateUserID: "user-1", CreatedAt: now, UpdatedAt: now},
 		},
 		{
 			ID: "model-custom", UserModelProviderID: "provider-1", UserModelProviderGroupID: "group-1",
-			ProviderName: "OpenAI", Name: "custom-embedding", ModelType: "embed",
+			ProviderName: "OpenAI", Name: "custom-llm", ModelType: "llm",
 			BaseModel: orm.BaseModel{CreateUserID: "user-1", CreatedAt: now, UpdatedAt: now},
 		},
 	}
@@ -90,20 +90,20 @@ func TestListGroupModelsIncludesMaxInputTokens(t *testing.T) {
 	for _, model := range response.Data.Models {
 		byName[model.Name] = model.MaxInputTokens
 	}
-	if got := byName["text-embedding-3-small"]; got == nil || *got != limit {
+	if got := byName["gpt-4o"]; got == nil || *got != limit {
 		t.Fatalf("default max_input_tokens = %v, want %d", got, limit)
 	}
-	if got := byName["custom-embedding"]; got != nil {
+	if got := byName["custom-llm"]; got != nil {
 		t.Fatalf("custom max_input_tokens = %d, want null", *got)
 	}
 
-	const role = "test_embed_limit_role"
+	const role = "test_llm_limit_role"
 	roleTypeCache.Delete(role)
 	algo := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/api/model/role_type" || r.URL.Query().Get("role") != role {
 			t.Errorf("unexpected role type request: %s", r.URL.String())
 		}
-		_ = json.NewEncoder(w).Encode(algoRoleTypeResponse{Role: role, Type: "embed"})
+		_ = json.NewEncoder(w).Encode(algoRoleTypeResponse{Role: role, Type: "llm"})
 	}))
 	defer algo.Close()
 	t.Setenv("LAZYMIND_CHAT_SERVICE_URL", algo.URL)
@@ -130,7 +130,7 @@ func TestListGroupModelsIncludesMaxInputTokens(t *testing.T) {
 	for _, model := range response.Data.Models {
 		byName[model.Name] = model.MaxInputTokens
 	}
-	if got := byName["text-embedding-3-small"]; got == nil || *got != limit {
+	if got := byName["gpt-4o"]; got == nil || *got != limit {
 		t.Fatalf("global default max_input_tokens = %v, want %d", got, limit)
 	}
 }
