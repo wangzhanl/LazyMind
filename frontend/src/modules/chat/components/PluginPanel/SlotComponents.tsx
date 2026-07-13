@@ -2,11 +2,17 @@ import { useState, useCallback, useRef, useEffect, useMemo, createContext, useCo
 import ReactDOM from "react-dom";
 import type { SlotRevision, SlotVersionEntry } from "@/modules/chat/store/pluginPanel";
 import { usePluginStore, draftStore } from "@/modules/chat/store/pluginPanel";
-import { resolveCoreAssetUrl, resolveMarkdownImageUrlAsync } from "@/modules/knowledge/utils/imageUrl";
+import { resolveCoreAssetUrl, resolveMarkdownImageUrlAsync, isExpiredSignedUrl } from "@/modules/knowledge/utils/imageUrl";
 import { buildDiffLinesWithInline } from "@/modules/memory/shared";
 import { DiffLineContent } from "@/modules/memory/components/DiffLineContent";
 import { uploadFileInChunks } from "@/modules/chat/utils/chunkUpload";
 import { FilePreviewDrawer } from "./FilePreviewDrawer";
+import {
+  WriterArtifactContent,
+  WRITER_ARTIFACT_SLOT_IDS,
+  unwrapArtifactPayload,
+} from './writerArtifactViews';
+import MarkdownViewer from '@/modules/chat/components/MarkdownViewer';
 
 /**
  * Context for notifying the parent PluginPanel when any text slot enters/exits editing mode.
@@ -27,6 +33,145 @@ function normalizeContentType(ct: string): 'image' | 'file' | 'text' {
   if (ct === 'image' || ct.startsWith('image/')) return 'image';
   if (ct === 'file' || ct === 'file_list' || ct.startsWith('application/')) return 'file';
   return 'text';
+}
+
+/** True when the URL can be used directly as an <img src> in the browser. */
+function isBrowserReadyImageUrl(url: string): boolean {
+  const trimmed = (url || '').trim();
+  if (!trimmed) return false;
+  if (trimmed.startsWith('data:image/')) return true;
+  if (/^https?:\/\//i.test(trimmed)) return true;
+  return trimmed.includes('/api/core/static-files/') || trimmed.includes('/static-files/');
+}
+
+function preloadImageUrl(src: string): Promise<boolean> {
+  return new Promise((resolve) => {
+    const img = new Image();
+    img.onload = () => resolve(true);
+    img.onerror = () => resolve(false);
+    img.src = src;
+  });
+}
+
+const SLOT_IMAGE_PRELOAD_RETRIES = 4;
+const SLOT_IMAGE_PRELOAD_RETRY_MS = 800;
+
+/**
+ * Resolve a slot image URL and preload it before display.
+ * Avoids flashing a broken <img> when the API returns a signed URL before the file exists.
+ */
+function useSlotImageUrl(raw: Record<string, unknown> | undefined) {
+  const pathForSign = String(raw?.path ?? raw?.url ?? '').trim();
+  const apiUrlRaw = raw?.url ? String(raw.url).trim() : '';
+  const [displayUrl, setDisplayUrl] = useState('');
+  const [pending, setPending] = useState(Boolean(pathForSign));
+
+  useEffect(() => {
+    if (!pathForSign) {
+      setDisplayUrl('');
+      setPending(false);
+      return;
+    }
+
+    let cancelled = false;
+
+    async function resolveCandidate(): Promise<string> {
+      const apiUrl = apiUrlRaw ? resolveCoreAssetUrl(apiUrlRaw) : '';
+      if (apiUrl && isBrowserReadyImageUrl(apiUrl) && !isExpiredSignedUrl(apiUrl)) {
+        return apiUrl;
+      }
+      const signed = await resolveMarkdownImageUrlAsync(pathForSign);
+      return isBrowserReadyImageUrl(signed) ? signed : '';
+    }
+
+    async function load() {
+      setPending(true);
+      setDisplayUrl('');
+      let candidate = await resolveCandidate();
+      if (!candidate || cancelled) {
+        if (!cancelled) setPending(false);
+        return;
+      }
+
+      for (let attempt = 0; attempt < SLOT_IMAGE_PRELOAD_RETRIES && !cancelled; attempt++) {
+        if (await preloadImageUrl(candidate)) {
+          if (!cancelled) {
+            setDisplayUrl(candidate);
+            setPending(false);
+          }
+          return;
+        }
+        if (attempt + 1 >= SLOT_IMAGE_PRELOAD_RETRIES) break;
+        await new Promise((r) => setTimeout(r, SLOT_IMAGE_PRELOAD_RETRY_MS));
+        candidate = await resolveMarkdownImageUrlAsync(pathForSign);
+        if (!isBrowserReadyImageUrl(candidate)) break;
+      }
+
+      if (!cancelled) {
+        setDisplayUrl('');
+        setPending(false);
+      }
+    }
+
+    load();
+    return () => {
+      cancelled = true;
+    };
+  }, [pathForSign, apiUrlRaw]);
+
+  return { displayUrl, pending, hasSource: Boolean(pathForSign) };
+}
+
+function useArtifactFileUrl(raw: Record<string, unknown> | undefined) {
+  const pathForSign = String(raw?.path ?? raw?.url ?? '').trim();
+  const apiUrlRaw = raw?.url ? String(raw.url).trim() : '';
+  const [url, setUrl] = useState('');
+  const [resolving, setResolving] = useState(Boolean(pathForSign));
+
+  useEffect(() => {
+    if (!pathForSign) {
+      setUrl('');
+      setResolving(false);
+      return;
+    }
+
+    let cancelled = false;
+    setResolving(true);
+
+    async function resolveCandidate(): Promise<string> {
+      const apiUrl = apiUrlRaw ? resolveCoreAssetUrl(apiUrlRaw) : '';
+      if (apiUrl && !isExpiredSignedUrl(apiUrl)) {
+        return apiUrl;
+      }
+      return resolveMarkdownImageUrlAsync(pathForSign);
+    }
+
+    resolveCandidate()
+      .then((resolved) => {
+        if (!cancelled) {
+          setUrl(resolved);
+          setResolving(false);
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setUrl('');
+          setResolving(false);
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [pathForSign, apiUrlRaw]);
+
+  return { url, resolving, hasSource: Boolean(pathForSign) };
+}
+
+function isSpaFallbackHtml(content: string): boolean {
+  const normalized = content.trim().toLowerCase();
+  return normalized.startsWith('<!doctype html')
+    && (normalized.includes('/@vite/client') || normalized.includes('id="root"'));
 }
 
 /** Shown when the slot has no artifact yet (backend returned no artifact_value). */
@@ -154,6 +299,62 @@ function useGlobalPopoverOpen(key: PopoverKey): [boolean, (open: boolean) => voi
 // ---------------------------------------------------------------------------
 // SlotVersionPopover — 版本历史浮层 (Portal, 居中全屏遮罩)
 // ---------------------------------------------------------------------------
+
+/** Renders a single file revision (icon + name + preview/download) inside the version popover. */
+function FileRevisionPreview({
+  info,
+  label,
+}: {
+  info: { url: string; name: string; size?: number };
+  label: string;
+}) {
+  const [previewOpen, setPreviewOpen] = useState(false);
+  return (
+    <>
+      <div className='plugin-slot__version-file-card'>
+        <div className='plugin-slot__version-file-card-header'>
+          <span className='plugin-slot__file-icon' aria-hidden='true'>
+            {getFileIcon(info.name || '')}
+          </span>
+          <div className='plugin-slot__version-file-card-info'>
+            <span className='plugin-slot__version-file-card-name' title={info.name}>
+              {info.name || '—'}
+            </span>
+            <span className='plugin-slot__version-file-card-meta'>
+              {label}
+              {typeof info.size === 'number' && info.size > 0 ? ` · ${formatFileSize(info.size)}` : ''}
+            </span>
+          </div>
+        </div>
+        {info.url && (
+          <div className='plugin-slot__version-file-card-actions'>
+            <button
+              className='plugin-slot__file-action-btn'
+              onClick={() => setPreviewOpen(true)}
+              type='button'
+            >
+              预览
+            </button>
+            <a
+              className='plugin-slot__file-action-btn'
+              href={info.url}
+              download={info.name || undefined}
+              onClick={(e) => e.stopPropagation()}
+            >
+              下载
+            </a>
+          </div>
+        )}
+      </div>
+      <FilePreviewDrawer
+        open={previewOpen}
+        filename={info.name || ''}
+        url={info.url}
+        onClose={() => setPreviewOpen(false)}
+      />
+    </>
+  );
+}
 
 interface SlotVersionPopoverProps {
   sessionId: string;
@@ -286,6 +487,7 @@ export function SlotVersionPopover({
   }, [sessionId, slotId, listIndex, patchSlotItemValue, setOpen, onRollbackDone]);
 
   const isImage = contentType === 'image';
+  const isFile = contentType === 'file';
 
   // Extract plain text/URL from a content_snapshot or artifact_value.
   // For image slots, url/path values are passed through resolveCoreAssetUrl so that
@@ -302,9 +504,23 @@ export function SlotVersionPopover({
     return JSON.stringify(snapshot, null, 2);
   };
 
+  // Extract displayable file info {url, name, size} from a content_snapshot.
+  const extractFileInfo = (snapshot: any): { url: string; name: string; size?: number } => {
+    const empty = { url: '', name: '' };
+    if (!snapshot) return empty;
+    if (typeof snapshot === 'string') return { url: resolveCoreAssetUrl(snapshot), name: snapshot.split('/').pop() ?? snapshot };
+    const rawPath: string = snapshot.url ?? snapshot.path ?? '';
+    return {
+      url: rawPath ? resolveCoreAssetUrl(rawPath) : '',
+      name: snapshot.filename ?? snapshot.name ?? (rawPath ? rawPath.split('/').pop() : ''),
+      size: typeof snapshot.size === 'number' ? snapshot.size : undefined,
+    };
+  };
+
   const previewedVersion = versions[previewIndex] ?? null;
   // The currently-selected (active) version
   const currentVersion = versions.find((v) => v.selected) ?? versions[0] ?? null;
+  const activeCurrentValue = currentVersion?.content_snapshot ?? currentValue;
   // Whether the previewed version is already the current one
   const isPreviewingCurrent = previewedVersion?.selected ?? false;
 
@@ -334,7 +550,7 @@ export function SlotVersionPopover({
       role='presentation'
     >
       <div
-        className={`plugin-slot__version-popover${isImage ? ' plugin-slot__version-popover--image' : ''}`}
+        className={`plugin-slot__version-popover${isImage ? ' plugin-slot__version-popover--image' : ''}${isFile ? ' plugin-slot__version-popover--file' : ''}`}
         role='dialog'
         aria-label='版本历史'
         aria-modal='true'
@@ -466,6 +682,70 @@ export function SlotVersionPopover({
               )}
             </div>
           </>
+        ) : isFile ? (
+          /* ── File mode: left version list + right file preview ── */
+          <div className='plugin-slot__version-popover-body'>
+            <ul className='plugin-slot__version-list' role='listbox' aria-label='版本列表'>
+              {versions.map((v) => {
+                const info = extractFileInfo(v.content_snapshot);
+                return (
+                  <li
+                    key={v.revision}
+                    role='option'
+                    aria-selected={!isDraftSelected && effectiveSelectedVersion?.revision === v.revision}
+                    className={[
+                      'plugin-slot__version-item',
+                      v.selected ? 'plugin-slot__version-item--current' : '',
+                      !isDraftSelected && effectiveSelectedVersion?.revision === v.revision ? 'plugin-slot__version-item--focused' : '',
+                    ].join(' ')}
+                    onClick={() => setSelectedRevision(v.revision)}
+                  >
+                    <span className='plugin-slot__version-label'>
+                      <span className={`plugin-slot__version-source-badge plugin-slot__version-source-badge--${v.change_source}`}>
+                        {v.change_source === 'human' ? '手动' : 'AI'}
+                      </span>
+                      v{v.revision}
+                      {v.selected && <span className='plugin-slot__version-current-tag'>当前</span>}
+                    </span>
+                    <span className='plugin-slot__version-file-name' title={info.name}>
+                      {info.name || '—'}
+                    </span>
+                    <span className='plugin-slot__version-time'>
+                      {new Date(v.created_at).toLocaleString()}
+                    </span>
+                  </li>
+                );
+              })}
+            </ul>
+
+            {effectiveSelectedVersion && !effectiveSelectedVersion.selected ? (
+              <div className='plugin-slot__version-compare plugin-slot__version-compare--file'>
+                <FileRevisionPreview
+                  info={extractFileInfo(effectiveSelectedVersion.content_snapshot)}
+                  label={`v${effectiveSelectedVersion.revision} · ${effectiveSelectedVersion.change_source === 'human' ? '手动编辑' : 'AI 生成'}`}
+                />
+                <button
+                  className='plugin-slot__version-apply-btn'
+                  disabled={rolling}
+                  onClick={() => handleRollback(effectiveSelectedVersion.revision)}
+                  aria-label={`应用 v${effectiveSelectedVersion.revision}`}
+                >
+                  {rolling ? '回退中…' : `应用此版本 (v${effectiveSelectedVersion.revision})`}
+                </button>
+              </div>
+            ) : (
+              <div className='plugin-slot__version-compare plugin-slot__version-compare--file'>
+                {effectiveSelectedVersion ? (
+                  <FileRevisionPreview
+                    info={extractFileInfo(activeCurrentValue)}
+                    label='当前版本'
+                  />
+                ) : (
+                  <div className='plugin-slot__version-compare-hint'>选择版本查看预览</div>
+                )}
+              </div>
+            )}
+          </div>
         ) : (
           /* ── Text mode: left list + right diff (unified, with optional draft entry) ── */
           <div className='plugin-slot__version-popover-body'>
@@ -521,7 +801,7 @@ export function SlotVersionPopover({
               /* Draft selected: show draft vs current diff with discard + flush actions */
               <div className='plugin-slot__version-compare'>
                 <TextDiffView
-                  currentText={extractText(currentValue)}
+                  currentText={extractText(activeCurrentValue)}
                   otherText={draftText}
                   otherLabel='草稿'
                   reversed={true}
@@ -547,7 +827,7 @@ export function SlotVersionPopover({
             ) : effectiveSelectedVersion && !effectiveSelectedVersion.selected ? (
               <div className='plugin-slot__version-compare'>
                 <TextDiffView
-                  currentText={extractText(currentValue)}
+                  currentText={extractText(activeCurrentValue)}
                   otherText={extractText(effectiveSelectedVersion.content_snapshot)}
                   otherLabel={`v${effectiveSelectedVersion.revision} · ${effectiveSelectedVersion.change_source === 'human' ? '手动编辑' : 'AI 生成'}`}
                   reversed={currentVersion !== null && effectiveSelectedVersion.revision > currentVersion.revision}
@@ -565,7 +845,7 @@ export function SlotVersionPopover({
               <div className='plugin-slot__version-compare plugin-slot__version-compare--same'>
                 {effectiveSelectedVersion ? (
                   <pre className='plugin-slot__version-current-text'>
-                    {extractText(currentValue) || '（无内容）'}
+                    {extractText(activeCurrentValue) || '（无内容）'}
                   </pre>
                 ) : (
                   <div className='plugin-slot__version-compare-hint'>选择版本查看对比</div>
@@ -613,6 +893,7 @@ interface SlotImageProps {
   onRefresh?: () => void;
   /** Called when the user clicks the reference (cite) button. */
   onReference?: (slot: SlotRevision) => void;
+  readOnly?: boolean;
 }
 
 export function SlotImage({
@@ -624,22 +905,10 @@ export function SlotImage({
   isDraggable,
   onRefresh,
   onReference,
+  readOnly,
 }: SlotImageProps) {
   const raw = slot.artifact_value;
-  const rawPath: string = raw?.url ?? raw?.path ?? '';
-  const syncUrl: string = rawPath ? resolveCoreAssetUrl(rawPath) : '';
-  // For absolute upload paths that resolveCoreAssetUrl cannot serve directly,
-  // asynchronously sign the path and replace the URL.
-  const [resolvedUrl, setResolvedUrl] = useState<string>(syncUrl);
-  useEffect(() => {
-    setResolvedUrl(syncUrl);
-    // syncUrl === rawPath means resolveCoreAssetUrl returned it unchanged (not http/static-files),
-    // so it's an absolute filesystem path that needs signing via the core API.
-    if (rawPath && syncUrl === rawPath && !rawPath.startsWith('http')) {
-      resolveMarkdownImageUrlAsync(rawPath).then(setResolvedUrl).catch(() => {});
-    }
-  }, [rawPath, syncUrl]);
-  const url = resolvedUrl;
+  const { displayUrl: url, pending, hasSource } = useSlotImageUrl(raw);
   const alt: string = slot.caption ?? raw?.alt ?? '';
   const { deleteSlotItem, patchSlotCaption, patchSlotItemValue } = usePluginStore();
   const [confirmDelete, setConfirmDelete] = useState(false);
@@ -722,9 +991,11 @@ export function SlotImage({
     if (e.key === 'Escape') setCaptionEditing(false);
   }, [handleCaptionSave]);
 
-  if (!url) return <SlotPending type='image' cardMode={cardMode} />;
+  if (!hasSource || pending || !url) {
+    return <SlotPending type='image' cardMode={cardMode} />;
+  }
 
-  const hasActions = Boolean(sessionId && slotId && slot.list_index !== undefined);
+  const hasActions = Boolean(sessionId && slotId && slot.list_index !== undefined) && !readOnly;
 
   // Overlays rendered directly on top of the image (no separate action bar)
   const overlays = hasActions ? (
@@ -892,9 +1163,10 @@ interface SlotTextProps {
   slotId?: string;
   revisionCount?: number;
   onRefresh?: () => void;
+  readOnly?: boolean;
 }
 
-export function SlotText({ slot, sessionId, slotId, revisionCount, onRefresh }: SlotTextProps) {
+export function SlotText({ slot, sessionId, slotId, revisionCount, onRefresh, readOnly }: SlotTextProps) {
   const raw = slot.artifact_value;
   const { patchSlotCaption } = usePluginStore();
   const { setEditing: notifyEditing } = useContext(SlotEditingContext);
@@ -921,17 +1193,53 @@ export function SlotText({ slot, sessionId, slotId, revisionCount, onRefresh }: 
   // Fetch offloaded file content on mount (or when path changes).
   useEffect(() => {
     if (!isOffloaded) return;
+    let cancelled = false;
     setOffloadLoading(true);
-    fetch(resolveCoreAssetUrl(raw.path))
-      .then((r) => r.text())
-      .then((t) => setOffloadedText(t))
-      .catch(() => setOffloadedText('[无法加载文件内容]'))
-      .finally(() => setOffloadLoading(false));
-  }, [isOffloaded, raw?.path]);
 
-  let text: string;
+    const pathForSign = String(raw?.path ?? raw?.url ?? '').trim();
+    const apiUrlRaw = raw?.url ? String(raw.url).trim() : '';
+
+    async function loadOffloadedText(): Promise<string> {
+      const apiUrl = apiUrlRaw ? resolveCoreAssetUrl(apiUrlRaw) : '';
+      const fetchUrl = apiUrl && !isExpiredSignedUrl(apiUrl)
+        ? apiUrl
+        : await resolveMarkdownImageUrlAsync(pathForSign);
+      const response = await fetch(fetchUrl);
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}`);
+      }
+      const text = await response.text();
+      if (isSpaFallbackHtml(text)) {
+        throw new Error('invalid artifact content');
+      }
+      return text;
+    }
+
+    loadOffloadedText()
+      .then((t) => {
+        if (!cancelled) setOffloadedText(t);
+      })
+      .catch(() => {
+        if (!cancelled) setOffloadedText('[无法加载文件内容]');
+      })
+      .finally(() => {
+        if (!cancelled) setOffloadLoading(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [isOffloaded, raw?.path, raw?.url]);
+
+  const canEdit = Boolean(sessionId && slotId) && !readOnly;
+  // For single slots, list_index is undefined from the backend; use 0 as the canonical index
+  // for localStorage keys (front-end only convention).
+  const effectiveListIndex = slot.list_index ?? 0;
+  // For API calls, single slots must use -1 so the backend queries list_index IS NULL.
+  const apiListIndex = slot.list_index ?? -1;
+
+  let text = '';
   if (isOffloaded) {
-    if (offloadLoading) return <SlotPending type='text' />;
     text = offloadedText ?? '';
   } else if (raw?.text !== undefined) {
     text = String(raw.text);
@@ -939,21 +1247,16 @@ export function SlotText({ slot, sessionId, slotId, revisionCount, onRefresh }: 
     text = typeof raw.data === 'string' ? raw.data : JSON.stringify(raw.data, null, 2);
   } else if (raw !== undefined && raw !== null) {
     text = JSON.stringify(raw);
-  } else {
-    return <SlotPending type='text' />;
   }
 
-  const canEdit = Boolean(sessionId && slotId);
-  // For single slots, list_index is undefined from the backend; use 0 as the canonical index
-  // for localStorage keys (front-end only convention).
-  const effectiveListIndex = slot.list_index ?? 0;
-  // For API calls, single slots must use -1 so the backend queries list_index IS NULL.
-  const apiListIndex = slot.list_index ?? -1;
+  const showPending =
+    (isOffloaded && offloadLoading) ||
+    (!isOffloaded && (raw === undefined || raw === null));
 
   // On mount: restore localStorage draft only if it differs from the current artifact text.
   // Also restart the 60s flush timer so the draft doesn't stay in localStorage forever.
   useEffect(() => {
-    if (!canEdit || !sessionId || !slotId) return;
+    if (!canEdit || !sessionId || !slotId || showPending) return;
     const saved = draftStore.getLocalDraft(sessionId, slotId, effectiveListIndex);
     if (saved?.text !== undefined && String(saved.text) !== text) {
       setDraft(String(saved.text));
@@ -1075,6 +1378,10 @@ export function SlotText({ slot, sessionId, slotId, revisionCount, onRefresh }: 
     return undefined;
   })();
 
+  if (showPending) {
+    return <SlotPending type='text' />;
+  }
+
   return (
     <div className='plugin-slot plugin-slot--text'>
       {editing ? (
@@ -1182,10 +1489,464 @@ interface SlotFileProps {
   slot: SlotRevision;
   sessionId?: string;
   slotId?: string;
+  /** Number of revisions for this item — shown as version badge. */
+  revisionCount?: number;
+  onRefresh?: () => void;
+  readOnly?: boolean;
+}
+
+function isJsonArtifactFile(slot: SlotRevision): boolean {
+  const raw = slot.artifact_value;
+  const name = String(raw?.filename ?? raw?.name ?? '').toLowerCase();
+  const path = String(raw?.url ?? raw?.path ?? '').toLowerCase();
+  return name.endsWith('.json') || path.endsWith('.json');
+}
+
+function isMarkdownArtifactFile(slot: SlotRevision): boolean {
+  const raw = slot.artifact_value;
+  const name = String(raw?.filename ?? raw?.name ?? '').toLowerCase();
+  const path = String(raw?.url ?? raw?.path ?? '').toLowerCase();
+  return name.endsWith('.md')
+    || name.endsWith('.markdown')
+    || path.endsWith('.md')
+    || path.endsWith('.markdown');
+}
+
+function isOffloadedArtifactReference(raw: Record<string, unknown>): boolean {
+  const hasPath = Boolean(String(raw.path ?? raw.url ?? '').trim());
+  return hasPath && (raw.type === 'text' || raw.type === 'json');
+}
+
+function getInlineStructuredArtifactPayload(slot: SlotRevision): unknown | null {
+  const raw = slot.artifact_value;
+  if (!raw || typeof raw !== 'object') return null;
+  const record = raw as Record<string, unknown>;
+
+  if (isOffloadedArtifactReference(record)) {
+    return null;
+  }
+
+  if (record.data !== undefined) {
+    const payload = unwrapArtifactPayload(raw);
+    if (payload !== null && payload !== undefined && typeof payload === 'object') {
+      return payload;
+    }
+    if (typeof payload === 'string') {
+      try {
+        return JSON.parse(payload);
+      } catch {
+        return null;
+      }
+    }
+  }
+
+  if (slot.content_type === 'json' && record.text === undefined) {
+    return unwrapArtifactPayload(raw);
+  }
+
+  return null;
+}
+
+function shouldRenderInlineStructuredContent(
+  slot: SlotRevision,
+  expectedType?: 'image' | 'file' | 'text',
+  slotId?: string,
+): boolean {
+  if (expectedType !== 'text') return false;
+  const payload = getInlineStructuredArtifactPayload(slot);
+  if (payload === null) return false;
+  if (slot.content_type === 'json') return true;
+  const resolvedSlotId = slotId ?? slot.slot;
+  return WRITER_ARTIFACT_SLOT_IDS.has(resolvedSlotId);
+}
+
+function shouldRenderJsonFileAsContent(
+  slot: SlotRevision,
+  expectedType?: 'image' | 'file' | 'text',
+): boolean {
+  if (expectedType !== 'text') return false;
+  if (isJsonArtifactFile(slot)) return true;
+  const raw = slot.artifact_value;
+  if (!raw || typeof raw !== 'object') return false;
+  const hasPath = Boolean(String(raw.path ?? raw.url ?? '').trim());
+  return hasPath && (slot.content_type === 'json' || raw.type === 'json');
+}
+
+function shouldRenderMarkdownFileAsContent(
+  slot: SlotRevision,
+  expectedType?: 'image' | 'file' | 'text',
+): boolean {
+  return expectedType === 'file' && isMarkdownArtifactFile(slot);
+}
+
+interface SlotJsonFileProps {
+  slot: SlotRevision;
+  sessionId?: string;
+  slotId?: string;
+  revisionCount?: number;
   onRefresh?: () => void;
 }
 
-export function SlotFile({ slot, sessionId, slotId, onRefresh }: SlotFileProps) {
+function SlotJsonFile({
+  slot,
+  sessionId,
+  slotId,
+  revisionCount,
+  onRefresh,
+}: SlotJsonFileProps) {
+  const raw = slot.artifact_value;
+  const name: string = raw?.filename ?? raw?.name ?? slotId ?? slot.slot;
+  const { url, resolving, hasSource } = useArtifactFileUrl(raw);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [payload, setPayload] = useState<unknown>(null);
+  const [showRaw, setShowRaw] = useState(false);
+
+  useEffect(() => {
+    if (!hasSource) {
+      setLoading(false);
+      setError('无法加载内容');
+      return;
+    }
+    if (resolving || !url) {
+      return;
+    }
+
+    let cancelled = false;
+    setLoading(true);
+    setError(null);
+
+    fetch(url)
+      .then((response) => {
+        if (!response.ok) {
+          throw new Error(`HTTP ${response.status}`);
+        }
+        return response.json();
+      })
+      .then((json) => {
+        if (!cancelled) {
+          setPayload(unwrapArtifactPayload(json));
+          setLoading(false);
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setError('内容加载失败');
+          setLoading(false);
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [hasSource, resolving, url]);
+
+  const handleToggleRaw = useCallback(() => {
+    setShowRaw((value) => !value);
+  }, []);
+
+  const apiListIndex = slot.list_index ?? -1;
+  const showVersionBadge =
+    revisionCount !== undefined && revisionCount > 0 && Boolean(sessionId && slotId);
+
+  if (!hasSource) {
+    return (
+      <div className='plugin-slot plugin-slot--text plugin-slot--pending'>
+        <span className='plugin-slot__placeholder'>待生成…</span>
+      </div>
+    );
+  }
+
+  if (loading || resolving) {
+    return (
+      <div className='plugin-slot plugin-slot--artifact plugin-slot--pending'>
+        <span className='plugin-slot__placeholder'>加载中…</span>
+      </div>
+    );
+  }
+
+  if (error || payload === null) {
+    return (
+      <div className='plugin-slot plugin-slot--artifact plugin-slot--error'>
+        <span className='plugin-slot__placeholder'>{error ?? '内容加载失败'}</span>
+      </div>
+    );
+  }
+
+  const resolvedSlotId = slotId ?? slot.slot;
+
+  return (
+    <div className='plugin-slot plugin-slot--artifact'>
+      <div className='plugin-slot__artifact-body'>
+        {showRaw ? (
+          <pre className='writer-artifact__raw'>{JSON.stringify(payload, null, 2)}</pre>
+        ) : (
+          <WriterArtifactContent slotId={resolvedSlotId} data={payload} />
+        )}
+      </div>
+      <div className='plugin-slot__artifact-footer'>
+        <div className='plugin-slot__artifact-footer-left'>
+          {showVersionBadge && (
+            <SlotVersionPopover
+              sessionId={sessionId!}
+              slotId={slotId!}
+              listIndex={apiListIndex}
+              revisionCount={revisionCount!}
+              currentRevision={slot.revision}
+              currentValue={slot.artifact_value}
+              currentChangeSource={slot.change_source}
+              contentType='file'
+              onRollbackDone={onRefresh}
+            />
+          )}
+        </div>
+        <div className='plugin-slot__artifact-actions'>
+          <button
+            className='plugin-slot__file-action-btn'
+            onClick={handleToggleRaw}
+            type='button'
+          >
+            {showRaw ? '查看内容' : '原始数据'}
+          </button>
+          <a
+            href={url}
+            download={name}
+            className='plugin-slot__file-action-btn'
+            onClick={(e) => e.stopPropagation()}
+          >
+            下载
+          </a>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+interface SlotInlineStructuredProps {
+  slot: SlotRevision;
+  sessionId?: string;
+  slotId?: string;
+  revisionCount?: number;
+  onRefresh?: () => void;
+}
+
+function SlotInlineStructured({
+  slot,
+  sessionId,
+  slotId,
+  revisionCount,
+  onRefresh,
+}: SlotInlineStructuredProps) {
+  const payload = getInlineStructuredArtifactPayload(slot);
+  const [showRaw, setShowRaw] = useState(false);
+  const apiListIndex = slot.list_index ?? -1;
+  const resolvedSlotId = slotId ?? slot.slot;
+  const showVersionBadge =
+    revisionCount !== undefined && revisionCount > 0 && Boolean(sessionId && slotId);
+
+  const handleToggleRaw = useCallback(() => {
+    setShowRaw((value) => !value);
+  }, []);
+
+  if (payload === null) {
+    return (
+      <div className='plugin-slot plugin-slot--artifact plugin-slot--error'>
+        <span className='plugin-slot__placeholder'>内容加载失败</span>
+      </div>
+    );
+  }
+
+  return (
+    <div className='plugin-slot plugin-slot--artifact'>
+      <div className='plugin-slot__artifact-body'>
+        {showRaw ? (
+          <pre className='writer-artifact__raw'>{JSON.stringify(payload, null, 2)}</pre>
+        ) : (
+          <WriterArtifactContent slotId={resolvedSlotId} data={payload} />
+        )}
+      </div>
+      <div className='plugin-slot__artifact-footer'>
+        <div className='plugin-slot__artifact-footer-left'>
+          {showVersionBadge && (
+            <SlotVersionPopover
+              sessionId={sessionId!}
+              slotId={slotId!}
+              listIndex={apiListIndex}
+              revisionCount={revisionCount!}
+              currentRevision={slot.revision}
+              currentValue={slot.artifact_value}
+              currentChangeSource={slot.change_source}
+              contentType='json'
+              onRollbackDone={onRefresh}
+            />
+          )}
+        </div>
+        <div className='plugin-slot__artifact-actions'>
+          <button
+            className='plugin-slot__file-action-btn'
+            onClick={handleToggleRaw}
+            type='button'
+          >
+            {showRaw ? '查看内容' : '原始数据'}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+interface SlotMarkdownFileProps {
+  slot: SlotRevision;
+  sessionId?: string;
+  slotId?: string;
+  revisionCount?: number;
+  onRefresh?: () => void;
+}
+
+function SlotMarkdownFile({
+  slot,
+  sessionId,
+  slotId,
+  revisionCount,
+  onRefresh,
+}: SlotMarkdownFileProps) {
+  const raw = slot.artifact_value;
+  const name: string = raw?.filename ?? raw?.name ?? slotId ?? slot.slot;
+  const { url, resolving, hasSource } = useArtifactFileUrl(raw);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [content, setContent] = useState('');
+
+  useEffect(() => {
+    if (!hasSource) {
+      setLoading(false);
+      setError('无法加载内容');
+      return;
+    }
+    if (resolving || !url) {
+      return;
+    }
+
+    let cancelled = false;
+    setLoading(true);
+    setError(null);
+
+    fetch(url)
+      .then((response) => {
+        if (!response.ok) {
+          throw new Error(`HTTP ${response.status}`);
+        }
+        return response.text();
+      })
+      .then((text) => {
+        if (cancelled) return;
+        if (isSpaFallbackHtml(text)) {
+          throw new Error('invalid artifact content');
+        }
+        setContent(text);
+        setLoading(false);
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setError('内容加载失败');
+          setLoading(false);
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [hasSource, resolving, url]);
+
+  const apiListIndex = slot.list_index ?? -1;
+  const showVersionBadge =
+    revisionCount !== undefined && revisionCount > 0 && Boolean(sessionId && slotId);
+  const resolvedSlotId = slotId ?? slot.slot;
+
+  if (!hasSource) {
+    return (
+      <div className='plugin-slot plugin-slot--text plugin-slot--pending'>
+        <span className='plugin-slot__placeholder'>待生成…</span>
+      </div>
+    );
+  }
+
+  if (loading || resolving) {
+    return (
+      <div className='plugin-slot plugin-slot--artifact plugin-slot--pending'>
+        <span className='plugin-slot__placeholder'>加载中…</span>
+      </div>
+    );
+  }
+
+  if (error || !content.trim()) {
+    return (
+      <div className='plugin-slot plugin-slot--artifact plugin-slot--error'>
+        <span className='plugin-slot__placeholder'>{error ?? '内容加载失败'}</span>
+      </div>
+    );
+  }
+
+  return (
+    <div className='plugin-slot plugin-slot--artifact'>
+      <div className='writer-artifact__output-toolbar'>
+        <button
+          type='button'
+          className='plugin-slot__file-action-btn writer-artifact__download-btn'
+          onClick={() => {
+            const blob = new Blob([content], { type: 'text/markdown;charset=utf-8' });
+            const objectUrl = URL.createObjectURL(blob);
+            const anchor = document.createElement('a');
+            anchor.href = objectUrl;
+            anchor.download = name.toLowerCase().endsWith('.md') ? name : `${name.replace(/\.[^.]+$/, '') || 'writing_output'}.md`;
+            anchor.click();
+            URL.revokeObjectURL(objectUrl);
+          }}
+        >
+          下载 Markdown
+        </button>
+        {url ? (
+          <a
+            href={url}
+            download={name}
+            className='plugin-slot__file-action-btn'
+            onClick={(e) => e.stopPropagation()}
+          >
+            下载原文件
+          </a>
+        ) : null}
+      </div>
+      <div className='plugin-slot__artifact-body'>
+        {resolvedSlotId === 'writing_output_md' ? (
+          <WriterArtifactContent slotId='writing_output' data={{ content }} hideDownload />
+        ) : (
+          <div className='writer-artifact__markdown'>
+            <MarkdownViewer>{content}</MarkdownViewer>
+          </div>
+        )}
+      </div>
+      <div className='plugin-slot__artifact-footer'>
+        <div className='plugin-slot__artifact-footer-left'>
+          {showVersionBadge && (
+            <SlotVersionPopover
+              sessionId={sessionId!}
+              slotId={slotId!}
+              listIndex={apiListIndex}
+              revisionCount={revisionCount!}
+              currentRevision={slot.revision}
+              currentValue={slot.artifact_value}
+              currentChangeSource={slot.change_source}
+              contentType='file'
+              onRollbackDone={onRefresh}
+            />
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+export function SlotFile({ slot, sessionId, slotId, revisionCount, onRefresh, readOnly }: SlotFileProps) {
   const raw = slot.artifact_value;
   const rawPath: string = raw?.url ?? raw?.path ?? '';
   const url: string = rawPath ? resolveCoreAssetUrl(rawPath) : '';
@@ -1197,7 +1958,7 @@ export function SlotFile({ slot, sessionId, slotId, onRefresh }: SlotFileProps) 
   const [captionEditing, setCaptionEditing] = useState(false);
   const [captionDraft, setCaptionDraft] = useState('');
 
-  const canEdit = Boolean(sessionId && slotId && slot.list_index !== undefined);
+  const canEdit = Boolean(sessionId && slotId && slot.list_index !== undefined) && !readOnly;
 
   const handlePreview = useCallback((e: React.MouseEvent) => {
     e.preventDefault();
@@ -1241,6 +2002,10 @@ export function SlotFile({ slot, sessionId, slotId, onRefresh }: SlotFileProps) 
 
   if (!url) return <SlotPending type='file' />;
 
+  const apiListIndex = slot.list_index ?? -1;
+  const showVersionBadge =
+    revisionCount !== undefined && revisionCount > 0 && Boolean(sessionId && slotId);
+
   return (
     <div className='plugin-slot plugin-slot--file plugin-slot--file-enhanced'>
       <div className='plugin-slot__file-card'>
@@ -1252,6 +2017,19 @@ export function SlotFile({ slot, sessionId, slotId, onRefresh }: SlotFileProps) 
               <span className='plugin-slot__file-size'>{formatFileSize(size)}</span>
             )}
           </div>
+          {showVersionBadge && (
+            <SlotVersionPopover
+              sessionId={sessionId!}
+              slotId={slotId!}
+              listIndex={apiListIndex}
+              revisionCount={revisionCount!}
+              currentRevision={slot.revision}
+              currentValue={slot.artifact_value}
+              currentChangeSource={slot.change_source}
+              contentType='file'
+              onRollbackDone={onRefresh}
+            />
+          )}
         </div>
         <div className='plugin-slot__file-card-actions'>
           <button
@@ -1344,6 +2122,7 @@ export function SlotRenderer({
   isDraggable,
   onRefresh,
   onReference,
+  readOnly,
 }: {
   slot: SlotRevision;
   cardMode?: boolean;
@@ -1354,6 +2133,7 @@ export function SlotRenderer({
   isDraggable?: boolean;
   onRefresh?: () => void;
   onReference?: (slot: SlotRevision) => void;
+  readOnly?: boolean;
 }) {
   if (slot.artifact_value === undefined || slot.artifact_value === null) {
     return <SlotPending type={expectedType ?? 'text'} cardMode={cardMode} />;
@@ -1371,10 +2151,44 @@ export function SlotRenderer({
         isDraggable={isDraggable}
         onRefresh={onRefresh}
         onReference={onReference}
+        readOnly={readOnly}
       />
     );
   }
-  if (normalized === 'file') return <SlotFile slot={slot} sessionId={sessionId} slotId={slotId} onRefresh={onRefresh} />;
+  if (shouldRenderMarkdownFileAsContent(slot, expectedType)) {
+    return (
+      <SlotMarkdownFile
+        slot={slot}
+        sessionId={sessionId}
+        slotId={slotId}
+        revisionCount={revisionCount}
+        onRefresh={onRefresh}
+      />
+    );
+  }
+  if (shouldRenderJsonFileAsContent(slot, expectedType)) {
+    return (
+      <SlotJsonFile
+        slot={slot}
+        sessionId={sessionId}
+        slotId={slotId}
+        revisionCount={revisionCount}
+        onRefresh={onRefresh}
+      />
+    );
+  }
+  if (shouldRenderInlineStructuredContent(slot, expectedType, slotId)) {
+    return (
+      <SlotInlineStructured
+        slot={slot}
+        sessionId={sessionId}
+        slotId={slotId}
+        revisionCount={revisionCount}
+        onRefresh={onRefresh}
+      />
+    );
+  }
+  if (normalized === 'file') return <SlotFile slot={slot} sessionId={sessionId} slotId={slotId} revisionCount={revisionCount} onRefresh={onRefresh} readOnly={readOnly} />;
   return (
     <SlotText
       slot={slot}
@@ -1382,6 +2196,7 @@ export function SlotRenderer({
       slotId={slotId}
       revisionCount={revisionCount}
       onRefresh={onRefresh}
+      readOnly={readOnly}
     />
   );
 }

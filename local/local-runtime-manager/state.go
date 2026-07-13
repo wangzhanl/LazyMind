@@ -13,6 +13,7 @@ type RuntimeState struct {
 	Runtime        string                         `json:"runtime"`
 	Profile        string                         `json:"profile"`
 	RepoRoot       string                         `json:"repoRoot"`
+	ResourcesRoot  string                         `json:"resourcesRoot,omitempty"`
 	RuntimeRoot    string                         `json:"runtimeRoot"`
 	ProcessCompose ProcessComposeState            `json:"processCompose"`
 	Config         RuntimeConfigSnapshot          `json:"config,omitempty"`
@@ -30,6 +31,8 @@ type ProcessComposeState struct {
 
 type RuntimeConfigSnapshot struct {
 	FrontendPort       int                       `json:"frontendPort,omitempty"`
+	ModeProfile        RuntimeModeProfileConfig  `json:"modeProfile,omitempty"`
+	NetworkProfile     string                    `json:"networkProfile,omitempty"`
 	LocalProxy         LocalProxyConfig          `json:"localProxy,omitempty"`
 	AuthService        AuthServiceConfig         `json:"authService,omitempty"`
 	Algorithm          AlgorithmConfig           `json:"algorithm,omitempty"`
@@ -54,10 +57,17 @@ type StatusResponse struct {
 	Profile        string                         `json:"profile"`
 	OverallStatus  string                         `json:"overallStatus"`
 	RepoRoot       string                         `json:"repoRoot"`
+	ResourcesRoot  string                         `json:"resourcesRoot,omitempty"`
+	BuildRoot      string                         `json:"buildRoot,omitempty"`
 	RuntimeRoot    string                         `json:"runtimeRoot"`
+	DataDir        string                         `json:"dataDir,omitempty"`
+	LogsDir        string                         `json:"logsDir,omitempty"`
 	ProcessCompose ProcessComposeState            `json:"processCompose"`
+	Config         RuntimeConfigSnapshot          `json:"config,omitempty"`
 	Services       map[string]RuntimeServiceState `json:"services"`
 }
+
+const legacyComposeServiceName = "docker" + "-stack"
 
 func readRuntimeState(path string) (RuntimeState, error) {
 	b, err := os.ReadFile(path)
@@ -81,11 +91,12 @@ func writeRuntimeState(path string, state RuntimeState) error {
 
 func defaultRuntimeState(cfg RuntimeConfig, apiPort int, tokenPath string) RuntimeState {
 	return RuntimeState{
-		Version:     processComposeVersion,
-		Runtime:     "local",
-		Profile:     cfg.Profile,
-		RepoRoot:    cfg.RepoRoot,
-		RuntimeRoot: cfg.RuntimeRoot,
+		Version:       processComposeVersion,
+		Runtime:       cfg.Profile,
+		Profile:       cfg.Profile,
+		RepoRoot:      cfg.RepoRoot,
+		ResourcesRoot: cfg.ResourcesRoot,
+		RuntimeRoot:   cfg.RuntimeRoot,
 		ProcessCompose: ProcessComposeState{
 			APIPort:   apiPort,
 			APIRoot:   "http://127.0.0.1:" + itoa(apiPort),
@@ -95,7 +106,7 @@ func defaultRuntimeState(cfg RuntimeConfig, apiPort int, tokenPath string) Runti
 		Config: snapshotRuntimeConfig(cfg),
 		Services: map[string]RuntimeServiceState{
 			processComposeServiceName: {
-				Kind:   "docker-compose",
+				Kind:   "host-supervisor",
 				Status: "stopped",
 			},
 			localProxyProcessName: {
@@ -119,6 +130,10 @@ func defaultRuntimeState(cfg RuntimeConfig, apiPort int, tokenPath string) Runti
 				Status: "stopped",
 			},
 			fileWatcherProcessName: {
+				Kind:   "host-process",
+				Status: "stopped",
+			},
+			milvusLiteProcessName: {
 				Kind:   "host-process",
 				Status: "stopped",
 			},
@@ -150,10 +165,12 @@ func defaultRuntimeState(cfg RuntimeConfig, apiPort int, tokenPath string) Runti
 
 func snapshotRuntimeConfig(cfg RuntimeConfig) RuntimeConfigSnapshot {
 	return RuntimeConfigSnapshot{
-		FrontendPort: cfg.FrontendPort,
-		LocalProxy:   cfg.LocalProxy,
-		AuthService:  cfg.AuthService,
-		Algorithm:    cfg.Algorithm,
+		FrontendPort:   cfg.FrontendPort,
+		ModeProfile:    cfg.ModeProfile,
+		NetworkProfile: cfg.NetworkProfile,
+		LocalProxy:     cfg.LocalProxy,
+		AuthService:    cfg.AuthService,
+		Algorithm:      cfg.Algorithm,
 		FileWatcher: FileWatcherConfigSnapshot{
 			Port:          cfg.FileWatcher.Port,
 			AgentID:       cfg.FileWatcher.AgentID,
@@ -170,6 +187,9 @@ func applyStateConfig(cfg RuntimeConfig, state RuntimeState) RuntimeConfig {
 	}
 	if state.Config.FrontendPort > 0 {
 		cfg.FrontendPort = state.Config.FrontendPort
+	}
+	if state.Config.ModeProfile.Name != "" {
+		cfg.ModeProfile = state.Config.ModeProfile
 	}
 	if state.Config.LocalProxy.Port > 0 {
 		cfg.LocalProxy = state.Config.LocalProxy
@@ -202,7 +222,7 @@ func itoa(v int) string {
 func newStateWithServiceStatus(state RuntimeState, serviceStatus string) RuntimeState {
 	state.Services = normalizeRuntimeServices(state.Services)
 	ds := state.Services[processComposeServiceName]
-	ds.Kind = "docker-compose"
+	ds.Kind = "host-supervisor"
 	ds.Status = serviceStatus
 	state.Services[processComposeServiceName] = ds
 	lp := state.Services[localProxyProcessName]
@@ -229,6 +249,10 @@ func newStateWithServiceStatus(state RuntimeState, serviceStatus string) Runtime
 	fileWatcher.Kind = "host-process"
 	fileWatcher.Status = serviceStatus
 	state.Services[fileWatcherProcessName] = fileWatcher
+	milvus := state.Services[milvusLiteProcessName]
+	milvus.Kind = "host-process"
+	milvus.Status = serviceStatus
+	state.Services[milvusLiteProcessName] = milvus
 	for _, name := range []string{
 		docServerProcessName,
 		processorServerProcessName,
@@ -265,14 +289,17 @@ func normalizeRuntimeServices(services map[string]RuntimeServiceState) map[strin
 		services = map[string]RuntimeServiceState{}
 	}
 	normalized := map[string]RuntimeServiceState{}
-	if _, ok := services[processComposeServiceName]; !ok {
+	if legacy, ok := services[legacyComposeServiceName]; ok {
+		legacy.Kind = "host-supervisor"
+		normalized[processComposeServiceName] = legacy
+	} else if _, ok := services[processComposeServiceName]; !ok {
 		normalized[processComposeServiceName] = RuntimeServiceState{
-			Kind:   "docker-compose",
+			Kind:   "host-supervisor",
 			Status: "unknown",
 		}
 	} else {
 		svc := services[processComposeServiceName]
-		svc.Kind = "docker-compose"
+		svc.Kind = "host-supervisor"
 		normalized[processComposeServiceName] = svc
 	}
 	if _, ok := services[localProxyProcessName]; !ok {
@@ -315,7 +342,7 @@ func normalizeRuntimeServices(services map[string]RuntimeServiceState) map[strin
 		svc.Kind = "host-process"
 		normalized[coreProcessName] = svc
 	}
-	for _, name := range []string{scanControlPlaneProcessName, fileWatcherProcessName} {
+	for _, name := range []string{scanControlPlaneProcessName, fileWatcherProcessName, milvusLiteProcessName} {
 		if _, ok := services[name]; !ok {
 			normalized[name] = RuntimeServiceState{
 				Kind:   "host-process",

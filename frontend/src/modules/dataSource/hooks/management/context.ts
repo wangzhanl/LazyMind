@@ -7,6 +7,10 @@ import type {
   FeishuAuthAccount,
 } from "../../common/feishuAccounts";
 import type {
+  DatabaseConnectionItem,
+  DatabaseConnectionPayload,
+} from "../../api/databaseConnections";
+import type {
   CloudDataSourceProvider,
   FeishuDataSourceConnection,
   FeishuDataSourceOAuthMessage,
@@ -40,6 +44,8 @@ export interface StartCloudOAuthOptions {
   previousConnection?: FeishuDataSourceConnection | null;
   accountId?: string;
   appId?: string;
+  openWizardOnSuccess?: boolean;
+  reopenSetupOnFailure?: boolean;
 }
 
 export interface RefreshSourcesOptions {
@@ -100,6 +106,8 @@ export interface ManagementContext {
   setCreateProviderModalOpen: Dispatch<SetStateAction<boolean>>;
   authSelectModalOpen: boolean;
   setAuthSelectModalOpen: Dispatch<SetStateAction<boolean>>;
+  authSelectProvider: CloudDataSourceProvider | null;
+  setAuthSelectProvider: Dispatch<SetStateAction<CloudDataSourceProvider | null>>;
   cloudSetupProvider: CloudDataSourceProvider;
   setCloudSetupProvider: Dispatch<SetStateAction<CloudDataSourceProvider>>;
   feishuSetupModalOpen: boolean;
@@ -114,6 +122,10 @@ export interface ManagementContext {
   setManualOauthCallbackValue: Dispatch<SetStateAction<string>>;
   manualOauthSubmitting: boolean;
   setManualOauthSubmitting: Dispatch<SetStateAction<boolean>>;
+  databaseEditingConnection: DatabaseConnectionItem | null;
+  setDatabaseEditingConnection: Dispatch<SetStateAction<DatabaseConnectionItem | null>>;
+  databaseEditSaving: boolean;
+  setDatabaseEditSaving: Dispatch<SetStateAction<boolean>>;
 
   // OAuth / connection state
   oauthState: OAuthState;
@@ -124,6 +136,8 @@ export interface ManagementContext {
   setOauthConnection: Dispatch<SetStateAction<FeishuDataSourceConnection | null>>;
   notionOauthConnection: FeishuDataSourceConnection | null;
   setNotionOauthConnection: Dispatch<SetStateAction<FeishuDataSourceConnection | null>>;
+  notionAuthAccounts: FeishuAuthAccount[];
+  setNotionAuthAccounts: Dispatch<SetStateAction<FeishuAuthAccount[]>>;
   feishuAuthAccounts: FeishuAuthAccount[];
   setFeishuAuthAccounts: Dispatch<SetStateAction<FeishuAuthAccount[]>>;
   editingFeishuAccountId: string | null;
@@ -156,6 +170,7 @@ export interface ManagementContext {
   feishuTargetTreeData: FeishuTargetTreeNode[];
   resetLocalPathBrowseOptions: () => void;
   resetFeishuTargetBrowseOptions: () => void;
+  seedFeishuTargetTree: (nodes: FeishuTargetTreeNode[]) => void;
 
   /** i18n key override for create success toast (defaults to admin.dataSourceCreated) */
   createSuccessMessageKey?: string;
@@ -167,9 +182,13 @@ export interface ManagementContext {
   // OAuth engine handlers (createOAuthEngine)
   clearOauthAttempt: () => void;
   restorePreviousOauthState: (messageText?: string, level?: "warning" | "error") => void;
-  applyOauthResult: (payload: FeishuDataSourceOAuthMessage) => void;
+  applyOauthResult: (
+    payload: FeishuDataSourceOAuthMessage,
+    options?: { openWizardOnSuccess?: boolean },
+  ) => void;
   refreshFeishuAuthAccounts: () => Promise<void>;
   refreshNotionAuthConnection: () => Promise<void>;
+  refreshNotionAuthAccounts: () => Promise<void>;
   upsertFeishuAuthAccount: (
     setup: FeishuAccountFormValues,
     status?: OAuthState,
@@ -198,6 +217,7 @@ export interface ManagementContext {
     account?: FeishuAuthAccount | null,
   ) => void;
   handleSaveFeishuSetup: () => Promise<void>;
+  handleCancelCloudSetup: () => void;
   handleResetFeishuSetup: () => void;
   handleResetNotionSetup: () => void;
 
@@ -209,12 +229,20 @@ export interface ManagementContext {
   ) => void;
   handleCreateProviderSelect: (type: SourceType) => void;
   handleSelectFeishuAuthConnection: (connection: FeishuDataSourceConnection) => void;
+  handleSelectNotionAuthConnection: (connection: FeishuDataSourceConnection) => void;
   handleManageFeishuAuth: () => void;
+  handleAddFeishuAuthFromSelect: () => void;
+  handleAddNotionAuthFromSelect: () => void;
   handleOpenFeishuGuideFromAuthSelect: () => void;
+  handleOpenNotionGuideFromAuthSelect: () => void;
   handleNextStep: () => void;
   handleSubmitManualOauthCallback: () => Promise<void>;
   openDetailPage: (record: DataSourceItem) => void;
+  openDatabaseConnectionConfig: (record: DataSourceItem) => void;
+  closeDatabaseConnectionConfig: () => void;
+  handleSaveDatabaseConnectionConfig: (payload: DatabaseConnectionPayload) => Promise<void>;
   executeDeleteSource: (record: DataSourceItem) => Promise<void>;
+  executeDeleteDatabaseConnection: (record: DataSourceItem) => Promise<void>;
 
   // Save handlers (createSaveActions)
   handleSave: (saveMode?: DataSourceSaveMode) => Promise<void>;

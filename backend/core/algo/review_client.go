@@ -17,6 +17,15 @@ func ReviewSkill(ctx context.Context, req SkillReviewRequest) (*SkillReviewRespo
 	return &out, status, nil
 }
 
+func OrganizeSkill(ctx context.Context, req SkillOrganizeRequest) (*SkillOrganizeResponse, int, error) {
+	var out SkillOrganizeResponse
+	status, err := postReviewJSON(ctx, "/api/chat/skill_organize", req, &out)
+	if err != nil {
+		return nil, status, err
+	}
+	return &out, status, nil
+}
+
 func ReviewMemory(ctx context.Context, req MemoryReviewRequest) (*MemoryReviewResponse, int, error) {
 	var out MemoryReviewResponse
 	status, err := postReviewJSON(ctx, "/api/chat/memory_review", req, &out)

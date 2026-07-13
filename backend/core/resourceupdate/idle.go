@@ -399,19 +399,28 @@ func (p *IdleProcessor) ProcessEvent(ctx context.Context, eventID string) error 
 			return p.markEventFailed(tx, event.ID, now, "marshal_history_failed", err.Error())
 		}
 
-		memory, err := loadSystemMemoryForIdle(ctx, tx, event.UserID)
+		memory, err := evolution.EnsurePersonalResourceContent(ctx, tx, event.UserID, orm.ResourceUpdateResourceTypeMemory)
 		if err != nil {
 			cleanupSessionID = event.SessionID
-			return p.markEventFailed(tx, event.ID, now, "load_system_memory_failed", err.Error())
+			return p.markEventFailed(tx, event.ID, now, "load_memory_failed", err.Error())
 		}
-		preference, err := loadSystemUserPreferenceForIdle(ctx, tx, event.UserID)
+		preference, err := evolution.EnsurePersonalResourceContent(ctx, tx, event.UserID, orm.ResourceUpdateResourceTypeUserPreference)
 		if err != nil {
 			cleanupSessionID = event.SessionID
-			return p.markEventFailed(tx, event.ID, now, "load_system_user_preference_failed", err.Error())
+			return p.markEventFailed(tx, event.ID, now, "load_user_preference_failed", err.Error())
 		}
 
-		userContent := evolution.FormatSystemUserPreferenceForChat(preference)
-		memoryTaskID, err := createIdleGenerateTask(ctx, tx, event, memory.ID, memory.Content, userContent, historyJSON, now)
+		memoryContent, err := memoryReviewContentWithPendingDraft(ctx, tx, event.UserID, orm.ResourceUpdateResourceTypeMemory, memory.Content)
+		if err != nil {
+			cleanupSessionID = event.SessionID
+			return p.markEventFailed(tx, event.ID, now, "load_pending_memory_review_failed", err.Error())
+		}
+		userContent, err := memoryReviewContentWithPendingDraft(ctx, tx, event.UserID, orm.ResourceUpdateResourceTypeUserPreference, preference.Content)
+		if err != nil {
+			cleanupSessionID = event.SessionID
+			return p.markEventFailed(tx, event.ID, now, "load_pending_user_preference_review_failed", err.Error())
+		}
+		memoryTaskID, err := createIdleGenerateTask(ctx, tx, event, memory.ResourceID, memoryContent, userContent, historyJSON, now)
 		if err != nil {
 			cleanupSessionID = event.SessionID
 			return p.markEventFailed(tx, event.ID, now, "create_memory_task_failed", err.Error())
@@ -494,22 +503,15 @@ func (p *IdleProcessor) markEventFailed(tx *gorm.DB, id string, now time.Time, c
 	}).Error
 }
 
-func loadSystemMemoryForIdle(ctx context.Context, db *gorm.DB, userID string) (orm.SystemMemory, error) {
-	var row orm.SystemMemory
-	err := db.WithContext(ctx).
-		Where("user_id = ?", strings.TrimSpace(userID)).
-		Order("created_at ASC").
-		Take(&row).Error
-	return row, err
-}
-
-func loadSystemUserPreferenceForIdle(ctx context.Context, db *gorm.DB, userID string) (orm.SystemUserPreference, error) {
-	var row orm.SystemUserPreference
-	err := db.WithContext(ctx).
-		Where("user_id = ?", strings.TrimSpace(userID)).
-		Order("created_at ASC").
-		Take(&row).Error
-	return row, err
+func memoryReviewContentWithPendingDraft(ctx context.Context, db *gorm.DB, userID, target, currentContent string) (string, error) {
+	result, err := LatestPendingMemoryReviewResult(ctx, db, userID, target)
+	if err == nil {
+		return result.Content, nil
+	}
+	if errors.Is(err, errReviewNotFound) {
+		return currentContent, nil
+	}
+	return "", err
 }
 
 func createIdleGenerateTask(ctx context.Context, db *gorm.DB, event orm.ConversationIdleEvent, resourceID, memoryContent, userContent string, historyJSON json.RawMessage, now time.Time) (string, error) {

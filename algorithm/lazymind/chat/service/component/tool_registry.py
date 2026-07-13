@@ -20,14 +20,17 @@ from lazyllm.tools.tools.search import (
 
 from lazymind.chat.engine.tools import (
     KBToolGroup,
+    ExternalDBToolGroup,
     LocalFSToolGroup,
+    SystemQueryToolGroup,
+    WriterToolGroup,
     calculator,
     image_editor,
     image_generator,
     kb_tmp_search,
     memory_editor,
     read_memory,
-    skill_editor,
+    SkillEditorToolGroup,
     url_fetch,
     vision_extractor,
     vocab_learn,
@@ -44,6 +47,13 @@ class ToolGroupConfig:
     model_role: str | None = None
     key_source: Callable[[], Any] | None = None
     pick_first_valid: bool = False
+    capability_id: str = ''
+    equivalence_scope: str = 'infrastructure'
+    provider_id: str = ''
+    product_id: str = ''
+    input_schema: dict[str, Any] | None = None
+    output_schema: dict[str, Any] | None = None
+    required_config: list[str] | None = None
 
     def __post_init__(self) -> None:
         if self.pick_first_valid and not isinstance(self.instance, (list, tuple)):
@@ -84,6 +94,8 @@ DEFAULT_TOOLS: list[ToolGroupConfig] = [
         label='知识库检索',
         description='从知识库中搜索文档，支持语义检索、关键词检索、上下文窗口等',
         instance=KBToolGroup(),
+        capability_id='knowledge_base_search',
+        input_schema={'query': 'string'}, output_schema={'results': 'list'}, required_config=['knowledge_base'],
     ),
     ToolGroupConfig(
         name='temp_kb',
@@ -91,6 +103,24 @@ DEFAULT_TOOLS: list[ToolGroupConfig] = [
         description='从用户上传的临时文件中搜索相关内容',
         instance=kb_tmp_search,
         key_source=_temp_kb_key_source,
+    ),
+    ToolGroupConfig(
+        name='system_query',
+        label='系统数据查询',
+        description='只读查询 LazyMind 知识库、文档、数据源和关联统计',
+        instance=SystemQueryToolGroup(),
+    ),
+    ToolGroupConfig(
+        name='external_db',
+        label='外部数据库查询',
+        description='只读查看已配置外部数据库 schema，并执行只读 SELECT/WITH 查询',
+        instance=ExternalDBToolGroup(),
+    ),
+    ToolGroupConfig(
+        name='writer',
+        label='AI 写作',
+        description='构建写作任务、资料画像、写作上下文、大纲、章节草稿、审阅报告和最终成稿',
+        instance=WriterToolGroup(),
     ),
     ToolGroupConfig(
         name='calculator',
@@ -110,6 +140,9 @@ DEFAULT_TOOLS: list[ToolGroupConfig] = [
         description='使用搜索引擎检索互联网内容，自动选择可用的搜索服务',
         instance=_WEB_SEARCH_ENGINE_INSTANCES,
         pick_first_valid=True,
+        capability_id='web_search',
+        equivalence_scope='provider_bound',
+        input_schema={'query': 'string'}, output_schema={'results': 'list'}, required_config=['search_provider'],
     ),
     ToolGroupConfig(
         name='academic_search',
@@ -117,6 +150,9 @@ DEFAULT_TOOLS: list[ToolGroupConfig] = [
         description='搜索学术论文和科学文献，自动选择可用的学术搜索服务',
         instance=_ACADEMIC_SEARCH_ENGINE_INSTANCES,
         pick_first_valid=True,
+        capability_id='academic_search',
+        equivalence_scope='provider_bound',
+        input_schema={'query': 'string'}, output_schema={'papers': 'list'}, required_config=['academic_search_provider'],
     ),
     ToolGroupConfig(
         name='url_fetch',
@@ -137,6 +173,8 @@ DEFAULT_TOOLS: list[ToolGroupConfig] = [
         description='根据文字描述生成图片',
         instance=image_generator,
         model_role='image_generator',
+        capability_id='image_generation',
+        input_schema={'prompt': 'string'}, output_schema={'image': 'file'}, required_config=['image_generator_model'],
     ),
     ToolGroupConfig(
         name='image_editor',
@@ -144,6 +182,7 @@ DEFAULT_TOOLS: list[ToolGroupConfig] = [
         description='根据文字指令编辑参考图片',
         instance=image_editor,
         model_role='image_editor',
+        capability_id='image_editing',
     ),
     ToolGroupConfig(
         name='vocab_learn',
@@ -167,7 +206,7 @@ DEFAULT_TOOLS: list[ToolGroupConfig] = [
         name='skill_editor',
         label='技能编辑',
         description='创建、修改和删除技能',
-        instance=skill_editor,
+        instance=SkillEditorToolGroup(),
     ),
     ToolGroupConfig(
         name='local_fs',
@@ -294,6 +333,13 @@ def get_all_tool_groups() -> list[dict]:
             'methods': methods,
             'can_disable': True,
             'active': group_is_active(cfg),
+            'capability_id': cfg.capability_id or cfg.name,
+            'equivalence_scope': cfg.equivalence_scope,
+            'provider_id': cfg.provider_id,
+            'product_id': cfg.product_id,
+            'input_schema': cfg.input_schema or {},
+            'output_schema': cfg.output_schema or {},
+            'required_config': cfg.required_config or [],
         })
     result.append({
         'name': SKILL_TOOL_GROUP.name,

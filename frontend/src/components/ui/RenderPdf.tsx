@@ -48,15 +48,15 @@ export default function RenderPdf({
   const [containerWidth, setContainerWidth] = useState(0);
   const [scrollTop, setScrollTop] = useState(0);
 
-const pageWidthPx = useMemo(() => {
-  if (defaultPageWidth) {
-    return defaultPageWidth;
-  }
-  if (!containerWidth) {
-    return 900;
-  }
-  return Math.floor(containerWidth * 0.94);
-}, [defaultPageWidth, containerWidth]);
+  const pageWidthPx = useMemo(() => {
+    if (defaultPageWidth) {
+      return defaultPageWidth;
+    }
+    if (!containerWidth) {
+      return 900;
+    }
+    return Math.floor(containerWidth * 0.94);
+  }, [defaultPageWidth, containerWidth]);
   const [pageSlotHeight, setPageSlotHeight] = useState(0);
 
   const [pendingHighlight, setPendingHighlight] = useState(false);
@@ -447,18 +447,18 @@ const pageWidthPx = useMemo(() => {
     GAP * Math.max(0, numPages - 1);
 
   return (
-      <div
-        className={className}
-        ref={containerRef}
-        onScroll={onScroll}
-        style={{
-          overflow: "auto",
-          height: "calc(100vh - 220px)",
-          position: "relative",
-          backgroundColor: gapBackground,
-          ...style,
-        }}
-      >
+    <div
+      className={className}
+      ref={containerRef}
+      onScroll={onScroll}
+      style={{
+        overflow: "auto",
+        height: "calc(100vh - 220px)",
+        position: "relative",
+        backgroundColor: gapBackground,
+        ...style,
+      }}
+    >
       <Document
         file={fileData}
         renderMode={renderMode}

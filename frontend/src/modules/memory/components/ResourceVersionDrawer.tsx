@@ -17,7 +17,17 @@ import {
   type ResourceVersionRecord,
   type ResourceVersionType,
 } from "../resourceVersionApi";
-import { buildDiffLinesWithInline, buildUnifiedDiffLines, formatDateTime } from "../shared";
+import {
+  getSkillRevisionFile,
+  listSkillRevisions,
+  type SkillRevisionRecord,
+} from "../skillApi";
+import {
+  buildDiffLinesWithInline,
+  buildUnifiedDiffLines,
+  formatDateTime,
+  parseMarkdownFrontMatter,
+} from "../shared";
 import { DiffLineContent } from "./DiffLineContent";
 
 interface ResourceVersionDrawerProps {
@@ -34,9 +44,12 @@ const defaultPageSize = 20;
 const changeSourceColorMap: Record<string, string> = {
   auto_apply: "blue",
   direct_save: "green",
+  draft_commit: "purple",
   draft_confirm: "purple",
+  create: "cyan",
   internal_direct: "default",
   review_accept: "gold",
+  metadata_update: "geekblue",
 };
 
 const getChangeSourceLabel = (
@@ -47,9 +60,12 @@ const getChangeSourceLabel = (
   const labelMap: Record<string, string> = {
     auto_apply: t("admin.memoryVersionChangeSourceAutoApply"),
     direct_save: t("admin.memoryVersionChangeSourceDirectSave"),
+    draft_commit: t("admin.memoryVersionChangeSourceDraftConfirm"),
     draft_confirm: t("admin.memoryVersionChangeSourceDraftConfirm"),
+    create: t("admin.memoryVersionChangeSourceCreate", { defaultValue: "Create" }),
     internal_direct: t("admin.memoryVersionChangeSourceInternalDirect"),
     review_accept: t("admin.memoryVersionChangeSourceReviewAccept"),
+    metadata_update: t("admin.memoryVersionChangeSourceMetadataUpdate"),
   };
 
   return labelMap[normalized] || normalized || "-";
@@ -228,6 +244,162 @@ function ResourceVersionDetail({
   );
 }
 
+function SkillRevisionDetail({
+  revision,
+  content,
+  previousContent,
+  loading,
+  error,
+  t,
+  onRetry,
+}: {
+  revision: SkillRevisionRecord | null;
+  content: string;
+  previousContent: string;
+  loading: boolean;
+  error: string;
+  t: ResourceVersionDrawerProps["t"];
+  onRetry: () => void;
+}) {
+  const currentSkill = useMemo(
+    () => parseMarkdownFrontMatter(content),
+    [content],
+  );
+  const previousSkill = useMemo(
+    () => parseMarkdownFrontMatter(previousContent),
+    [previousContent],
+  );
+  const bodyContent = currentSkill?.content ?? content;
+  const previousBodyContent = previousSkill?.content ?? previousContent;
+  const diffLines = useMemo(
+    () => buildDiffLinesWithInline(previousBodyContent, bodyContent),
+    [bodyContent, previousBodyContent],
+  );
+
+  if (loading) {
+    return (
+      <div className="memory-version-detail-card">
+        <Skeleton active paragraph={{ rows: 8 }} />
+      </div>
+    );
+  }
+
+  if (error) {
+    return (
+      <Alert
+        showIcon
+        type="error"
+        message={error}
+        action={
+          <Button size="small" onClick={onRetry}>
+            {t("common.retry")}
+          </Button>
+        }
+      />
+    );
+  }
+
+  if (!revision) {
+    return (
+      <div className="memory-version-detail-empty">
+        <Empty
+          image={Empty.PRESENTED_IMAGE_SIMPLE}
+          description={t("admin.memoryVersionSelectEmpty")}
+        />
+      </div>
+    );
+  }
+
+  return (
+    <div className="memory-version-detail-card">
+      <div className="memory-version-detail-summary">
+        <div>
+          <span>{t("admin.memoryVersionChangeSource")}</span>
+          <strong>{getChangeSourceLabel(revision.changeSource, t)}</strong>
+        </div>
+        <div>
+          <span>{t("admin.memoryVersionRange")}</span>
+          <strong>r{revision.revisionNo}</strong>
+        </div>
+        <div>
+          <span>{t("admin.memoryVersionChangedAt")}</span>
+          <strong>{formatDateTime(revision.createdAt)}</strong>
+        </div>
+      </div>
+
+      <Tabs
+        key={revision.revisionId}
+        defaultActiveKey={revision.changeSource === "metadata_update" ? "metadata" : "content"}
+        className="memory-version-detail-tabs"
+        items={[
+          {
+            key: "content",
+            label: t("admin.memoryVersionTabAfter"),
+            children: (
+              <VersionContentPanel label={t("admin.memoryVersionTabAfter")} content={bodyContent} />
+            ),
+          },
+          {
+            key: "diff",
+            label: t("admin.memoryVersionTabDiff"),
+            children: (
+              <div className="memory-version-diff" aria-label={t("admin.memoryVersionTabDiff")}>
+                {diffLines.length ? (
+                  diffLines.map((line, index) => (
+                    <div
+                      key={`${index}-${line.type}-${line.text}`}
+                      className={`memory-diff-line is-${line.type}`}
+                    >
+                      <span className="memory-diff-prefix">
+                        {line.type === "add" ? "+" : line.type === "remove" ? "-" : " "}
+                      </span>
+                      <DiffLineContent line={line} />
+                    </div>
+                  ))
+                ) : (
+                  <Empty
+                    image={Empty.PRESENTED_IMAGE_SIMPLE}
+                    description={t("admin.memoryVersionDiffEmpty")}
+                  />
+                )}
+              </div>
+            ),
+          },
+          {
+            key: "metadata",
+            label: t("admin.memoryVersionTabMetadata"),
+            children: (
+              <div className="memory-version-detail-summary">
+                <div>
+                  <span>{t("admin.memoryName")}</span>
+                  <strong>{currentSkill?.name || "-"}</strong>
+                  {previousSkill?.name && previousSkill.name !== currentSkill?.name ? (
+                    <small>{previousSkill.name} → {currentSkill?.name || "-"}</small>
+                  ) : null}
+                </div>
+                <div>
+                  <span>{t("admin.memoryDescription")}</span>
+                  <strong>{currentSkill?.description || "-"}</strong>
+                  {previousSkill?.description && previousSkill.description !== currentSkill?.description ? (
+                    <small>{previousSkill.description} → {currentSkill?.description || "-"}</small>
+                  ) : null}
+                </div>
+                <div>
+                  <span>{t("admin.memoryCategory")}</span>
+                  <strong>{currentSkill?.category || "-"}</strong>
+                  {previousSkill?.category && previousSkill.category !== currentSkill?.category ? (
+                    <small>{previousSkill.category} → {currentSkill?.category || "-"}</small>
+                  ) : null}
+                </div>
+              </div>
+            ),
+          },
+        ]}
+      />
+    </div>
+  );
+}
+
 export default function ResourceVersionDrawer({
   open,
   resourceId,
@@ -248,6 +420,13 @@ export default function ResourceVersionDrawer({
   const [detailError, setDetailError] = useState("");
   const [reloadKey, setReloadKey] = useState(0);
   const [detailReloadKey, setDetailReloadKey] = useState(0);
+  const [skillRevisions, setSkillRevisions] = useState<SkillRevisionRecord[]>([]);
+  const [selectedSkillRevision, setSelectedSkillRevision] = useState<SkillRevisionRecord | null>(
+    null,
+  );
+  const [skillRevisionContent, setSkillRevisionContent] = useState("");
+  const [skillRevisionPreviousContent, setSkillRevisionPreviousContent] = useState("");
+  const isSkillResource = resourceType === "skill";
 
   useEffect(() => {
     if (!open) {
@@ -256,7 +435,13 @@ export default function ResourceVersionDrawer({
     setPage(1);
     setSelectedId("");
     setDetail(null);
+    setSelectedId("");
+    setDetail(null);
     setDetailError("");
+    setSkillRevisions([]);
+    setSelectedSkillRevision(null);
+    setSkillRevisionContent("");
+    setSkillRevisionPreviousContent("");
   }, [open, resourceId, resourceType]);
 
   useEffect(() => {
@@ -269,6 +454,17 @@ export default function ResourceVersionDrawer({
     setErrorMessage("");
     void (async () => {
       try {
+        if (isSkillResource) {
+          const revisions = await listSkillRevisions(resourceId);
+          if (ignore) {
+            return;
+          }
+          setSkillRevisions(revisions);
+          setTotal(revisions.length);
+          setSelectedSkillRevision(revisions[0] || null);
+          return;
+        }
+
         const result = await listResourceVersions({
           resourceType,
           resourceId,
@@ -291,6 +487,7 @@ export default function ResourceVersionDrawer({
             t("admin.memoryVersionLoadFailed"),
         );
         setItems([]);
+        setSkillRevisions([]);
         setTotal(0);
       } finally {
         if (!ignore) {
@@ -302,10 +499,68 @@ export default function ResourceVersionDrawer({
     return () => {
       ignore = true;
     };
-  }, [open, page, pageSize, reloadKey, resourceId, resourceType, t]);
+  }, [isSkillResource, open, page, pageSize, reloadKey, resourceId, resourceType, t]);
 
   useEffect(() => {
-    if (!open || !selectedId) {
+    if (!open || !isSkillResource || !selectedSkillRevision) {
+      setSkillRevisionContent("");
+      setSkillRevisionPreviousContent("");
+      setDetailError("");
+      return undefined;
+    }
+
+    let ignore = false;
+    setDetailLoading(true);
+    setDetailError("");
+    void (async () => {
+      try {
+        const currentIndex = skillRevisions.findIndex(
+          (item) => item.revisionId === selectedSkillRevision.revisionId,
+        );
+        const previousRevision =
+          currentIndex >= 0 ? skillRevisions[currentIndex + 1] : undefined;
+        const [currentContent, previousContent] = await Promise.all([
+          getSkillRevisionFile(resourceId, selectedSkillRevision.revisionId),
+          previousRevision
+            ? getSkillRevisionFile(resourceId, previousRevision.revisionId)
+            : Promise.resolve(""),
+        ]);
+        if (ignore) {
+          return;
+        }
+        setSkillRevisionContent(currentContent);
+        setSkillRevisionPreviousContent(previousContent);
+      } catch (error) {
+        if (ignore) {
+          return;
+        }
+        console.error("Load skill revision detail failed:", error);
+        setDetailError(
+          getLocalizedErrorMessage(error, t("admin.memoryVersionDetailLoadFailed")) ||
+            t("admin.memoryVersionDetailLoadFailed"),
+        );
+      } finally {
+        if (!ignore) {
+          setDetailLoading(false);
+        }
+      }
+    })();
+
+    return () => {
+      ignore = true;
+    };
+  }, [
+    detailReloadKey,
+    isSkillResource,
+    open,
+    resourceId,
+    selectedSkillRevision,
+    skillRevisions,
+    t,
+  ]);
+
+  useEffect(() => {
+    if (!open || isSkillResource || !selectedId) {
       setDetail(null);
       setDetailError("");
       return undefined;
@@ -342,7 +597,7 @@ export default function ResourceVersionDrawer({
     return () => {
       ignore = true;
     };
-  }, [detailReloadKey, items, open, selectedId, t]);
+  }, [detailReloadKey, isSkillResource, items, open, selectedId, t]);
 
   const title = (
     <div className="memory-version-drawer-title">
@@ -387,6 +642,39 @@ export default function ResourceVersionDrawer({
             <div className="memory-version-list-skeleton">
               <Skeleton active paragraph={{ rows: 10 }} />
             </div>
+          ) : isSkillResource ? (
+            skillRevisions.length ? (
+              <div className="memory-version-list">
+                {skillRevisions.map((item) => {
+                  const active = selectedSkillRevision?.revisionId === item.revisionId;
+                  const label = getChangeSourceLabel(item.changeSource, t);
+
+                  return (
+                    <button
+                      key={item.revisionId}
+                      type="button"
+                      className={`memory-version-list-item${active ? " is-active" : ""}`}
+                      onClick={() => setSelectedSkillRevision(item)}
+                    >
+                      <span className="memory-version-list-item-main">
+                        <strong>r{item.revisionNo}</strong>
+                        <span>{formatDateTime(item.createdAt)}</span>
+                      </span>
+                      <Tag color={changeSourceColorMap[item.changeSource] || "default"}>
+                        {label}
+                      </Tag>
+                    </button>
+                  );
+                })}
+              </div>
+            ) : (
+              <div className="memory-version-list-empty">
+                <Empty
+                  image={<FileSearchOutlined />}
+                  description={t("admin.memoryVersionEmpty")}
+                />
+              </div>
+            )
           ) : items.length ? (
             <div className="memory-version-list">
               {items.map((item) => {
@@ -422,7 +710,7 @@ export default function ResourceVersionDrawer({
             </div>
           )}
 
-          {total > pageSize ? (
+          {total > pageSize && !isSkillResource ? (
             <Pagination
               size="small"
               current={page}
@@ -441,13 +729,25 @@ export default function ResourceVersionDrawer({
         </aside>
 
         <section className="memory-version-detail-panel">
-          <ResourceVersionDetail
-            detail={detail}
-            loading={detailLoading}
-            error={detailError}
-            t={t}
-            onRetry={() => setDetailReloadKey((value) => value + 1)}
-          />
+          {isSkillResource ? (
+            <SkillRevisionDetail
+              revision={selectedSkillRevision}
+              content={skillRevisionContent}
+              previousContent={skillRevisionPreviousContent}
+              loading={detailLoading}
+              error={detailError}
+              t={t}
+              onRetry={() => setDetailReloadKey((value) => value + 1)}
+            />
+          ) : (
+            <ResourceVersionDetail
+              detail={detail}
+              loading={detailLoading}
+              error={detailError}
+              t={t}
+              onRetry={() => setDetailReloadKey((value) => value + 1)}
+            />
+          )}
         </section>
       </div>
     </Drawer>

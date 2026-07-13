@@ -1,4 +1,4 @@
-export type SourceType = "local" | "s3" | "feishu" | "confluence" | "notion";
+export type SourceType = "local" | "s3" | "feishu" | "confluence" | "notion" | "database";
 export type SourceStatus = "active" | "expired" | "error" | "paused" | "deleted";
 export type ConnectionState = "connected" | "expired" | "error" | "pending";
 export type SyncMode = "manual" | "scheduled";
@@ -25,7 +25,6 @@ export type DataSourceFileType =
   | "pdf"
   | "doc"
   | "docx"
-  | "hwp"
   | "ppt"
   | "pptx"
   | "pptm"
@@ -74,6 +73,9 @@ export interface PendingOAuthAttempt {
   resolved: boolean;
   accountId?: string;
   appId?: string;
+  provider?: "feishu" | "notion";
+  openWizardOnSuccess?: boolean;
+  reopenSetupOnFailure?: boolean;
 }
 
 export interface SyncLogItem {
@@ -142,6 +144,7 @@ export interface DataSourceItem {
   rootPath?: string;
   targetRef?: string;
   targetRefs?: string[];
+  targetLabels?: Record<string, string>;
   targetType?: CloudTargetType;
   targetTypes?: Record<string, CloudTargetType>;
   authConnectionId?: string;
@@ -151,6 +154,18 @@ export interface DataSourceItem {
   bindingTreeKey?: string;
   bindingTreeKeys?: string[];
   configVersion?: number;
+  databaseConnectionId?: string;
+  databaseConnection?: {
+    id: string;
+    display_name: string;
+    description: string;
+    db_type: "mysql" | "postgresql";
+    host: string;
+    port: number;
+    database_name: string;
+    username: string;
+    options: Record<string, string>;
+  };
 }
 
 export interface SourceFormValues {

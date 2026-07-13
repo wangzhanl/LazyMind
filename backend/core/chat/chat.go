@@ -108,8 +108,10 @@ type ChatAgentOptions struct {
 }
 
 type ChatPluginOptions struct {
-	EnablePlugin  *bool          `json:"enable_plugin,omitempty"`
-	PluginContext map[string]any `json:"plugin_context,omitempty"`
+	EnablePlugin           *bool            `json:"enable_plugin,omitempty"`
+	PluginContext          map[string]any   `json:"plugin_context,omitempty"`
+	Catalog                []map[string]any `json:"catalog,omitempty"`
+	DisabledBuiltinPlugins []string         `json:"disabled_builtin_plugins,omitempty"`
 }
 
 // LazyChatData text data text。
@@ -446,6 +448,12 @@ func buildLazyChatRequest(body map[string]any) *LazyChatRequest {
 	if pluginContext, ok := body["plugin_context"].(map[string]any); ok && len(pluginContext) > 0 {
 		req.Plugin.PluginContext = pluginContext
 	}
+	if catalog, ok := body["plugin_catalog"].([]map[string]any); ok {
+		req.Plugin.Catalog = catalog
+	}
+	if ids, ok := body["disabled_builtin_plugins"].([]string); ok {
+		req.Plugin.DisabledBuiltinPlugins = ids
+	}
 	// current_turn_seq is an int in the body map. JSON numbers decode as float64.
 	switch v := body["current_turn_seq"].(type) {
 	case int:
@@ -564,6 +572,13 @@ func filesMapFromAny(v any) map[string][]string {
 }
 
 func stringSlice(v any) []string {
+	if s, ok := v.(string); ok {
+		s = strings.TrimSpace(s)
+		if s == "" {
+			return nil
+		}
+		return []string{s}
+	}
 	if raw, ok := v.([]string); ok {
 		if len(raw) == 0 {
 			return nil
