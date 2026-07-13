@@ -14,7 +14,8 @@ const (
 
 	BindingStatusActive   = "ACTIVE"
 	BindingStatusPaused   = "PAUSED"
-	BindingStatusDeleting = "DELETING"
+	BindingStatusDeleting    = "DELETING"
+	BindingStatusPendingCleanup = "PENDING_CLEANUP"
 
 	SyncModeManual    = "manual"
 	SyncModeScheduled = "scheduled"
@@ -65,6 +66,7 @@ type UpdateSourceRequest struct {
 	IncludeExtensions []string       `json:"include_extensions,omitempty"`
 	ExcludeExtensions []string       `json:"exclude_extensions,omitempty"`
 	SourceOptions     map[string]any `json:"source_options,omitempty"`
+	ChatEnabled       *bool          `json:"chat_enabled,omitempty"`
 }
 
 type BindingInput struct {
@@ -125,6 +127,7 @@ type SourceResponse struct {
 	Name              string         `json:"name"`
 	DatasetID         string         `json:"dataset_id"`
 	Status            string         `json:"status"`
+	ChatEnabled       bool           `json:"chat_enabled"`
 	SourceOptions     map[string]any `json:"source_options,omitempty"`
 	IncludeExtensions []string       `json:"include_extensions,omitempty"`
 	ExcludeExtensions []string       `json:"exclude_extensions,omitempty"`
@@ -179,6 +182,7 @@ type SourceListItemResponse struct {
 	Name                 string                        `json:"name"`
 	DatasetID            string                        `json:"dataset_id"`
 	Status               string                        `json:"status"`
+	ChatEnabled          bool                          `json:"chat_enabled"`
 	SourceOptions        map[string]any                `json:"source_options,omitempty"`
 	IncludeExtensions    []string                      `json:"include_extensions,omitempty"`
 	ExcludeExtensions    []string                      `json:"exclude_extensions,omitempty"`

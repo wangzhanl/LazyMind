@@ -423,6 +423,7 @@ func decodeUpdateSourceRequest(r *http.Request) (sourceengine.UpdateSourceReques
 		Bindings          []sourceengine.BindingInput `json:"bindings,omitempty"`
 		IncludeExtensions []string                    `json:"include_extensions,omitempty"`
 		ExcludeExtensions []string                    `json:"exclude_extensions,omitempty"`
+		ChatEnabled       *bool                        `json:"chat_enabled,omitempty"`
 		SourceOptions     map[string]any              `json:"source_options,omitempty"`
 	}
 	var body updateSourceBody
@@ -435,6 +436,7 @@ func decodeUpdateSourceRequest(r *http.Request) (sourceengine.UpdateSourceReques
 		Bindings:          body.Bindings,
 		IncludeExtensions: body.IncludeExtensions,
 		ExcludeExtensions: body.ExcludeExtensions,
+		ChatEnabled:       body.ChatEnabled,
 		SourceOptions:     body.SourceOptions,
 	}
 	if body.Bindings != nil {
@@ -483,3 +485,4 @@ func boolQueryDefault(r *http.Request, key string, fallback bool) bool {
 	}
 	return parsed
 }
+

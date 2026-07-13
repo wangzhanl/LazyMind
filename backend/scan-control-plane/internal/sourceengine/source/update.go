@@ -31,6 +31,9 @@ func (e *DefaultEngine) UpdateSource(ctx context.Context, callerID, sourceID str
 	if req.SourceOptions != nil {
 		src.SourceOptions = jsonFromMap(req.SourceOptions)
 	}
+	if req.ChatEnabled != nil {
+		src.ChatEnabled = *req.ChatEnabled
+	}
 	src.ConfigVersion++
 	src.UpdatedAt = now
 
@@ -53,7 +56,7 @@ func (e *DefaultEngine) UpdateSource(ctx context.Context, callerID, sourceID str
 		UpdatedBindingIDs: changes.updated,
 		RemovedBindingIDs: changes.removed,
 	}
-	result.JobIDs, result.JobErrors = e.runPostCommitBindingActions(ctx, changes)
+	// 延迟处理：不再立即执行后置动作，等 generateParseTasks 统一处理
 	bindings, err := e.repo.ListBindings(ctx, sourceID)
 	if err != nil {
 		return UpdateSourceResponse{}, mapStoreError(err)
@@ -63,19 +66,20 @@ func (e *DefaultEngine) UpdateSource(ctx context.Context, callerID, sourceID str
 }
 
 type bindingListChanges struct {
-	callerID        string
-	datasetID       string
-	tenantID        string
-	created         []string
-	updated         []string
-	removed         []string
-	createdBindings []preparedBinding
-	updatedBindings []store.BindingUpdateMutation
-	deletedBindings []store.BindingDeleteMutation
-	startWatchers   []store.Binding
-	stopWatchers    []store.Binding
-	reloadWatchers  []store.Binding
-	oldFolderIDs    []string
+	callerID               string
+	datasetID              string
+	tenantID               string
+	created                []string
+	updated                []string
+	removed                []string
+	createdBindings        []preparedBinding
+	updatedBindings        []store.BindingUpdateMutation
+	deletedBindings        []store.BindingDeleteMutation
+	pendingCleanupBindings []store.BindingPendingCleanupMutation
+	startWatchers          []store.Binding
+	stopWatchers           []store.Binding
+	reloadWatchers         []store.Binding
+	oldFolderIDs           []string
 }
 
 func (e *DefaultEngine) prepareBindingList(ctx context.Context, callerID string, src store.Source, inputs []BindingInput, now time.Time) (bindingListChanges, error) {
@@ -127,11 +131,11 @@ func (e *DefaultEngine) prepareBindingList(ctx context.Context, callerID string,
 			continue
 		}
 		changes.removed = append(changes.removed, binding.BindingID)
-		changes.deletedBindings = append(changes.deletedBindings, store.BindingDeleteMutation{SourceID: binding.SourceID, BindingID: binding.BindingID, DeletedAt: now})
-		if localWatcherStoppable(binding) {
-			changes.stopWatchers = append(changes.stopWatchers, binding)
-		}
-		changes.oldFolderIDs = append(changes.oldFolderIDs, binding.CoreParentDocumentID)
+		changes.pendingCleanupBindings = append(changes.pendingCleanupBindings, store.BindingPendingCleanupMutation{
+			SourceID:             binding.SourceID,
+			BindingID:            binding.BindingID,
+			CoreParentDocumentID: binding.CoreParentDocumentID,
+		})
 	}
 	if err := ensureFinalTargetsUnique(existing, changes); err != nil {
 		compensatePreparedMutations(ctx, e, changes)
@@ -141,7 +145,7 @@ func (e *DefaultEngine) prepareBindingList(ctx context.Context, callerID string,
 }
 
 func (c bindingListChanges) mutation(src store.Source, now time.Time) store.SourceUpdateMutation {
-	mutation := store.SourceUpdateMutation{Source: src, UpdateBindings: c.updatedBindings, DeleteBindings: c.deletedBindings, Now: now}
+	mutation := store.SourceUpdateMutation{Source: src, UpdateBindings: c.updatedBindings, DeleteBindings: c.deletedBindings, PendingCleanupBindings: c.pendingCleanupBindings, Now: now}
 	for _, item := range c.createdBindings {
 		mutation.CreateBindings = append(mutation.CreateBindings, store.BindingCreateMutation{Binding: item.binding, Checkpoint: item.checkpoint})
 	}

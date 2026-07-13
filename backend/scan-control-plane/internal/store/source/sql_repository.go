@@ -27,6 +27,16 @@ func NewSQLRepository(db *sql.DB) *SQLRepository {
 	return &SQLRepository{db: db, orm: orm}
 }
 
+func (r *SQLRepository) Migrate(ctx context.Context) error {
+	if r.orm == nil {
+		return nil
+	}
+	if err := r.orm.WithContext(ctx).Exec("ALTER TABLE sources ADD COLUMN IF NOT EXISTS chat_enabled BOOLEAN NOT NULL DEFAULT TRUE").Error; err != nil {
+		return err
+	}
+	return r.orm.WithContext(ctx).Exec("ALTER TABLE source_bindings DROP COLUMN IF EXISTS chat_enabled").Error
+}
+
 func (r *SQLRepository) ormDB(ctx context.Context) *gorm.DB {
 	if r.orm == nil {
 		return nil

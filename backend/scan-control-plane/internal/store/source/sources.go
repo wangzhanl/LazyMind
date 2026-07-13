@@ -68,6 +68,7 @@ type sourceListORMRow struct {
 	Name              string     `gorm:"column:name"`
 	DatasetID         string     `gorm:"column:dataset_id"`
 	Status            string     `gorm:"column:status"`
+	ChatEnabled       bool       `gorm:"column:chat_enabled"`
 	SourceOptions     JSON       `gorm:"column:source_options_json;type:jsonb"`
 	IncludeExtensions JSON       `gorm:"column:include_extensions_json;type:jsonb"`
 	ExcludeExtensions JSON       `gorm:"column:exclude_extensions_json;type:jsonb"`
@@ -86,6 +87,7 @@ func (row sourceListORMRow) source() ormSource {
 		Name:              row.Name,
 		DatasetID:         row.DatasetID,
 		Status:            row.Status,
+		ChatEnabled:        row.ChatEnabled,
 		SourceOptions:     row.SourceOptions,
 		IncludeExtensions: row.IncludeExtensions,
 		ExcludeExtensions: row.ExcludeExtensions,
@@ -104,6 +106,7 @@ func sourceListSelectSQL() string {
 		"s.name AS name",
 		"s.dataset_id AS dataset_id",
 		"s.status AS status",
+		"s.chat_enabled AS chat_enabled",
 		"s.source_options_json AS source_options_json",
 		"s.include_extensions_json AS include_extensions_json",
 		"s.exclude_extensions_json AS exclude_extensions_json",
@@ -183,6 +186,19 @@ func (r *SQLRepository) UpdateSourceWithBindings(ctx context.Context, mutation S
 		}
 		if err := releaseCurrentBindingTargets(ctx, tx, mutation, mutation.Now); err != nil {
 			return err
+		}
+		// 处理待清理的 binding：状态改为 PENDING_CLEANUP，文件标记 PENDING_DELETION
+		for _, item := range mutation.PendingCleanupBindings {
+			if err := tx.Model(&ormBinding{}).Where("binding_id = ?", item.BindingID).Update("status", "PENDING_CLEANUP").Error; err != nil {
+				return err
+			}
+			if err := tx.Model(&ormDocumentState{}).Where("source_id = ? AND binding_id = ?", item.SourceID, item.BindingID).Updates(map[string]any{
+				"source_state":   "PENDING_DELETION",
+				"pending_action": "DELETE",
+				"updated_at":     mutation.Now,
+			}).Error; err != nil {
+				return err
+			}
 		}
 		for _, item := range mutation.DeleteBindings {
 			binding, cleanup, err := r.softDeleteBindingTx(ctx, tx, item.SourceID, item.BindingID, item.DeletedAt)
@@ -335,6 +351,7 @@ func sourceUpdateValues(source Source) map[string]any {
 		"name":                    source.Name,
 		"dataset_id":              source.DatasetID,
 		"status":                  source.Status,
+		"chat_enabled":            source.ChatEnabled,
 		"source_options_json":     source.SourceOptions,
 		"include_extensions_json": source.IncludeExtensions,
 		"exclude_extensions_json": source.ExcludeExtensions,

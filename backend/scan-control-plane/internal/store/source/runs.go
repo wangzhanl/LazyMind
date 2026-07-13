@@ -288,3 +288,21 @@ func queryActiveSyncRunByScopeORM(db *gorm.DB, bindingID string, generation int6
 	}
 	return syncRunFromORM(model), true, nil
 }
+
+
+// ListSyncRuns 查询某个 binding 下的所有 SyncRun（按创建时间倒序）。
+func (r *SQLRepository) ListSyncRuns(ctx context.Context, sourceID, bindingID string) ([]SyncRun, error) {
+	var rows []ormSyncRun
+	err := r.ormDB(ctx).
+		Where("source_id = ? AND binding_id = ?", sourceID, bindingID).
+		Order("started_at DESC").
+		Find(&rows).Error
+	if err != nil {
+		return nil, mapSQLConstraint(err)
+	}
+	runs := make([]SyncRun, 0, len(rows))
+	for _, row := range rows {
+		runs = append(runs, syncRunFromORM(row))
+	}
+	return runs, nil
+}
