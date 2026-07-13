@@ -45,7 +45,7 @@ func TestListGroupModelsIncludesMaxInputTokens(t *testing.T) {
 	}).Error; err != nil {
 		t.Fatalf("create group: %v", err)
 	}
-	limit := int64(8192)
+	limit := "8K"
 	models := []orm.UserModelProviderGroupModel{
 		{
 			ID: "model-default", UserModelProviderID: "provider-1", UserModelProviderGroupID: "group-1",
@@ -75,8 +75,8 @@ func TestListGroupModelsIncludesMaxInputTokens(t *testing.T) {
 	var response struct {
 		Data struct {
 			Models []struct {
-				Name           string `json:"name"`
-				MaxInputTokens *int64 `json:"max_input_tokens"`
+				Name           string  `json:"name"`
+				MaxInputTokens *string `json:"max_input_tokens"`
 			} `json:"models"`
 		} `json:"data"`
 	}
@@ -86,15 +86,15 @@ func TestListGroupModelsIncludesMaxInputTokens(t *testing.T) {
 	if len(response.Data.Models) != 2 {
 		t.Fatalf("models length = %d, want 2", len(response.Data.Models))
 	}
-	byName := make(map[string]*int64, len(response.Data.Models))
+	byName := make(map[string]*string, len(response.Data.Models))
 	for _, model := range response.Data.Models {
 		byName[model.Name] = model.MaxInputTokens
 	}
 	if got := byName["gpt-4o"]; got == nil || *got != limit {
-		t.Fatalf("default max_input_tokens = %v, want %d", got, limit)
+		t.Fatalf("default max_input_tokens = %v, want %s", got, limit)
 	}
 	if got := byName["custom-llm"]; got != nil {
-		t.Fatalf("custom max_input_tokens = %d, want null", *got)
+		t.Fatalf("custom max_input_tokens = %s, want null", *got)
 	}
 
 	const role = "test_llm_limit_role"
@@ -118,19 +118,19 @@ func TestListGroupModelsIncludesMaxInputTokens(t *testing.T) {
 	response = struct {
 		Data struct {
 			Models []struct {
-				Name           string `json:"name"`
-				MaxInputTokens *int64 `json:"max_input_tokens"`
+				Name           string  `json:"name"`
+				MaxInputTokens *string `json:"max_input_tokens"`
 			} `json:"models"`
 		} `json:"data"`
 	}{}
 	if err := json.Unmarshal(globalRec.Body.Bytes(), &response); err != nil {
 		t.Fatalf("decode global response: %v", err)
 	}
-	byName = make(map[string]*int64, len(response.Data.Models))
+	byName = make(map[string]*string, len(response.Data.Models))
 	for _, model := range response.Data.Models {
 		byName[model.Name] = model.MaxInputTokens
 	}
 	if got := byName["gpt-4o"]; got == nil || *got != limit {
-		t.Fatalf("global default max_input_tokens = %v, want %d", got, limit)
+		t.Fatalf("global default max_input_tokens = %v, want %s", got, limit)
 	}
 }
