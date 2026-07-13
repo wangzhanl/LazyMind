@@ -26,14 +26,19 @@ func TestModelCatalogMaxInputTokensOnlyForLLMModels(t *testing.T) {
 	for _, section := range catalog {
 		for _, supplier := range section.Suppliers {
 			for _, model := range supplier.Models {
-				if model.MaxInputTokens == nil {
+				if model.Type != "llm" {
+					if model.MaxInputTokens == nil {
+						continue
+					}
+					t.Errorf("non-llm model %s/%s has max_input_tokens", supplier.Name, model.Name)
 					continue
 				}
-				if model.Type != "llm" {
-					t.Errorf("non-llm model %s/%s has max_input_tokens", supplier.Name, model.Name)
+				if model.MaxInputTokens == nil {
+					t.Errorf("llm model %s/%s is missing max_input_tokens", supplier.Name, model.Name)
+					continue
 				}
 				llmLimitCount++
-				if *model.MaxInputTokens <= 0 {
+				if !maxInputTokensPattern.MatchString(*model.MaxInputTokens) {
 					t.Errorf("llm model %s/%s has invalid max_input_tokens", supplier.Name, model.Name)
 				}
 			}
@@ -132,7 +137,7 @@ func TestUpsertDefaultModelPersistsAndBackfillsMaxInputTokens(t *testing.T) {
 		t.Fatalf("create user model: %v", err)
 	}
 
-	limit := int64(1048576)
+	limit := "1M"
 	if err := upsertDefaultModel(db, now.Add(time.Minute), "default-qwen", "Qwen", catalogModel{
 		Name: "qwen2.5-7b-instruct-1m", Type: "llm", MaxInputTokens: &limit,
 	}); err != nil {
@@ -144,7 +149,7 @@ func TestUpsertDefaultModelPersistsAndBackfillsMaxInputTokens(t *testing.T) {
 		t.Fatalf("query default model: %v", err)
 	}
 	if defaultModel.MaxInputTokens == nil || *defaultModel.MaxInputTokens != limit {
-		t.Fatalf("default max_input_tokens = %v, want %d", defaultModel.MaxInputTokens, limit)
+		t.Fatalf("default max_input_tokens = %v, want %s", defaultModel.MaxInputTokens, limit)
 	}
 
 	var userModel orm.UserModelProviderGroupModel
@@ -152,7 +157,7 @@ func TestUpsertDefaultModelPersistsAndBackfillsMaxInputTokens(t *testing.T) {
 		t.Fatalf("query user model: %v", err)
 	}
 	if userModel.MaxInputTokens == nil || *userModel.MaxInputTokens != limit {
-		t.Fatalf("user max_input_tokens = %v, want %d", userModel.MaxInputTokens, limit)
+		t.Fatalf("user max_input_tokens = %v, want %s", userModel.MaxInputTokens, limit)
 	}
 }
 
@@ -189,7 +194,7 @@ func TestUpsertDefaultModelClearsRemovedMaxInputTokens(t *testing.T) {
 		t.Fatalf("create user provider: %v", err)
 	}
 
-	limit := int64(1048576)
+	limit := "1M"
 	if err := db.Create(&orm.DefaultModel{
 		ID:                     "default-model-qwen",
 		DefaultModelProviderID: "default-qwen",
@@ -229,7 +234,7 @@ func TestUpsertDefaultModelClearsRemovedMaxInputTokens(t *testing.T) {
 		t.Fatalf("query default model: %v", err)
 	}
 	if defaultModel.MaxInputTokens != nil {
-		t.Fatalf("default max_input_tokens = %d, want null", *defaultModel.MaxInputTokens)
+		t.Fatalf("default max_input_tokens = %s, want null", *defaultModel.MaxInputTokens)
 	}
 
 	var userModel orm.UserModelProviderGroupModel
@@ -237,22 +242,22 @@ func TestUpsertDefaultModelClearsRemovedMaxInputTokens(t *testing.T) {
 		t.Fatalf("query user model: %v", err)
 	}
 	if userModel.MaxInputTokens != nil {
-		t.Fatalf("user max_input_tokens = %d, want null", *userModel.MaxInputTokens)
+		t.Fatalf("user max_input_tokens = %s, want null", *userModel.MaxInputTokens)
 	}
 }
 
-func TestUpsertDefaultModelRejectsNonPositiveMaxInputTokens(t *testing.T) {
-	zero := int64(0)
+func TestUpsertDefaultModelRejectsInvalidMaxInputTokens(t *testing.T) {
+	zero := "0"
 	err := upsertDefaultModel(&gorm.DB{}, time.Now(), "provider", "Provider", catalogModel{
 		Name: "llm-model", Type: "llm", MaxInputTokens: &zero,
 	})
-	if err == nil || err.Error() != "model max_input_tokens must be greater than zero" {
+	if err == nil || err.Error() != "model max_input_tokens must use a positive K or M value, for example 128K or 1M" {
 		t.Fatalf("error = %v, want max_input_tokens validation error", err)
 	}
 }
 
 func TestUpsertDefaultModelRejectsMaxInputTokensForNonLLM(t *testing.T) {
-	limit := int64(8192)
+	limit := "8K"
 	err := upsertDefaultModel(&gorm.DB{}, time.Now(), "provider", "Provider", catalogModel{
 		Name: "embedding-model", Type: "embed", MaxInputTokens: &limit,
 	})
