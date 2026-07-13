@@ -31,9 +31,6 @@ func (e *DefaultEngine) UpdateSource(ctx context.Context, callerID, sourceID str
 	if req.SourceOptions != nil {
 		src.SourceOptions = jsonFromMap(req.SourceOptions)
 	}
-	if req.ChatEnabled != nil {
-		src.ChatEnabled = *req.ChatEnabled
-	}
 	src.ConfigVersion++
 	src.UpdatedAt = now
 

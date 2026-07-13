@@ -99,9 +99,6 @@ func openAPIPaths() map[string]any {
 			"put":    pathOperation("updateSourceBinding", "SourceBindingRequest", "BindingMutationResponse", "source_id", "binding_id"),
 			"delete": pathOperation("deleteSourceBinding", "", "DeleteBindingResponse", "source_id", "binding_id"),
 		},
-		"/api/scan/sources/{source_id}/append": map[string]any{
-			"post": createdPathOperation("appendSource", "AppendSourceRequest", "AppendSourceResponse", "source_id"),
-		},
 		"/api/scan/sources/{source_id}/sync": map[string]any{
 			"post": pathOperation("triggerSourceSync", "TriggerSourceSyncRequest", "TriggerSourceSyncResponse", "source_id"),
 		},
@@ -400,7 +397,6 @@ func createSourceRequestSchema() map[string]any {
 	return object([]string{"request_id", "name", "bindings"}, props(
 		"request_id", stringSchema(),
 		"name", stringSchema(),
-		"chat_enabled", boolSchema(),
 		"bindings", arrayOf("SourceBindingRequest"),
 		"include_extensions", stringArray(),
 		"exclude_extensions", stringArray(),
@@ -412,7 +408,6 @@ func updateSourceRequestSchema() map[string]any {
 	return object([]string{"config_version"}, props(
 		"config_version", integerSchema(),
 		"name", stringSchema(),
-		"chat_enabled", boolSchema(),
 		"bindings", arrayOf("SourceBindingRequest"),
 		"include_extensions", stringArray(),
 		"exclude_extensions", stringArray(),
@@ -428,7 +423,6 @@ func sourceResponseSchema() map[string]any {
 		"name", stringSchema(),
 		"dataset_id", stringSchema(),
 		"status", schemaRef("SourceStatus"),
-		"chat_enabled", boolSchema(),
 		"source_options", objectSchema(),
 		"include_extensions", stringArray(),
 		"exclude_extensions", stringArray(),
@@ -447,7 +441,6 @@ func sourceListItemSchema() map[string]any {
 		"name", stringSchema(),
 		"dataset_id", stringSchema(),
 		"status", schemaRef("SourceStatus"),
-		"chat_enabled", boolSchema(),
 		"source_options", objectSchema(),
 		"include_extensions", stringArray(),
 		"exclude_extensions", stringArray(),
@@ -526,7 +519,6 @@ func sourceDocumentItemSchema() map[string]any {
 		"object_key", stringSchema(),
 		"display_name", stringSchema(),
 		"name", stringSchema(),
-		"chat_enabled", boolSchema(),
 		"path", stringSchema(),
 		"directory", stringSchema(),
 		"file_type", stringSchema(),

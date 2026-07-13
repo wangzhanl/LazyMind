@@ -994,6 +994,15 @@ func (s *serverSourceEngineStub) DeleteBinding(context.Context, string, string) 
 	return sourceengine.DeleteBindingResponse{}, nil
 }
 
+
+func (s *serverSourceEngineStub) BatchGetSourcesByDatasetIDs(_ context.Context, datasetIDs []string) (map[string]bool, error) {
+	result := make(map[string]bool, len(datasetIDs))
+	for _, id := range datasetIDs {
+		result[id] = false
+	}
+	return result, nil
+}
+
 type serverTargetTreeStub struct {
 	childrenCalls int
 	lastChildren  tree.TargetTreeChildrenRequest

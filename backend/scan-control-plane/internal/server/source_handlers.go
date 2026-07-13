@@ -143,6 +143,26 @@ func (h *Handler) getSourceByDataset(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, http.StatusOK, resp)
 }
+func (h *Handler) batchGetSourcesByDatasetIDs(w http.ResponseWriter, r *http.Request) {
+	if h.sources == nil {
+		writeError(w, missingDependency("source engine"))
+		return
+	}
+	var req struct {
+		DatasetIDs []string `json:"dataset_ids"`
+	}
+	if err := decodeJSON(r, &req); err != nil {
+		writeError(w, invalidJSON(err))
+		return
+	}
+	result, err := h.sources.BatchGetSourcesByDatasetIDs(r.Context(), req.DatasetIDs)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"source_map": result})
+}
+
 
 func (h *Handler) triggerSourceSync(w http.ResponseWriter, r *http.Request) {
 	if h.sources == nil {
@@ -423,7 +443,6 @@ func decodeUpdateSourceRequest(r *http.Request) (sourceengine.UpdateSourceReques
 		Bindings          []sourceengine.BindingInput `json:"bindings,omitempty"`
 		IncludeExtensions []string                    `json:"include_extensions,omitempty"`
 		ExcludeExtensions []string                    `json:"exclude_extensions,omitempty"`
-		ChatEnabled       *bool                        `json:"chat_enabled,omitempty"`
 		SourceOptions     map[string]any              `json:"source_options,omitempty"`
 	}
 	var body updateSourceBody
@@ -436,7 +455,6 @@ func decodeUpdateSourceRequest(r *http.Request) (sourceengine.UpdateSourceReques
 		Bindings:          body.Bindings,
 		IncludeExtensions: body.IncludeExtensions,
 		ExcludeExtensions: body.ExcludeExtensions,
-		ChatEnabled:       body.ChatEnabled,
 		SourceOptions:     body.SourceOptions,
 	}
 	if body.Bindings != nil {

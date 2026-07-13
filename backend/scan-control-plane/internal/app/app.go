@@ -164,6 +164,9 @@ func buildSQLComponents(cfg config.Config, opener DBOpener) (Components, error) 
 			return Components{}, err
 		}
 	}
+	if err := repo.Migrate(context.Background()); err != nil {
+		return Components{}, err
+	}
 	adapters.Repository = repo
 	adapters.JobQueue = taskengine.NewDBJobQueue(repo)
 	adapters.Scheduler = buildScheduleEngine(adapters, cfg)
