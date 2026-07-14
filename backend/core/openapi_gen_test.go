@@ -631,7 +631,7 @@ func TestOpenAPISpecMarksUIPreferencesPatchFieldsOptional(t *testing.T) {
 	}
 }
 
-func TestOpenAPISpecIncludesLLMMaxInputTokens(t *testing.T) {
+func TestOpenAPISpecIncludesLLMAndVLMMaxInputTokens(t *testing.T) {
 	r := mux.NewRouter()
 	registerAllRoutes(r)
 
@@ -668,6 +668,25 @@ func TestOpenAPISpecIncludesLLMMaxInputTokens(t *testing.T) {
 	}
 	if got := maxInputTokens["nullable"]; got != true {
 		t.Fatalf("max_input_tokens nullable = %v, want true", got)
+	}
+
+	selectedItemSchema, ok := schemas["selectedModelOpenAPIItem"].(map[string]any)
+	if !ok {
+		t.Fatalf("selectedModelOpenAPIItem schema missing")
+	}
+	selectedProperties, ok := selectedItemSchema["properties"].(map[string]any)
+	if !ok {
+		t.Fatalf("selectedModelOpenAPIItem properties missing")
+	}
+	selectedMaxInputTokens, ok := selectedProperties["max_input_tokens"].(map[string]any)
+	if !ok {
+		t.Fatalf("selected models max_input_tokens property missing")
+	}
+	if got := selectedMaxInputTokens["type"]; got != "string" {
+		t.Fatalf("selected models max_input_tokens type = %v, want string", got)
+	}
+	if got := selectedMaxInputTokens["nullable"]; got != true {
+		t.Fatalf("selected models max_input_tokens nullable = %v, want true", got)
 	}
 }
 
