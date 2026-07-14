@@ -291,6 +291,9 @@ func (b *schemaBuilder) inlineSchemaForType(t reflect.Type) map[string]any {
 			if description := strings.TrimSpace(field.Tag.Get("desc")); description != "" {
 				propertySchema["description"] = description
 			}
+			if field.Tag.Get("openapi_nullable") == "true" {
+				propertySchema["nullable"] = true
+			}
 			properties[name] = propertySchema
 			if field.Tag.Get("required") == "true" || (!omitEmpty && !isOptionalField(field.Type)) {
 				required = append(required, name)

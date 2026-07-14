@@ -66,6 +66,7 @@ func TestModelCatalogQwenEmbeddingModelsMatchBailian(t *testing.T) {
 		"text-embedding-v2":       {},
 		"text-embedding-v3":       {},
 		"text-embedding-v4":       {},
+		"qwen3-embedding-32m":     {},
 	}
 	got := map[string]struct{}{}
 	for _, section := range catalog {
