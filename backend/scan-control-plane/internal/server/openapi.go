@@ -259,9 +259,13 @@ func openAPISchemas() map[string]any {
 		"AuthConnectionStatus":          authConnectionStatusSchema(),
 		"GetSourceResponse":             object([]string{"source"}, props("source", schemaRef("SourceResponse"), "bindings", arrayOf("SourceBindingResponse"), "summary", objectSchema())),
 		"UpdateSourceRequest":           updateSourceRequestSchema(),
-		"UpdateSourceResponse":          object([]string{"source", "bindings"}, props("source", schemaRef("SourceResponse"), "bindings", arrayOf("SourceBindingResponse"), "created_binding_ids", stringArray(), "updated_binding_ids", stringArray(), "removed_binding_ids", stringArray(), "job_ids", stringArray())),
+		"UpdateSourceResponse":          object([]string{"source", "bindings"}, props("source", schemaRef("SourceResponse"), "bindings", arrayOf("SourceBindingResponse"), "created_binding_ids", stringArray(), "updated_binding_ids", stringArray(), "removed_binding_ids", stringArray(), "job_ids", stringArray(), "job_errors", arrayOf("JobError"))),
 		"DeleteSourceResponse":          object([]string{"deleted", "source_id"}, props("deleted", boolSchema(), "source_id", stringSchema(), "removed_binding_ids", stringArray(), "removed_dataset_id", stringSchema())),
 		"SourceBindingRequest":          sourceBindingRequestSchema(),
+		"AppendSourceRequest":           appendSourceRequestSchema(),
+		"AppendSourceResponse":          appendSourceResponseSchema(),
+		"JobError":                      jobErrorSchema(),
+		"SourceAppendBindingRequest":    sourceAppendBindingRequestSchema(),
 		"SourceBindingResponse":         sourceBindingResponseSchema(),
 		"SchedulePolicy":                schedulePolicySchema(),
 		"ScheduleRule":                  scheduleRuleSchema(),
@@ -301,11 +305,40 @@ func openAPISchemas() map[string]any {
 		"BindingStatus":                 enumSchema("ACTIVE", "PAUSED", "DELETING", "ERROR"),
 		"CloudAuthConnectionStatus":     enumSchema("ACTIVE", "EXPIRED", "REVOKED", "ERROR", "PENDING"),
 		"SyncMode":                      enumSchema("manual", "scheduled", "watch"),
-		"SourceState":                   enumSchema("NEW", "MODIFIED", "DELETED", "UNCHANGED", "OUT_OF_SCOPE"),
+		"SourceState":                   enumSchema("NEW", "MODIFIED", "DELETED", "UNCHANGED", "OUT_OF_SCOPE", "PENDING_DELETION"),
 		"SyncState":                     enumSchema("IDLE", "SCHEDULED", "PENDING", "RUNNING", "FAILED"),
 		"TaskAction":                    enumSchema("CREATE", "REPARSE", "DELETE"),
 		"ParseTaskStatus":               enumSchema("PENDING", "RUNNING", "SUBMITTED", "SUCCEEDED", "FAILED", "SUPERSEDED"),
 	}
+}
+
+func appendSourceRequestSchema() map[string]any {
+	return object([]string{"bindings"}, props(
+		"bindings", arrayOf("SourceAppendBindingRequest"),
+	))
+}
+
+func jobErrorSchema() map[string]any {
+	return object([]string{"code", "message"}, props(
+		"code", stringSchema(),
+		"message", stringSchema(),
+		"details", objectSchema(),
+	))
+}
+
+func sourceAppendBindingRequestSchema() map[string]any {
+	return object([]string{}, props(
+		"target_ref", stringSchema(),
+		"display_name", stringSchema(),
+	))
+}
+
+func appendSourceResponseSchema() map[string]any {
+	return object([]string{"new_binding_ids", "new_bindings"}, props(
+		"new_binding_ids", stringArray(),
+		"new_bindings", arrayOf("SourceBindingResponse"),
+		"sync_job_errors", arrayOf("JobError"),
+	))
 }
 
 func connectorSpecSchema() map[string]any {
@@ -385,10 +418,18 @@ func updateSourceRequestSchema() map[string]any {
 func sourceResponseSchema() map[string]any {
 	return object([]string{"source_id", "name", "dataset_id", "status", "config_version"}, props(
 		"source_id", stringSchema(),
+		"tenant_id", stringSchema(),
+		"created_by", stringSchema(),
 		"name", stringSchema(),
 		"dataset_id", stringSchema(),
 		"status", schemaRef("SourceStatus"),
+		"source_options", objectSchema(),
+		"include_extensions", stringArray(),
+		"exclude_extensions", stringArray(),
 		"config_version", integerSchema(),
+		"deleted_at", stringSchema(),
+		"created_at", stringSchema(),
+		"updated_at", stringSchema(),
 	))
 }
 

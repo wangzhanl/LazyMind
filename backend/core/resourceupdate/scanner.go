@@ -12,8 +12,6 @@ import (
 
 	"lazymind/core/common"
 	"lazymind/core/common/orm"
-	"lazymind/core/evolution"
-	"lazymind/core/resourcechange"
 )
 
 type Scanner struct {
@@ -134,40 +132,36 @@ func scanSkillReviewResults(ctx context.Context, tx *gorm.DB, now time.Time) (in
 }
 
 func scanSkillReviewResultsForResource(ctx context.Context, tx *gorm.DB, userID, resourceID string, now time.Time) error {
-	var resource orm.SkillResource
-	if err := tx.WithContext(ctx).
-		Where("id = ? AND owner_user_id = ? AND node_type = ?", resourceID, userID, evolution.SkillNodeTypeParent).
-		Take(&resource).Error; err != nil {
-		if errors.Is(err, gorm.ErrRecordNotFound) {
+	if v2Resource, err := skillV2ResourceByID(ctx, tx, userID, resourceID); err == nil {
+		if !v2Resource.AutoEvo {
 			resourceUpdateInfo(logEventResultScanSkipped).
 				Str("resource_type", orm.ResourceUpdateResourceTypeSkill).
 				Str("resource_id", resourceID).
 				Str("user_id", userID).
-				Str("reason", "resource_not_found").
+				Str("reason", "auto_evo_disabled").
 				Msg(logEventResultScanSkipped)
 			return nil
 		}
+		var rows []SkillReviewResult
+		if err := skillResultSelect(withUpdateLock(tx).WithContext(ctx)).
+			Where("review_status = ? AND type = ? AND userid = ? AND skill_name = ?",
+				reviewStatusPending, skillReviewTypePatch, userID, v2Resource.SkillName).
+			Order("time DESC, id DESC").
+			Find(&rows).Error; err != nil {
+			return err
+		}
+		_, _, err := scanSkillReviewResultRows(ctx, tx, rows, now, autoEvoTrigger(v2Resource.AutoEvoGeneration))
+		return err
+	} else if !errors.Is(err, gorm.ErrRecordNotFound) {
 		return err
 	}
-	if !resource.AutoEvo {
-		resourceUpdateInfo(logEventResultScanSkipped).
-			Str("resource_type", orm.ResourceUpdateResourceTypeSkill).
-			Str("resource_id", resourceID).
-			Str("user_id", userID).
-			Str("reason", "auto_evo_disabled").
-			Msg(logEventResultScanSkipped)
-		return nil
-	}
-	var rows []SkillReviewResult
-	if err := skillResultSelect(withUpdateLock(tx).WithContext(ctx)).
-		Where("review_status = ? AND type = ? AND userid = ? AND skill_name = ?",
-			reviewStatusPending, skillReviewTypePatch, userID, resource.SkillName).
-		Order("time DESC, id DESC").
-		Find(&rows).Error; err != nil {
-		return err
-	}
-	_, _, err := scanSkillReviewResultRows(ctx, tx, rows, now, autoEvoTrigger(resource.AutoEvoGeneration))
-	return err
+	resourceUpdateInfo(logEventResultScanSkipped).
+		Str("resource_type", orm.ResourceUpdateResourceTypeSkill).
+		Str("resource_id", resourceID).
+		Str("user_id", userID).
+		Str("reason", "resource_not_found").
+		Msg(logEventResultScanSkipped)
+	return nil
 }
 
 func reviewResultTrigger() autoApplyTrigger {
@@ -230,25 +224,31 @@ func scanSkillReviewResultRows(ctx context.Context, tx *gorm.DB, rows []SkillRev
 			continue
 		}
 		seenPatch[key] = row.ID
-		resource, err := mapSkillPatchResultToResource(tx.WithContext(ctx), row)
-		if err != nil {
-			if errors.Is(err, gorm.ErrRecordNotFound) {
-				expireIDs = append(expireIDs, row.ID)
-				resourceUpdateInfo(logEventResultExpired).
-					Str("resource_type", orm.ResourceUpdateResourceTypeSkill).
-					Str("review_result_id", row.ID).
-					Str("user_id", row.UserID).
-					Str("skill_name", row.SkillName).
-					Str("reason", "skill_patch_resource_not_found").
-					Msg(logEventResultExpired)
-				continue
-			}
+		resourceID := ""
+		autoEvo := false
+		generation := int64(0)
+		v2Resource, err := mapSkillPatchResultToV2Resource(ctx, tx, row)
+		if err == nil {
+			resourceID = v2Resource.ID
+			autoEvo = v2Resource.AutoEvo
+			generation = v2Resource.AutoEvoGeneration
+		} else if !errors.Is(err, gorm.ErrRecordNotFound) {
 			return 0, 0, err
+		} else {
+			expireIDs = append(expireIDs, row.ID)
+			resourceUpdateInfo(logEventResultExpired).
+				Str("resource_type", orm.ResourceUpdateResourceTypeSkill).
+				Str("review_result_id", row.ID).
+				Str("user_id", row.UserID).
+				Str("skill_name", row.SkillName).
+				Str("reason", "skill_patch_resource_not_found").
+				Msg(logEventResultExpired)
+			continue
 		}
-		if !resource.AutoEvo {
+		if !autoEvo {
 			resourceUpdateInfo(logEventResultScanSkipped).
 				Str("resource_type", orm.ResourceUpdateResourceTypeSkill).
-				Str("resource_id", resource.ID).
+				Str("resource_id", resourceID).
 				Str("review_result_id", row.ID).
 				Str("user_id", row.UserID).
 				Str("skill_name", row.SkillName).
@@ -257,9 +257,9 @@ func scanSkillReviewResultRows(ctx context.Context, tx *gorm.DB, rows []SkillRev
 			continue
 		}
 		if trigger.TriggerType == orm.ResourceUpdateTriggerTypeAutoEvoEnabled {
-			trigger.Generation = resource.AutoEvoGeneration
+			trigger.Generation = generation
 		}
-		made, err := ensureAutoApplyTask(ctx, tx, orm.ResourceUpdateResourceTypeSkill, row.UserID, resource.ID, row.ID, now, trigger)
+		made, err := ensureAutoApplyTask(ctx, tx, orm.ResourceUpdateResourceTypeSkill, row.UserID, resourceID, row.ID, now, trigger)
 		if err != nil {
 			return 0, 0, err
 		}
@@ -281,12 +281,7 @@ func scanSkillReviewResultRows(ctx context.Context, tx *gorm.DB, rows []SkillRev
 }
 
 func applyNewSkillReviewResult(ctx context.Context, tx *gorm.DB, row SkillReviewResult, now time.Time) error {
-	if _, err := createSkillFromNewResult(ctx, tx, row, "", now, resourcechange.Source{
-		ChangeSource:  resourcechange.ChangeSourceAutoApply,
-		SourceRefType: resourcechange.SourceRefTypeSkillReviewResult,
-		SourceRefID:   row.ID,
-		ChangedAt:     now,
-	}); err != nil {
+	if _, err := createSkillV2FromNewResult(ctx, tx, row, ""); err != nil {
 		return err
 	}
 	return updateSkillReviewStatus(ctx, tx, row.ID, reviewStatusAccepted)
@@ -399,10 +394,10 @@ func scanMemoryReviewResultsForResource(ctx context.Context, tx *gorm.DB, target
 func mapMemoryReviewResultResource(ctx context.Context, tx *gorm.DB, target string, row MemoryReviewResult) (string, bool, error) {
 	switch target {
 	case orm.ResourceUpdateResourceTypeMemory:
-		resource, err := mapMemoryReviewResultToMemory(tx.WithContext(ctx), row)
+		resource, err := mapMemoryReviewResultToPersonalResource(tx.WithContext(ctx), target, row)
 		return resource.ID, resource.AutoEvo, err
 	case orm.ResourceUpdateResourceTypeUserPreference:
-		resource, err := mapMemoryReviewResultToPreference(tx.WithContext(ctx), row)
+		resource, err := mapMemoryReviewResultToPersonalResource(tx.WithContext(ctx), target, row)
 		return resource.ID, resource.AutoEvo, err
 	default:
 		return "", false, fmt.Errorf("unsupported review target %q", target)
@@ -577,11 +572,11 @@ func currentAutoEvoGeneration(tx *gorm.DB, resourceType, resourceID string) (int
 	var err error
 	switch resourceType {
 	case orm.ResourceUpdateResourceTypeMemory:
-		err = tx.Model(&orm.SystemMemory{}).Select("auto_evo_generation").Where("id = ?", resourceID).Take(&row).Error
+		err = tx.Model(&orm.PersonalResource{}).Select("auto_evo_generation").Where("id = ? AND resource_type = ?", resourceID, resourceType).Take(&row).Error
 	case orm.ResourceUpdateResourceTypeUserPreference:
-		err = tx.Model(&orm.SystemUserPreference{}).Select("auto_evo_generation").Where("id = ?", resourceID).Take(&row).Error
+		err = tx.Model(&orm.PersonalResource{}).Select("auto_evo_generation").Where("id = ? AND resource_type = ?", resourceID, resourceType).Take(&row).Error
 	case orm.ResourceUpdateResourceTypeSkill:
-		err = tx.Model(&orm.SkillResource{}).Select("auto_evo_generation").Where("id = ?", resourceID).Take(&row).Error
+		err = tx.Model(&orm.SkillV2Skill{}).Select("auto_evo_generation").Where("id = ?", resourceID).Take(&row).Error
 	default:
 		return 0, fmt.Errorf("unsupported resource type %q", resourceType)
 	}
