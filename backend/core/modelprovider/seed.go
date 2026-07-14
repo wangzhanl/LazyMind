@@ -119,8 +119,8 @@ func upsertDefaultModel(tx *gorm.DB, now time.Time, providerID, providerName str
 		return errors.New("model name and type are required")
 	}
 	if item.MaxInputTokens != nil {
-		if modelType != "llm" {
-			return errors.New("model max_input_tokens is only supported for llm models")
+		if modelType != "llm" && modelType != "vlm" {
+			return errors.New("model max_input_tokens is only supported for llm or vlm models")
 		}
 		maxInputTokens := strings.ToUpper(strings.TrimSpace(*item.MaxInputTokens))
 		if !maxInputTokensPattern.MatchString(maxInputTokens) {
