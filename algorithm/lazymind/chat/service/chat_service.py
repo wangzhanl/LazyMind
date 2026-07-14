@@ -469,7 +469,8 @@ async def handle_chat(request: ChatRequest) -> Union[Dict[str, Any], StreamingRe
     lazyllm.globals['agentic_config'] = agentic_config
 
     plugin_tools, plugin_system_prompt, plugin_stop_tools, agentic_config_patch, plugin_artifact_context = \
-        resolve_plugin_injection(plugin.plugin_context, conversation_id=conversation_id)
+        resolve_plugin_injection(plugin.plugin_context, conversation_id=conversation_id, plugin_catalog=plugin.catalog,
+                                 disabled_builtin_plugins=plugin.disabled_builtin_plugins)
     agentic_config.update(agentic_config_patch)
 
     # Inject SubAgent task context into the system prompt independently of plugin state.
@@ -546,6 +547,8 @@ async def handle_chat(request: ChatRequest) -> Union[Dict[str, Any], StreamingRe
         user_preference=personalization.user_preference,
         memory=personalization.memory,
         files=display_files,
+        current_query=query,
+        conversation_history=agent_history,
     )
     if plugin_system_prompt:
         runtime_prompt = runtime_prompt + '\n\n' + plugin_system_prompt
