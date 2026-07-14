@@ -40,7 +40,6 @@ const (
 )
 
 const (
-	runningStatus                = "running"
 	conversationIdleTTLKeyPrefix = "lazymind:conversation_idle:ttl:"
 	defaultDeferredRetryAfter    = time.Minute
 	triggerSourceScheduled       = "scheduled"
@@ -235,7 +234,8 @@ func findRunningSkillMaintenanceTask(ctx context.Context, db *gorm.DB, userID st
 	err := db.WithContext(ctx).
 		Table("skill_review_stats").
 		Select("id, requestid, status, started_at").
-		Where("userid = ? AND status = ?", userID, runningStatus).
+		Where("userid = ?", userID).
+		Scopes(orm.SkillReviewStatsActiveScope).
 		Order("started_at DESC, id DESC").
 		Take(&row).Error
 	if errors.Is(err, gorm.ErrRecordNotFound) {

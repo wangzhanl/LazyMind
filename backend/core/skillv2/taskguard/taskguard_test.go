@@ -36,17 +36,20 @@ func TestEvaluateSkillOperationRules(t *testing.T) {
 	base := SkillOperationRequest{UserID: "user_001"}
 	assertDecision("review allowed without maintenance", withOperation(base, TriggerSkillReview), true, "", "")
 
-	insertStats(t, db, "review_running", "review_req", "other_user", runningStatus)
+	insertStats(t, db, "review_preparing", "review_req", "other_user", "preparing")
 	assertDecision("other user does not block", withOperation(base, TriggerSkillReview), true, "", "")
 
-	insertStats(t, db, "review_running_own", "review_req_own", "user_001", runningStatus)
-	assertDecision("running maintenance rejects manual review", withOperation(base, TriggerSkillReview), false, ReasonMaintenanceTaskRunning, DispositionReject)
+	insertStats(t, db, "review_analyzing_own", "review_req_own", "user_001", "analyzing")
+	assertDecision("non-terminal maintenance rejects manual review", withOperation(base, TriggerSkillReview), false, ReasonMaintenanceTaskRunning, DispositionReject)
 	scheduled := withOperation(base, TriggerSkillReview)
 	scheduled.TriggerSource = triggerSourceScheduled
-	assertDecision("running maintenance defers scheduled review", scheduled, false, ReasonMaintenanceTaskRunning, DispositionDefer)
+	assertDecision("non-terminal maintenance defers scheduled review", scheduled, false, ReasonMaintenanceTaskRunning, DispositionDefer)
 	if err := db.Table("skill_review_stats").Where("userid = ?", "user_001").Update("status", "completed").Error; err != nil {
 		t.Fatalf("complete maintenance: %v", err)
 	}
+	insertStats(t, db, "review_skipped_own", "review_req_skipped", "user_001", "skipped")
+	insertStats(t, db, "review_failed_own", "review_req_failed", "user_001", "failed")
+	assertDecision("terminal maintenance statuses do not block", withOperation(base, TriggerSkillReview), true, "", "")
 
 	testutil.SeedTextBlob(t, db, "draft_hash", "draft")
 	testutil.SeedDraftEntry(t, db, "skill1", "SKILL.md", "upsert", "file", "draft_hash")
@@ -92,7 +95,7 @@ func TestEvaluateSkillOperationRemoteMaintenanceAndAutoUpdate(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = stateStore.Close() })
 
-	insertStats(t, db, "org_task", "org_request", "user_001", runningStatus)
+	insertStats(t, db, "org_task", "org_request", "user_001", "organizing")
 	orgWrite := SkillOperationRequest{UserID: "user_001", SkillID: "skill1", TaskID: "org_request", Operation: WriteSkillDraft, TriggerSource: "remote_fs"}
 	decision, err := EvaluateSkillOperation(context.Background(), db.DB, stateStore, orgWrite)
 	if err != nil {
@@ -105,7 +108,7 @@ func TestEvaluateSkillOperationRemoteMaintenanceAndAutoUpdate(t *testing.T) {
 	if err := db.Table("skill_review_stats").Where("id = ?", "org_task").Update("status", "completed").Error; err != nil {
 		t.Fatalf("complete org task: %v", err)
 	}
-	insertStats(t, db, "review_task", "review_request", "user_001", runningStatus)
+	insertStats(t, db, "review_task", "review_request", "user_001", "generating")
 	reviewWrite := orgWrite
 	reviewWrite.TaskID = "review_request"
 	decision, err = EvaluateSkillOperation(context.Background(), db.DB, stateStore, reviewWrite)
