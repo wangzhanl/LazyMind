@@ -18,12 +18,11 @@ func TestSkillReviewStatsActiveScope(t *testing.T) {
 		t.Fatalf("create skill_review_stats: %v", err)
 	}
 	for id, status := range map[string]string{
-		"legacy-running": "running",
-		"preparing":      "preparing",
-		"analyzing":      "analyzing",
-		"completed":      "completed",
-		"skipped":        "skipped",
-		"failed":         "failed",
+		"preparing": "preparing",
+		"analyzing": "analyzing",
+		"completed": "completed",
+		"skipped":   "skipped",
+		"failed":    "failed",
 	} {
 		if err := db.Table("skill_review_stats").Create(map[string]any{"id": id, "status": status}).Error; err != nil {
 			t.Fatalf("insert status %q: %v", status, err)
@@ -34,7 +33,7 @@ func TestSkillReviewStatsActiveScope(t *testing.T) {
 	if err := db.Table("skill_review_stats").Scopes(SkillReviewStatsActiveScope).Order("id").Pluck("id", &ids).Error; err != nil {
 		t.Fatalf("query active statuses: %v", err)
 	}
-	want := []string{"analyzing", "legacy-running", "preparing"}
+	want := []string{"analyzing", "preparing"}
 	if !reflect.DeepEqual(ids, want) {
 		t.Fatalf("active ids = %#v, want %#v", ids, want)
 	}
