@@ -483,8 +483,8 @@ func (s reviewVersionStore) AfterCommit(ctx context.Context, tx *gorm.DB, revisi
 	return skillsearch.RebuildSkillTx(ctx, tx, revision.ResourceID, revision.CreatedAt)
 }
 
-func (s reviewVersionStore) AfterRollback(ctx context.Context, tx *gorm.DB, revision versionfs.RevisionRecord, entries map[string]versionfs.Entry) error {
-	return skillsearch.RebuildSkillTx(ctx, tx, revision.ResourceID, revision.CreatedAt)
+func (s reviewVersionStore) AfterRollback(ctx context.Context, tx *gorm.DB, skillID string, revisionID string, entries map[string]versionfs.Entry, now time.Time) error {
+	return skillsearch.RebuildSkillTx(ctx, tx, skillID, now)
 }
 
 func (s reviewVersionStore) ListBlobHashes(ctx context.Context, tx *gorm.DB) ([]string, error) {
