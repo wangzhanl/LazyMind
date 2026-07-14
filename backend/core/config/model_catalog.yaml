@@ -865,10 +865,13 @@ model_providers:
           type: embed
         - name: deepseek-v4-flash
           type: llm
+          max_input_tokens: "1M"
         - name: glm-5.2
           type: llm
+          max_input_tokens: "1M"
         - name: sensenova-6.7-flash-lite
           type: llm
+          max_input_tokens: "256K"
         - name: sensenova-u1-fast
           type: text2image
         - name: sensenova-u1-fast
