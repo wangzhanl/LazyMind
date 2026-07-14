@@ -258,16 +258,16 @@ export interface BatchUploadTasksResponse {
 }
 export interface BuiltinSkillListOpenAPIResponse {
     'items'?: Array<BuiltinSkillOpenAPIResponse>;
-    'total'?: number;
+    'total': number;
 }
 export interface BuiltinSkillOpenAPIResponse {
-    'builtin_skill_uid'?: string;
-    'category'?: string;
-    'content'?: string;
-    'description'?: string;
-    'installed'?: boolean;
+    'builtin_skill_uid': string;
+    'category': string;
+    'content': string;
+    'description': string;
+    'installed': boolean;
     'installed_skill_id'?: string;
-    'name'?: string;
+    'name': string;
 }
 export interface CanResult {
     'allowed'?: boolean;
@@ -1214,6 +1214,16 @@ export interface PersonalizationSettingOpenAPIRequest {
 }
 export interface PersonalizationSettingOpenAPIResponse {
     'enabled': boolean;
+}
+export interface PluginRepairPreviewOpenAPIRequest {
+    'mode': string;
+    'target': string;
+}
+export interface PluginWorkflowConfirmOpenAPIRequest {
+    'analysis_id': string;
+    'candidate_id': string;
+    'draft_version': number;
+    'source_skill_revision_id': string;
 }
 export interface PromptCategory {
     /**
@@ -20761,10 +20771,11 @@ export const ModelProvidersApiAxiosParamCreator = function (configuration?: Conf
          * @param {string} [category] 
          * @param {string} [excludeCategory] 
          * @param {string} [keyword] 
+         * @param {string} [acceptLanguage] Optional UI locale. zh and zh-* use zh-CN; en and en-* use en-US. Missing or unsupported values default to zh-CN.
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
          */
-        apiCoreModelProvidersGet: async (category?: string, excludeCategory?: string, keyword?: string, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
+        apiCoreModelProvidersGet: async (category?: string, excludeCategory?: string, keyword?: string, acceptLanguage?: string, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
             const localVarPath = `/api/core/model_providers`;
             // use dummy base URL string because the URL constructor only accepts absolute URLs.
             const localVarUrlObj = new URL(localVarPath, DUMMY_BASE_URL);
@@ -20791,6 +20802,9 @@ export const ModelProvidersApiAxiosParamCreator = function (configuration?: Conf
 
             localVarHeaderParameter['Accept'] = 'application/json';
 
+            if (acceptLanguage != null) {
+                localVarHeaderParameter['Accept-Language'] = String(acceptLanguage);
+            }
             setSearchParams(localVarUrlObj, localVarQueryParameter);
             let headersFromBaseOptions = baseOptions && baseOptions.headers ? baseOptions.headers : {};
             localVarRequestOptions.headers = {...localVarHeaderParameter, ...headersFromBaseOptions, ...options.headers};
@@ -21393,10 +21407,11 @@ export const ModelProvidersApiAxiosParamCreator = function (configuration?: Conf
         /**
          * Returns user_model_providers for the current user that have at least one non-deleted row in user_model_provider_groups. The current user identity is injected by the auth gateway from the token. Same response shape as GET /model_providers.
          * @summary List user model providers that have groups
+         * @param {string} [acceptLanguage] Optional UI locale. zh and zh-* use zh-CN; en and en-* use en-US. Missing or unsupported values default to zh-CN.
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
          */
-        apiCoreModelProvidersWithGroupsGet: async (options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
+        apiCoreModelProvidersWithGroupsGet: async (acceptLanguage?: string, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
             const localVarPath = `/api/core/model_providers:with_groups`;
             // use dummy base URL string because the URL constructor only accepts absolute URLs.
             const localVarUrlObj = new URL(localVarPath, DUMMY_BASE_URL);
@@ -21411,6 +21426,9 @@ export const ModelProvidersApiAxiosParamCreator = function (configuration?: Conf
 
             localVarHeaderParameter['Accept'] = 'application/json';
 
+            if (acceptLanguage != null) {
+                localVarHeaderParameter['Accept-Language'] = String(acceptLanguage);
+            }
             setSearchParams(localVarUrlObj, localVarQueryParameter);
             let headersFromBaseOptions = baseOptions && baseOptions.headers ? baseOptions.headers : {};
             localVarRequestOptions.headers = {...localVarHeaderParameter, ...headersFromBaseOptions, ...options.headers};
@@ -21447,11 +21465,12 @@ export const ModelProvidersApiFp = function(configuration?: Configuration) {
          * @param {string} [category] 
          * @param {string} [excludeCategory] 
          * @param {string} [keyword] 
+         * @param {string} [acceptLanguage] Optional UI locale. zh and zh-* use zh-CN; en and en-* use en-US. Missing or unsupported values default to zh-CN.
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
          */
-        async apiCoreModelProvidersGet(category?: string, excludeCategory?: string, keyword?: string, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<ListUserModelProvidersOpenAPIResponse>> {
-            const localVarAxiosArgs = await localVarAxiosParamCreator.apiCoreModelProvidersGet(category, excludeCategory, keyword, options);
+        async apiCoreModelProvidersGet(category?: string, excludeCategory?: string, keyword?: string, acceptLanguage?: string, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<ListUserModelProvidersOpenAPIResponse>> {
+            const localVarAxiosArgs = await localVarAxiosParamCreator.apiCoreModelProvidersGet(category, excludeCategory, keyword, acceptLanguage, options);
             const localVarOperationServerIndex = configuration?.serverIndex ?? 0;
             const localVarOperationServerBasePath = operationServerMap['ModelProvidersApi.apiCoreModelProvidersGet']?.[localVarOperationServerIndex]?.url;
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
@@ -21676,11 +21695,12 @@ export const ModelProvidersApiFp = function(configuration?: Configuration) {
         /**
          * Returns user_model_providers for the current user that have at least one non-deleted row in user_model_provider_groups. The current user identity is injected by the auth gateway from the token. Same response shape as GET /model_providers.
          * @summary List user model providers that have groups
+         * @param {string} [acceptLanguage] Optional UI locale. zh and zh-* use zh-CN; en and en-* use en-US. Missing or unsupported values default to zh-CN.
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
          */
-        async apiCoreModelProvidersWithGroupsGet(options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<ListUserModelProvidersOpenAPIResponse>> {
-            const localVarAxiosArgs = await localVarAxiosParamCreator.apiCoreModelProvidersWithGroupsGet(options);
+        async apiCoreModelProvidersWithGroupsGet(acceptLanguage?: string, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<ListUserModelProvidersOpenAPIResponse>> {
+            const localVarAxiosArgs = await localVarAxiosParamCreator.apiCoreModelProvidersWithGroupsGet(acceptLanguage, options);
             const localVarOperationServerIndex = configuration?.serverIndex ?? 0;
             const localVarOperationServerBasePath = operationServerMap['ModelProvidersApi.apiCoreModelProvidersWithGroupsGet']?.[localVarOperationServerIndex]?.url;
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
@@ -21711,7 +21731,7 @@ export const ModelProvidersApiFactory = function (configuration?: Configuration,
          * @throws {RequiredError}
          */
         apiCoreModelProvidersGet(requestParameters: ModelProvidersApiApiCoreModelProvidersGetRequest = {}, options?: RawAxiosRequestConfig): AxiosPromise<ListUserModelProvidersOpenAPIResponse> {
-            return localVarFp.apiCoreModelProvidersGet(requestParameters.category, requestParameters.excludeCategory, requestParameters.keyword, options).then((request) => request(axios, basePath));
+            return localVarFp.apiCoreModelProvidersGet(requestParameters.category, requestParameters.excludeCategory, requestParameters.keyword, requestParameters.acceptLanguage, options).then((request) => request(axios, basePath));
         },
         /**
          * Lists non-deleted groups for the user model provider. model_provider_id is the id from GET /model_providers. Each item includes api_key.
@@ -21874,11 +21894,12 @@ export const ModelProvidersApiFactory = function (configuration?: Configuration,
         /**
          * Returns user_model_providers for the current user that have at least one non-deleted row in user_model_provider_groups. The current user identity is injected by the auth gateway from the token. Same response shape as GET /model_providers.
          * @summary List user model providers that have groups
+         * @param {ModelProvidersApiApiCoreModelProvidersWithGroupsGetRequest} requestParameters Request parameters.
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
          */
-        apiCoreModelProvidersWithGroupsGet(options?: RawAxiosRequestConfig): AxiosPromise<ListUserModelProvidersOpenAPIResponse> {
-            return localVarFp.apiCoreModelProvidersWithGroupsGet(options).then((request) => request(axios, basePath));
+        apiCoreModelProvidersWithGroupsGet(requestParameters: ModelProvidersApiApiCoreModelProvidersWithGroupsGetRequest = {}, options?: RawAxiosRequestConfig): AxiosPromise<ListUserModelProvidersOpenAPIResponse> {
+            return localVarFp.apiCoreModelProvidersWithGroupsGet(requestParameters.acceptLanguage, options).then((request) => request(axios, basePath));
         },
     };
 };
@@ -21892,6 +21913,11 @@ export interface ModelProvidersApiApiCoreModelProvidersGetRequest {
     readonly excludeCategory?: string
 
     readonly keyword?: string
+
+    /**
+     * Optional UI locale. zh and zh-* use zh-CN; en and en-* use en-US. Missing or unsupported values default to zh-CN.
+     */
+    readonly acceptLanguage?: string
 }
 
 /**
@@ -22015,6 +22041,16 @@ export interface ModelProvidersApiApiCoreModelProvidersVerifiedGetRequest {
 }
 
 /**
+ * Request parameters for apiCoreModelProvidersWithGroupsGet operation in ModelProvidersApi.
+ */
+export interface ModelProvidersApiApiCoreModelProvidersWithGroupsGetRequest {
+    /**
+     * Optional UI locale. zh and zh-* use zh-CN; en and en-* use en-US. Missing or unsupported values default to zh-CN.
+     */
+    readonly acceptLanguage?: string
+}
+
+/**
  * ModelProvidersApi - object-oriented interface
  */
 export class ModelProvidersApi extends BaseAPI {
@@ -22036,7 +22072,7 @@ export class ModelProvidersApi extends BaseAPI {
      * @throws {RequiredError}
      */
     public apiCoreModelProvidersGet(requestParameters: ModelProvidersApiApiCoreModelProvidersGetRequest = {}, options?: RawAxiosRequestConfig) {
-        return ModelProvidersApiFp(this.configuration).apiCoreModelProvidersGet(requestParameters.category, requestParameters.excludeCategory, requestParameters.keyword, options).then((request) => request(this.axios, this.basePath));
+        return ModelProvidersApiFp(this.configuration).apiCoreModelProvidersGet(requestParameters.category, requestParameters.excludeCategory, requestParameters.keyword, requestParameters.acceptLanguage, options).then((request) => request(this.axios, this.basePath));
     }
 
     /**
@@ -22216,11 +22252,12 @@ export class ModelProvidersApi extends BaseAPI {
     /**
      * Returns user_model_providers for the current user that have at least one non-deleted row in user_model_provider_groups. The current user identity is injected by the auth gateway from the token. Same response shape as GET /model_providers.
      * @summary List user model providers that have groups
+     * @param {ModelProvidersApiApiCoreModelProvidersWithGroupsGetRequest} requestParameters Request parameters.
      * @param {*} [options] Override http request option.
      * @throws {RequiredError}
      */
-    public apiCoreModelProvidersWithGroupsGet(options?: RawAxiosRequestConfig) {
-        return ModelProvidersApiFp(this.configuration).apiCoreModelProvidersWithGroupsGet(options).then((request) => request(this.axios, this.basePath));
+    public apiCoreModelProvidersWithGroupsGet(requestParameters: ModelProvidersApiApiCoreModelProvidersWithGroupsGetRequest = {}, options?: RawAxiosRequestConfig) {
+        return ModelProvidersApiFp(this.configuration).apiCoreModelProvidersWithGroupsGet(requestParameters.acceptLanguage, options).then((request) => request(this.axios, this.basePath));
     }
 }
 
@@ -23557,6 +23594,362 @@ export class PersonalizationApi extends BaseAPI {
      */
     public apiCorePersonalizationSettingPut(requestParameters: PersonalizationApiApiCorePersonalizationSettingPutRequest, options?: RawAxiosRequestConfig) {
         return PersonalizationApiFp(this.configuration).apiCorePersonalizationSettingPut(requestParameters.personalizationSettingOpenAPIRequest, options).then((request) => request(this.axios, this.basePath));
+    }
+}
+
+
+
+/**
+ * PluginApi - axios parameter creator
+ */
+export const PluginApiAxiosParamCreator = function (configuration?: Configuration) {
+    return {
+        /**
+         * 
+         * @summary Confirm Skill workflow candidate
+         * @param {string} draftId 
+         * @param {PluginWorkflowConfirmOpenAPIRequest} pluginWorkflowConfirmOpenAPIRequest 
+         * @param {*} [options] Override http request option.
+         * @throws {RequiredError}
+         */
+        apiCorePluginDraftsDraftIdConfirmWorkflowPost: async (draftId: string, pluginWorkflowConfirmOpenAPIRequest: PluginWorkflowConfirmOpenAPIRequest, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
+            // verify required parameter 'draftId' is not null or undefined
+            assertParamExists('apiCorePluginDraftsDraftIdConfirmWorkflowPost', 'draftId', draftId)
+            // verify required parameter 'pluginWorkflowConfirmOpenAPIRequest' is not null or undefined
+            assertParamExists('apiCorePluginDraftsDraftIdConfirmWorkflowPost', 'pluginWorkflowConfirmOpenAPIRequest', pluginWorkflowConfirmOpenAPIRequest)
+            const localVarPath = `/api/core/plugin-drafts/{draft_id}:confirm-workflow`
+                .replace(`{${"draft_id"}}`, encodeURIComponent(String(draftId)));
+            // use dummy base URL string because the URL constructor only accepts absolute URLs.
+            const localVarUrlObj = new URL(localVarPath, DUMMY_BASE_URL);
+            let baseOptions;
+            if (configuration) {
+                baseOptions = configuration.baseOptions;
+            }
+
+            const localVarRequestOptions = { method: 'POST', ...baseOptions, ...options};
+            const localVarHeaderParameter = {} as any;
+            const localVarQueryParameter = {} as any;
+
+            localVarHeaderParameter['Content-Type'] = 'application/json';
+            localVarHeaderParameter['Accept'] = 'application/json';
+
+            setSearchParams(localVarUrlObj, localVarQueryParameter);
+            let headersFromBaseOptions = baseOptions && baseOptions.headers ? baseOptions.headers : {};
+            localVarRequestOptions.headers = {...localVarHeaderParameter, ...headersFromBaseOptions, ...options.headers};
+            localVarRequestOptions.data = serializeDataIfNeeded(pluginWorkflowConfirmOpenAPIRequest, localVarRequestOptions, configuration)
+
+            return {
+                url: toPathString(localVarUrlObj),
+                options: localVarRequestOptions,
+            };
+        },
+        /**
+         * 
+         * @summary Get Plugin generation analysis
+         * @param {string} draftId 
+         * @param {*} [options] Override http request option.
+         * @throws {RequiredError}
+         */
+        apiCorePluginDraftsDraftIdGenerationAnalysisGet: async (draftId: string, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
+            // verify required parameter 'draftId' is not null or undefined
+            assertParamExists('apiCorePluginDraftsDraftIdGenerationAnalysisGet', 'draftId', draftId)
+            const localVarPath = `/api/core/plugin-drafts/{draft_id}/generation-analysis`
+                .replace(`{${"draft_id"}}`, encodeURIComponent(String(draftId)));
+            // use dummy base URL string because the URL constructor only accepts absolute URLs.
+            const localVarUrlObj = new URL(localVarPath, DUMMY_BASE_URL);
+            let baseOptions;
+            if (configuration) {
+                baseOptions = configuration.baseOptions;
+            }
+
+            const localVarRequestOptions = { method: 'GET', ...baseOptions, ...options};
+            const localVarHeaderParameter = {} as any;
+            const localVarQueryParameter = {} as any;
+
+            localVarHeaderParameter['Accept'] = 'application/json';
+
+            setSearchParams(localVarUrlObj, localVarQueryParameter);
+            let headersFromBaseOptions = baseOptions && baseOptions.headers ? baseOptions.headers : {};
+            localVarRequestOptions.headers = {...localVarHeaderParameter, ...headersFromBaseOptions, ...options.headers};
+
+            return {
+                url: toPathString(localVarUrlObj),
+                options: localVarRequestOptions,
+            };
+        },
+        /**
+         * 
+         * @summary Preview Plugin repair
+         * @param {string} draftId 
+         * @param {PluginRepairPreviewOpenAPIRequest} pluginRepairPreviewOpenAPIRequest 
+         * @param {*} [options] Override http request option.
+         * @throws {RequiredError}
+         */
+        apiCorePluginDraftsDraftIdRepairPreviewPost: async (draftId: string, pluginRepairPreviewOpenAPIRequest: PluginRepairPreviewOpenAPIRequest, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
+            // verify required parameter 'draftId' is not null or undefined
+            assertParamExists('apiCorePluginDraftsDraftIdRepairPreviewPost', 'draftId', draftId)
+            // verify required parameter 'pluginRepairPreviewOpenAPIRequest' is not null or undefined
+            assertParamExists('apiCorePluginDraftsDraftIdRepairPreviewPost', 'pluginRepairPreviewOpenAPIRequest', pluginRepairPreviewOpenAPIRequest)
+            const localVarPath = `/api/core/plugin-drafts/{draft_id}:repair-preview`
+                .replace(`{${"draft_id"}}`, encodeURIComponent(String(draftId)));
+            // use dummy base URL string because the URL constructor only accepts absolute URLs.
+            const localVarUrlObj = new URL(localVarPath, DUMMY_BASE_URL);
+            let baseOptions;
+            if (configuration) {
+                baseOptions = configuration.baseOptions;
+            }
+
+            const localVarRequestOptions = { method: 'POST', ...baseOptions, ...options};
+            const localVarHeaderParameter = {} as any;
+            const localVarQueryParameter = {} as any;
+
+            localVarHeaderParameter['Content-Type'] = 'application/json';
+            localVarHeaderParameter['Accept'] = 'application/json';
+
+            setSearchParams(localVarUrlObj, localVarQueryParameter);
+            let headersFromBaseOptions = baseOptions && baseOptions.headers ? baseOptions.headers : {};
+            localVarRequestOptions.headers = {...localVarHeaderParameter, ...headersFromBaseOptions, ...options.headers};
+            localVarRequestOptions.data = serializeDataIfNeeded(pluginRepairPreviewOpenAPIRequest, localVarRequestOptions, configuration)
+
+            return {
+                url: toPathString(localVarUrlObj),
+                options: localVarRequestOptions,
+            };
+        },
+        /**
+         * 
+         * @summary Get Plugin repair run
+         * @param {string} draftId 
+         * @param {string} repairId 
+         * @param {*} [options] Override http request option.
+         * @throws {RequiredError}
+         */
+        apiCorePluginDraftsDraftIdRepairRunsRepairIdGet: async (draftId: string, repairId: string, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
+            // verify required parameter 'draftId' is not null or undefined
+            assertParamExists('apiCorePluginDraftsDraftIdRepairRunsRepairIdGet', 'draftId', draftId)
+            // verify required parameter 'repairId' is not null or undefined
+            assertParamExists('apiCorePluginDraftsDraftIdRepairRunsRepairIdGet', 'repairId', repairId)
+            const localVarPath = `/api/core/plugin-drafts/{draft_id}/repair-runs/{repair_id}`
+                .replace(`{${"draft_id"}}`, encodeURIComponent(String(draftId)))
+                .replace(`{${"repair_id"}}`, encodeURIComponent(String(repairId)));
+            // use dummy base URL string because the URL constructor only accepts absolute URLs.
+            const localVarUrlObj = new URL(localVarPath, DUMMY_BASE_URL);
+            let baseOptions;
+            if (configuration) {
+                baseOptions = configuration.baseOptions;
+            }
+
+            const localVarRequestOptions = { method: 'GET', ...baseOptions, ...options};
+            const localVarHeaderParameter = {} as any;
+            const localVarQueryParameter = {} as any;
+
+            localVarHeaderParameter['Accept'] = 'application/json';
+
+            setSearchParams(localVarUrlObj, localVarQueryParameter);
+            let headersFromBaseOptions = baseOptions && baseOptions.headers ? baseOptions.headers : {};
+            localVarRequestOptions.headers = {...localVarHeaderParameter, ...headersFromBaseOptions, ...options.headers};
+
+            return {
+                url: toPathString(localVarUrlObj),
+                options: localVarRequestOptions,
+            };
+        },
+    }
+};
+
+/**
+ * PluginApi - functional programming interface
+ */
+export const PluginApiFp = function(configuration?: Configuration) {
+    const localVarAxiosParamCreator = PluginApiAxiosParamCreator(configuration)
+    return {
+        /**
+         * 
+         * @summary Confirm Skill workflow candidate
+         * @param {string} draftId 
+         * @param {PluginWorkflowConfirmOpenAPIRequest} pluginWorkflowConfirmOpenAPIRequest 
+         * @param {*} [options] Override http request option.
+         * @throws {RequiredError}
+         */
+        async apiCorePluginDraftsDraftIdConfirmWorkflowPost(draftId: string, pluginWorkflowConfirmOpenAPIRequest: PluginWorkflowConfirmOpenAPIRequest, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<{ [key: string]: any; }>> {
+            const localVarAxiosArgs = await localVarAxiosParamCreator.apiCorePluginDraftsDraftIdConfirmWorkflowPost(draftId, pluginWorkflowConfirmOpenAPIRequest, options);
+            const localVarOperationServerIndex = configuration?.serverIndex ?? 0;
+            const localVarOperationServerBasePath = operationServerMap['PluginApi.apiCorePluginDraftsDraftIdConfirmWorkflowPost']?.[localVarOperationServerIndex]?.url;
+            return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
+        },
+        /**
+         * 
+         * @summary Get Plugin generation analysis
+         * @param {string} draftId 
+         * @param {*} [options] Override http request option.
+         * @throws {RequiredError}
+         */
+        async apiCorePluginDraftsDraftIdGenerationAnalysisGet(draftId: string, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<{ [key: string]: any; }>> {
+            const localVarAxiosArgs = await localVarAxiosParamCreator.apiCorePluginDraftsDraftIdGenerationAnalysisGet(draftId, options);
+            const localVarOperationServerIndex = configuration?.serverIndex ?? 0;
+            const localVarOperationServerBasePath = operationServerMap['PluginApi.apiCorePluginDraftsDraftIdGenerationAnalysisGet']?.[localVarOperationServerIndex]?.url;
+            return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
+        },
+        /**
+         * 
+         * @summary Preview Plugin repair
+         * @param {string} draftId 
+         * @param {PluginRepairPreviewOpenAPIRequest} pluginRepairPreviewOpenAPIRequest 
+         * @param {*} [options] Override http request option.
+         * @throws {RequiredError}
+         */
+        async apiCorePluginDraftsDraftIdRepairPreviewPost(draftId: string, pluginRepairPreviewOpenAPIRequest: PluginRepairPreviewOpenAPIRequest, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<{ [key: string]: any; }>> {
+            const localVarAxiosArgs = await localVarAxiosParamCreator.apiCorePluginDraftsDraftIdRepairPreviewPost(draftId, pluginRepairPreviewOpenAPIRequest, options);
+            const localVarOperationServerIndex = configuration?.serverIndex ?? 0;
+            const localVarOperationServerBasePath = operationServerMap['PluginApi.apiCorePluginDraftsDraftIdRepairPreviewPost']?.[localVarOperationServerIndex]?.url;
+            return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
+        },
+        /**
+         * 
+         * @summary Get Plugin repair run
+         * @param {string} draftId 
+         * @param {string} repairId 
+         * @param {*} [options] Override http request option.
+         * @throws {RequiredError}
+         */
+        async apiCorePluginDraftsDraftIdRepairRunsRepairIdGet(draftId: string, repairId: string, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<{ [key: string]: any; }>> {
+            const localVarAxiosArgs = await localVarAxiosParamCreator.apiCorePluginDraftsDraftIdRepairRunsRepairIdGet(draftId, repairId, options);
+            const localVarOperationServerIndex = configuration?.serverIndex ?? 0;
+            const localVarOperationServerBasePath = operationServerMap['PluginApi.apiCorePluginDraftsDraftIdRepairRunsRepairIdGet']?.[localVarOperationServerIndex]?.url;
+            return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
+        },
+    }
+};
+
+/**
+ * PluginApi - factory interface
+ */
+export const PluginApiFactory = function (configuration?: Configuration, basePath?: string, axios?: AxiosInstance) {
+    const localVarFp = PluginApiFp(configuration)
+    return {
+        /**
+         * 
+         * @summary Confirm Skill workflow candidate
+         * @param {PluginApiApiCorePluginDraftsDraftIdConfirmWorkflowPostRequest} requestParameters Request parameters.
+         * @param {*} [options] Override http request option.
+         * @throws {RequiredError}
+         */
+        apiCorePluginDraftsDraftIdConfirmWorkflowPost(requestParameters: PluginApiApiCorePluginDraftsDraftIdConfirmWorkflowPostRequest, options?: RawAxiosRequestConfig): AxiosPromise<{ [key: string]: any; }> {
+            return localVarFp.apiCorePluginDraftsDraftIdConfirmWorkflowPost(requestParameters.draftId, requestParameters.pluginWorkflowConfirmOpenAPIRequest, options).then((request) => request(axios, basePath));
+        },
+        /**
+         * 
+         * @summary Get Plugin generation analysis
+         * @param {PluginApiApiCorePluginDraftsDraftIdGenerationAnalysisGetRequest} requestParameters Request parameters.
+         * @param {*} [options] Override http request option.
+         * @throws {RequiredError}
+         */
+        apiCorePluginDraftsDraftIdGenerationAnalysisGet(requestParameters: PluginApiApiCorePluginDraftsDraftIdGenerationAnalysisGetRequest, options?: RawAxiosRequestConfig): AxiosPromise<{ [key: string]: any; }> {
+            return localVarFp.apiCorePluginDraftsDraftIdGenerationAnalysisGet(requestParameters.draftId, options).then((request) => request(axios, basePath));
+        },
+        /**
+         * 
+         * @summary Preview Plugin repair
+         * @param {PluginApiApiCorePluginDraftsDraftIdRepairPreviewPostRequest} requestParameters Request parameters.
+         * @param {*} [options] Override http request option.
+         * @throws {RequiredError}
+         */
+        apiCorePluginDraftsDraftIdRepairPreviewPost(requestParameters: PluginApiApiCorePluginDraftsDraftIdRepairPreviewPostRequest, options?: RawAxiosRequestConfig): AxiosPromise<{ [key: string]: any; }> {
+            return localVarFp.apiCorePluginDraftsDraftIdRepairPreviewPost(requestParameters.draftId, requestParameters.pluginRepairPreviewOpenAPIRequest, options).then((request) => request(axios, basePath));
+        },
+        /**
+         * 
+         * @summary Get Plugin repair run
+         * @param {PluginApiApiCorePluginDraftsDraftIdRepairRunsRepairIdGetRequest} requestParameters Request parameters.
+         * @param {*} [options] Override http request option.
+         * @throws {RequiredError}
+         */
+        apiCorePluginDraftsDraftIdRepairRunsRepairIdGet(requestParameters: PluginApiApiCorePluginDraftsDraftIdRepairRunsRepairIdGetRequest, options?: RawAxiosRequestConfig): AxiosPromise<{ [key: string]: any; }> {
+            return localVarFp.apiCorePluginDraftsDraftIdRepairRunsRepairIdGet(requestParameters.draftId, requestParameters.repairId, options).then((request) => request(axios, basePath));
+        },
+    };
+};
+
+/**
+ * Request parameters for apiCorePluginDraftsDraftIdConfirmWorkflowPost operation in PluginApi.
+ */
+export interface PluginApiApiCorePluginDraftsDraftIdConfirmWorkflowPostRequest {
+    readonly draftId: string
+
+    readonly pluginWorkflowConfirmOpenAPIRequest: PluginWorkflowConfirmOpenAPIRequest
+}
+
+/**
+ * Request parameters for apiCorePluginDraftsDraftIdGenerationAnalysisGet operation in PluginApi.
+ */
+export interface PluginApiApiCorePluginDraftsDraftIdGenerationAnalysisGetRequest {
+    readonly draftId: string
+}
+
+/**
+ * Request parameters for apiCorePluginDraftsDraftIdRepairPreviewPost operation in PluginApi.
+ */
+export interface PluginApiApiCorePluginDraftsDraftIdRepairPreviewPostRequest {
+    readonly draftId: string
+
+    readonly pluginRepairPreviewOpenAPIRequest: PluginRepairPreviewOpenAPIRequest
+}
+
+/**
+ * Request parameters for apiCorePluginDraftsDraftIdRepairRunsRepairIdGet operation in PluginApi.
+ */
+export interface PluginApiApiCorePluginDraftsDraftIdRepairRunsRepairIdGetRequest {
+    readonly draftId: string
+
+    readonly repairId: string
+}
+
+/**
+ * PluginApi - object-oriented interface
+ */
+export class PluginApi extends BaseAPI {
+    /**
+     * 
+     * @summary Confirm Skill workflow candidate
+     * @param {PluginApiApiCorePluginDraftsDraftIdConfirmWorkflowPostRequest} requestParameters Request parameters.
+     * @param {*} [options] Override http request option.
+     * @throws {RequiredError}
+     */
+    public apiCorePluginDraftsDraftIdConfirmWorkflowPost(requestParameters: PluginApiApiCorePluginDraftsDraftIdConfirmWorkflowPostRequest, options?: RawAxiosRequestConfig) {
+        return PluginApiFp(this.configuration).apiCorePluginDraftsDraftIdConfirmWorkflowPost(requestParameters.draftId, requestParameters.pluginWorkflowConfirmOpenAPIRequest, options).then((request) => request(this.axios, this.basePath));
+    }
+
+    /**
+     * 
+     * @summary Get Plugin generation analysis
+     * @param {PluginApiApiCorePluginDraftsDraftIdGenerationAnalysisGetRequest} requestParameters Request parameters.
+     * @param {*} [options] Override http request option.
+     * @throws {RequiredError}
+     */
+    public apiCorePluginDraftsDraftIdGenerationAnalysisGet(requestParameters: PluginApiApiCorePluginDraftsDraftIdGenerationAnalysisGetRequest, options?: RawAxiosRequestConfig) {
+        return PluginApiFp(this.configuration).apiCorePluginDraftsDraftIdGenerationAnalysisGet(requestParameters.draftId, options).then((request) => request(this.axios, this.basePath));
+    }
+
+    /**
+     * 
+     * @summary Preview Plugin repair
+     * @param {PluginApiApiCorePluginDraftsDraftIdRepairPreviewPostRequest} requestParameters Request parameters.
+     * @param {*} [options] Override http request option.
+     * @throws {RequiredError}
+     */
+    public apiCorePluginDraftsDraftIdRepairPreviewPost(requestParameters: PluginApiApiCorePluginDraftsDraftIdRepairPreviewPostRequest, options?: RawAxiosRequestConfig) {
+        return PluginApiFp(this.configuration).apiCorePluginDraftsDraftIdRepairPreviewPost(requestParameters.draftId, requestParameters.pluginRepairPreviewOpenAPIRequest, options).then((request) => request(this.axios, this.basePath));
+    }
+
+    /**
+     * 
+     * @summary Get Plugin repair run
+     * @param {PluginApiApiCorePluginDraftsDraftIdRepairRunsRepairIdGetRequest} requestParameters Request parameters.
+     * @param {*} [options] Override http request option.
+     * @throws {RequiredError}
+     */
+    public apiCorePluginDraftsDraftIdRepairRunsRepairIdGet(requestParameters: PluginApiApiCorePluginDraftsDraftIdRepairRunsRepairIdGetRequest, options?: RawAxiosRequestConfig) {
+        return PluginApiFp(this.configuration).apiCorePluginDraftsDraftIdRepairRunsRepairIdGet(requestParameters.draftId, requestParameters.repairId, options).then((request) => request(this.axios, this.basePath));
     }
 }
 
@@ -30596,10 +30989,11 @@ export const ToolsApiAxiosParamCreator = function (configuration?: Configuration
          * @param {string} [keyword] 
          * @param {number} [page] 
          * @param {number} [pageSize] 
+         * @param {string} [acceptLanguage] Optional UI locale. zh and zh-* use zh-CN; en and en-* use en-US. Missing or unsupported values default to zh-CN.
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
          */
-        apiCoreToolsGet: async (keyword?: string, page?: number, pageSize?: number, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
+        apiCoreToolsGet: async (keyword?: string, page?: number, pageSize?: number, acceptLanguage?: string, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
             const localVarPath = `/api/core/tools`;
             // use dummy base URL string because the URL constructor only accepts absolute URLs.
             const localVarUrlObj = new URL(localVarPath, DUMMY_BASE_URL);
@@ -30626,6 +31020,9 @@ export const ToolsApiAxiosParamCreator = function (configuration?: Configuration
 
             localVarHeaderParameter['Accept'] = 'application/json';
 
+            if (acceptLanguage != null) {
+                localVarHeaderParameter['Accept-Language'] = String(acceptLanguage);
+            }
             setSearchParams(localVarUrlObj, localVarQueryParameter);
             let headersFromBaseOptions = baseOptions && baseOptions.headers ? baseOptions.headers : {};
             localVarRequestOptions.headers = {...localVarHeaderParameter, ...headersFromBaseOptions, ...options.headers};
@@ -30718,11 +31115,12 @@ export const ToolsApiFp = function(configuration?: Configuration) {
          * @param {string} [keyword] 
          * @param {number} [page] 
          * @param {number} [pageSize] 
+         * @param {string} [acceptLanguage] Optional UI locale. zh and zh-* use zh-CN; en and en-* use en-US. Missing or unsupported values default to zh-CN.
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
          */
-        async apiCoreToolsGet(keyword?: string, page?: number, pageSize?: number, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<ToolListOpenAPIResponse>> {
-            const localVarAxiosArgs = await localVarAxiosParamCreator.apiCoreToolsGet(keyword, page, pageSize, options);
+        async apiCoreToolsGet(keyword?: string, page?: number, pageSize?: number, acceptLanguage?: string, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<ToolListOpenAPIResponse>> {
+            const localVarAxiosArgs = await localVarAxiosParamCreator.apiCoreToolsGet(keyword, page, pageSize, acceptLanguage, options);
             const localVarOperationServerIndex = configuration?.serverIndex ?? 0;
             const localVarOperationServerBasePath = operationServerMap['ToolsApi.apiCoreToolsGet']?.[localVarOperationServerIndex]?.url;
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
@@ -30770,7 +31168,7 @@ export const ToolsApiFactory = function (configuration?: Configuration, basePath
          * @throws {RequiredError}
          */
         apiCoreToolsGet(requestParameters: ToolsApiApiCoreToolsGetRequest = {}, options?: RawAxiosRequestConfig): AxiosPromise<ToolListOpenAPIResponse> {
-            return localVarFp.apiCoreToolsGet(requestParameters.keyword, requestParameters.page, requestParameters.pageSize, options).then((request) => request(axios, basePath));
+            return localVarFp.apiCoreToolsGet(requestParameters.keyword, requestParameters.page, requestParameters.pageSize, requestParameters.acceptLanguage, options).then((request) => request(axios, basePath));
         },
         /**
          * 
@@ -30804,6 +31202,11 @@ export interface ToolsApiApiCoreToolsGetRequest {
     readonly page?: number
 
     readonly pageSize?: number
+
+    /**
+     * Optional UI locale. zh and zh-* use zh-CN; en and en-* use en-US. Missing or unsupported values default to zh-CN.
+     */
+    readonly acceptLanguage?: string
 }
 
 /**
@@ -30832,7 +31235,7 @@ export class ToolsApi extends BaseAPI {
      * @throws {RequiredError}
      */
     public apiCoreToolsGet(requestParameters: ToolsApiApiCoreToolsGetRequest = {}, options?: RawAxiosRequestConfig) {
-        return ToolsApiFp(this.configuration).apiCoreToolsGet(requestParameters.keyword, requestParameters.page, requestParameters.pageSize, options).then((request) => request(this.axios, this.basePath));
+        return ToolsApiFp(this.configuration).apiCoreToolsGet(requestParameters.keyword, requestParameters.page, requestParameters.pageSize, requestParameters.acceptLanguage, options).then((request) => request(this.axios, this.basePath));
     }
 
     /**
