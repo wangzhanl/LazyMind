@@ -12,7 +12,7 @@ import (
 	"lazymind/core/common/orm"
 )
 
-func TestModelCatalogMaxInputTokensOnlyForLLMModels(t *testing.T) {
+func TestModelCatalogMaxInputTokensOnlyForLLMAndVLMModels(t *testing.T) {
 	yamlBytes, err := os.ReadFile(filepath.Join("..", "config", "model_catalog.yaml"))
 	if err != nil {
 		t.Fatalf("read model catalog: %v", err)
@@ -22,30 +22,30 @@ func TestModelCatalogMaxInputTokensOnlyForLLMModels(t *testing.T) {
 		t.Fatalf("parse model catalog: %v", err)
 	}
 
-	llmLimitCount := 0
+	limitCount := 0
 	for _, section := range catalog {
 		for _, supplier := range section.Suppliers {
 			for _, model := range supplier.Models {
-				if model.Type != "llm" {
+				if model.Type != "llm" && model.Type != "vlm" {
 					if model.MaxInputTokens == nil {
 						continue
 					}
-					t.Errorf("non-llm model %s/%s has max_input_tokens", supplier.Name, model.Name)
+					t.Errorf("non-llm/vlm model %s/%s has max_input_tokens", supplier.Name, model.Name)
 					continue
 				}
 				if model.MaxInputTokens == nil {
-					t.Errorf("llm model %s/%s is missing max_input_tokens", supplier.Name, model.Name)
+					t.Errorf("%s model %s/%s is missing max_input_tokens", model.Type, supplier.Name, model.Name)
 					continue
 				}
-				llmLimitCount++
+				limitCount++
 				if !maxInputTokensPattern.MatchString(*model.MaxInputTokens) {
-					t.Errorf("llm model %s/%s has invalid max_input_tokens", supplier.Name, model.Name)
+					t.Errorf("%s model %s/%s has invalid max_input_tokens", model.Type, supplier.Name, model.Name)
 				}
 			}
 		}
 	}
-	if llmLimitCount == 0 {
-		t.Fatal("model catalog contains no llm max_input_tokens entries")
+	if limitCount == 0 {
+		t.Fatal("model catalog contains no llm or vlm max_input_tokens entries")
 	}
 }
 
@@ -256,13 +256,13 @@ func TestUpsertDefaultModelRejectsInvalidMaxInputTokens(t *testing.T) {
 	}
 }
 
-func TestUpsertDefaultModelRejectsMaxInputTokensForNonLLM(t *testing.T) {
+func TestUpsertDefaultModelRejectsMaxInputTokensForNonLLMOrVLM(t *testing.T) {
 	limit := "8K"
 	err := upsertDefaultModel(&gorm.DB{}, time.Now(), "provider", "Provider", catalogModel{
 		Name: "embedding-model", Type: "embed", MaxInputTokens: &limit,
 	})
-	if err == nil || err.Error() != "model max_input_tokens is only supported for llm models" {
-		t.Fatalf("error = %v, want max_input_tokens llm-only validation error", err)
+	if err == nil || err.Error() != "model max_input_tokens is only supported for llm or vlm models" {
+		t.Fatalf("error = %v, want max_input_tokens llm/vlm-only validation error", err)
 	}
 }
 
