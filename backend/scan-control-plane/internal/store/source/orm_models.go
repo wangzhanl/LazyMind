@@ -9,7 +9,6 @@ type ormSource struct {
 	Name              string `gorm:"column:name"`
 	DatasetID         string `gorm:"column:dataset_id"`
 	Status            string `gorm:"column:status"`
-	ChatEnabled       bool   `gorm:"column:chat_enabled"`
 	SourceOptions     JSON   `gorm:"column:source_options_json;type:jsonb"`
 	IncludeExtensions JSON   `gorm:"column:include_extensions_json;type:jsonb"`
 	ExcludeExtensions JSON   `gorm:"column:exclude_extensions_json;type:jsonb"`
@@ -41,6 +40,7 @@ type ormBinding struct {
 	NextSyncAt             *time.Time
 	IncludeExtensions      JSON       `gorm:"column:include_extensions_json;type:jsonb"`
 	ExcludeExtensions      JSON       `gorm:"column:exclude_extensions_json;type:jsonb"`
+	ChatEnabled            bool   `gorm:"column:chat_enabled"`
 	Status                 string     `gorm:"column:status"`
 	LastError              JSON       `gorm:"column:last_error;type:jsonb"`
 	DeletedAt              *time.Time `gorm:"column:deleted_at"`
@@ -216,7 +216,6 @@ type ormAgent struct {
 	Hostname          string `gorm:"column:hostname"`
 	Version           string `gorm:"column:version"`
 	Status            string `gorm:"column:status"`
-	ChatEnabled       bool   `gorm:"column:chat_enabled"`
 	ListenAddr        string `gorm:"column:listen_addr"`
 	LastHeartbeatAt   time.Time
 	ActiveSourceCount int64 `gorm:"column:active_source_count"`
