@@ -42,11 +42,14 @@ class RemoteFS(LazyLLMFSBase):
         agentic_config = lazyllm.globals.get('agentic_config') or {}
         user_id = agentic_config.get('user_id')
         task_id = agentic_config.get('session_id') or agentic_config.get('task_id')
+        mode = str(agentic_config.get('mode') or '').strip()
         params = kwargs.pop('params', {})
         if user_id:
             params['user_id'] = user_id
         if task_id:
             params['task_id'] = task_id
+        if mode in ('auto', 'manual'):
+            params['mode'] = mode
         return requests.request(
             method,
             f'{self.base_url}/remote-fs/{endpoint}',

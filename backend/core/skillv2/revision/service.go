@@ -628,9 +628,13 @@ type mergedEntry struct {
 }
 
 func mergedEntriesForDraft(ctx context.Context, tx *gorm.DB, skillID, baseRevisionID string) (map[string]mergedEntry, error) {
-	entries, err := entriesForRevision(ctx, tx, skillID, baseRevisionID)
-	if err != nil {
-		return nil, err
+	entries := map[string]mergedEntry{}
+	if baseRevisionID != "" {
+		var err error
+		entries, err = entriesForRevision(ctx, tx, skillID, baseRevisionID)
+		if err != nil {
+			return nil, err
+		}
 	}
 	var overlays []skillDraftEntryRow
 	if err := tx.WithContext(ctx).Where("skill_id = ?", skillID).Order("path ASC").Find(&overlays).Error; err != nil {

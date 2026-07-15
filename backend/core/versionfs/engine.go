@@ -41,6 +41,10 @@ type Store interface {
 	DeleteBlob(ctx context.Context, tx *gorm.DB, hash string) error
 }
 
+type initialCommitStore interface {
+	AllowsInitialCommit() bool
+}
+
 type HeadState struct {
 	RevisionID string
 }
@@ -161,7 +165,10 @@ func (e *Engine) CommitDraft(ctx context.Context, req CommitDraftRequest) (Commi
 			baseRevisionID = head.RevisionID
 		}
 		if baseRevisionID == "" {
-			return fmt.Errorf("resource has no base revision")
+			store, ok := e.store.(initialCommitStore)
+			if !ok || !store.AllowsInitialCommit() {
+				return fmt.Errorf("resource has no base revision")
+			}
 		}
 		if baseRevisionID != head.RevisionID {
 			return ErrDraftBaseConflict

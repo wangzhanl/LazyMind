@@ -450,8 +450,12 @@ func (s *SkillService) purgeSkillTx(ctx context.Context, tx *gorm.DB, req PurgeS
 	if err := tx.Where("id = ? AND owner_user_id = ? AND deleted_at IS NOT NULL", req.SkillID, req.UserID).Take(&skill).Error; err != nil {
 		return err
 	}
+	return s.deleteSkillGraphTx(ctx, tx, req.SkillID, req.UserID)
+}
+
+func (s *SkillService) deleteSkillGraphTx(ctx context.Context, tx *gorm.DB, skillID, userID string) error {
 	var revisions []string
-	if err := tx.Model(&skillRevisionRow{}).Where("skill_id = ?", req.SkillID).Pluck("id", &revisions).Error; err != nil {
+	if err := tx.Model(&skillRevisionRow{}).Where("skill_id = ?", skillID).Pluck("id", &revisions).Error; err != nil {
 		return err
 	}
 	if len(revisions) > 0 {
@@ -462,15 +466,15 @@ func (s *SkillService) purgeSkillTx(ctx context.Context, tx *gorm.DB, req PurgeS
 			return err
 		}
 	}
-	if err := tx.Where("skill_id = ?", req.SkillID).Delete(&skillDraftEntryRow{}).Error; err != nil {
+	if err := tx.Where("skill_id = ?", skillID).Delete(&skillDraftEntryRow{}).Error; err != nil {
 		return err
 	}
-	if err := tx.Where("skill_id = ?", req.SkillID).Delete(&skillDraftRow{}).Error; err != nil {
+	if err := tx.Where("skill_id = ?", skillID).Delete(&skillDraftRow{}).Error; err != nil {
 		return err
 	}
 	if tx.Migrator().HasTable("skill_draft_review_sessions") {
 		var reviewIDs []string
-		if err := tx.Table("skill_draft_review_sessions").Where("skill_id = ?", req.SkillID).Pluck("id", &reviewIDs).Error; err != nil {
+		if err := tx.Table("skill_draft_review_sessions").Where("skill_id = ?", skillID).Pluck("id", &reviewIDs).Error; err != nil {
 			return err
 		}
 		if len(reviewIDs) > 0 {
@@ -490,14 +494,14 @@ func (s *SkillService) purgeSkillTx(ctx context.Context, tx *gorm.DB, req PurgeS
 		}
 	}
 	if tx.Migrator().HasTable(&skillSearchIndexRow{}) {
-		if err := tx.Where("skill_id = ?", req.SkillID).Delete(&skillSearchIndexRow{}).Error; err != nil {
+		if err := tx.Where("skill_id = ?", skillID).Delete(&skillSearchIndexRow{}).Error; err != nil {
 			return err
 		}
 	}
-	if err := deleteMarketInstallTx(tx, req.SkillID, req.UserID); err != nil {
+	if err := deleteMarketInstallTx(tx, skillID, userID); err != nil {
 		return err
 	}
-	if err := tx.Where("id = ?", req.SkillID).Delete(&skillRow{}).Error; err != nil {
+	if err := tx.Where("id = ?", skillID).Delete(&skillRow{}).Error; err != nil {
 		return err
 	}
 	return s.cleanupUnreferencedBlobs(ctx, tx)
@@ -637,7 +641,7 @@ func (s *SkillService) DiscardDraft(ctx context.Context, req DiscardDraftRequest
 			return err
 		}
 		if skill.HeadRevisionID == nil {
-			return fmt.Errorf("skill has no head revision")
+			return s.deleteSkillGraphTx(ctx, tx, req.SkillID, req.UserID)
 		}
 		if err := tx.Where("skill_id = ?", req.SkillID).Delete(&skillDraftEntryRow{}).Error; err != nil {
 			return err
@@ -1423,6 +1427,13 @@ func (s *SkillService) entriesForHead(ctx context.Context, skillID string) ([]sk
 func (s *SkillService) entriesForRef(ctx context.Context, skillID, refType string) ([]skillRevisionEntryRow, error) {
 	switch strings.ToLower(strings.TrimSpace(refType)) {
 	case "", "head":
+		var skill skillRow
+		if err := s.db.WithContext(ctx).Where("id = ? AND deleted_at IS NULL", skillID).Take(&skill).Error; err != nil {
+			return nil, err
+		}
+		if skill.HeadRevisionID == nil {
+			return s.entriesForDraft(ctx, skillID)
+		}
 		return s.entriesForHead(ctx, skillID)
 	case "draft":
 		return s.entriesForDraft(ctx, skillID)
@@ -1432,9 +1443,15 @@ func (s *SkillService) entriesForRef(ctx context.Context, skillID, refType strin
 }
 
 func (s *SkillService) entriesForDraft(ctx context.Context, skillID string) ([]skillRevisionEntryRow, error) {
-	headEntries, err := s.entriesForHead(ctx, skillID)
-	if err != nil {
+	var skill skillRow
+	if err := s.db.WithContext(ctx).Where("id = ? AND deleted_at IS NULL", skillID).Take(&skill).Error; err != nil {
 		return nil, err
+	}
+	headEntries := []skillRevisionEntryRow{}
+	if skill.HeadRevisionID != nil {
+		if err := s.db.WithContext(ctx).Where("revision_id = ?", *skill.HeadRevisionID).Order("path ASC").Find(&headEntries).Error; err != nil {
+			return nil, err
+		}
 	}
 	entriesByPath := make(map[string]skillRevisionEntryRow, len(headEntries))
 	for _, entry := range headEntries {
@@ -1479,6 +1496,9 @@ func (s *SkillService) summaryFor(ctx context.Context, row skillRow) (SkillSumma
 	if row.HeadRevisionID != nil {
 		head = *row.HeadRevisionID
 	}
+	if head == "" {
+		draft.Type = "create"
+	}
 	return SkillSummary{
 		ID:             row.ID,
 		SkillID:        row.ID,
@@ -1506,7 +1526,12 @@ func (s *SkillService) draftSummary(ctx context.Context, skillID string) (DraftS
 	if err := s.db.WithContext(ctx).Model(&skillDraftEntryRow{}).Where("skill_id = ?", skillID).Count(&count).Error; err != nil {
 		return DraftSummary{}, err
 	}
-	return DraftSummary{HasUncommittedDraft: count > 0, TaskID: draft.TaskID, Version: draft.Version}, nil
+	return DraftSummary{
+		HasUncommittedDraft: count > 0,
+		TaskID:              draft.TaskID,
+		Version:             draft.Version,
+		Status:              draft.DraftStatus,
+	}, nil
 }
 
 func buildTree(entries []skillRevisionEntryRow) TreeNode {
