@@ -146,6 +146,112 @@ func TestAutoEvoDraftWaitsForEditorThenCommits(t *testing.T) {
 	}
 }
 
+func TestAutoEvoCreateDraftCommitsInitialRevisionAfterEditorIdle(t *testing.T) {
+	db := newResourceUpdateTestDB(t)
+	createSkillReviewResultsTable(t, db)
+	createMemoryReviewTable(t, db)
+	now := time.Date(2026, 7, 13, 10, 0, 0, 0, time.UTC)
+	content := skillContent("auto-created", "initial")
+	hash := evolution.HashContent(content)
+	if err := db.Create(&orm.SkillV2Skill{
+		ID:                 "skill-auto-create",
+		OwnerUserID:        "user-1",
+		CreateUserID:       "user-1",
+		Category:           "system",
+		SkillName:          "auto-created",
+		Tags:               []byte("[]"),
+		RelativeRoot:       "system/auto-created",
+		SkillMDPath:        "SKILL.md",
+		Version:            1,
+		AutoEvo:            true,
+		AutoEvoApplyStatus: "idle",
+		IsEnabled:          false,
+		UpdateStatus:       evolution.UpdateStatusUpToDate,
+		CreatedAt:          now,
+		UpdatedAt:          now,
+	}).Error; err != nil {
+		t.Fatalf("insert create draft skill: %v", err)
+	}
+	if err := db.Create(&orm.SkillV2Blob{
+		Hash:           hash,
+		Size:           int64(len(content)),
+		Mime:           "text/markdown; charset=utf-8",
+		FileType:       "markdown",
+		StorageBackend: "postgres",
+		Content:        []byte(content),
+		CreatedAt:      now,
+	}).Error; err != nil {
+		t.Fatalf("insert create draft blob: %v", err)
+	}
+	if err := db.Create(&orm.SkillV2Draft{
+		SkillID:     "skill-auto-create",
+		DraftStatus: "auto_pending",
+		TaskID:      "session-editor",
+		Version:     1,
+		CreatedAt:   now,
+		UpdatedAt:   now,
+	}).Error; err != nil {
+		t.Fatalf("insert create draft: %v", err)
+	}
+	if err := db.Create(&orm.SkillV2DraftEntry{
+		SkillID:   "skill-auto-create",
+		Path:      "SKILL.md",
+		Op:        "upsert",
+		EntryType: "file",
+		BlobHash:  &hash,
+		Size:      int64(len(content)),
+		Mime:      "text/markdown; charset=utf-8",
+		FileType:  "markdown",
+		Mode:      0o644,
+		UpdatedAt: now,
+	}).Error; err != nil {
+		t.Fatalf("insert create draft entry: %v", err)
+	}
+
+	scanner := NewScanner(db, Config{}, "draft-scanner")
+	scanner.clock = func() time.Time { return now }
+	scanResult, err := scanner.RunOnce(context.Background())
+	if err != nil || scanResult.SkillDraftTasksCreated != 1 {
+		t.Fatalf("scan create draft: result=%#v err=%v", scanResult, err)
+	}
+	stateStore, err := state.NewSQLiteStore(filepath.Join(t.TempDir(), "state.db"))
+	if err != nil {
+		t.Fatalf("create state store: %v", err)
+	}
+	t.Cleanup(func() { _ = stateStore.Close() })
+	worker := NewWorker(db, Config{WorkerBatchSize: 1, WorkerLockTTL: time.Minute, MaxAttempts: 1}, "draft-worker", stateStore)
+	worker.clock = func() time.Time { return now }
+	result, err := worker.RunOnce(context.Background())
+	if err != nil || result.Done != 1 {
+		t.Fatalf("auto commit create draft: result=%#v err=%v", result, err)
+	}
+
+	var skill orm.SkillV2Skill
+	if err := db.Where("id = ?", "skill-auto-create").Take(&skill).Error; err != nil {
+		t.Fatalf("query committed skill: %v", err)
+	}
+	if skill.HeadRevisionID == nil {
+		t.Fatal("auto commit did not create head revision")
+	}
+	var revision orm.SkillV2Revision
+	if err := db.Where("id = ?", *skill.HeadRevisionID).Take(&revision).Error; err != nil {
+		t.Fatalf("query initial revision: %v", err)
+	}
+	if revision.RevisionNo != 1 || revision.ParentRevisionID != nil {
+		t.Fatalf("initial revision = %#v", revision)
+	}
+	if got := readSkillV2HeadContent(t, db, "skill-auto-create"); got != content {
+		t.Fatalf("committed content = %q, want %q", got, content)
+	}
+	var draft orm.SkillV2Draft
+	if err := db.Where("skill_id = ?", "skill-auto-create").Take(&draft).Error; err != nil {
+		t.Fatalf("query reset draft: %v", err)
+	}
+	if draft.BaseRevisionID == nil || *draft.BaseRevisionID != *skill.HeadRevisionID || draft.DraftStatus != "" {
+		t.Fatalf("reset draft = %#v", draft)
+	}
+}
+
 func TestAcceptSkillReviewResultsMapsDraftTaskIDToRequestID(t *testing.T) {
 	db := newResourceUpdateTestDB(t)
 	createSkillReviewResultsTable(t, db)
@@ -2480,3 +2586,7 @@ func skillContentWithCategory(name, description, body, category string) string {
 	lines = append(lines, "---", body)
 	return strings.Join(lines, "\n")
 }
+
+
+
+
