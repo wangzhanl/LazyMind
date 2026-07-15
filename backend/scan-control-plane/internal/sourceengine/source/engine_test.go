@@ -2214,6 +2214,19 @@ func operationKey(callerID, requestID string) string {
 	return callerID + "\x00" + requestID
 }
 
+
+func (r *sourceEngineRepoStub) UpdateBindingChatEnabled(_ context.Context, bindingID string, chatEnabled bool) error {
+	for sourceID, bindings := range r.bindings {
+		for i := range bindings {
+			if bindings[i].BindingID == bindingID {
+				bindings[i].ChatEnabled = chatEnabled
+				r.bindings[sourceID] = bindings
+				return nil
+			}
+		}
+	}
+	return store.NewStoreError(store.ErrCodeBindingNotFound, "binding not found")
+}
 var _ SourceRepository = (*sourceEngineRepoStub)(nil)
 var _ coreclient.ResourceClient = (*sourceCoreSpy)(nil)
 var _ connector.SourceConnector = (*sourceSpyConnector)(nil)

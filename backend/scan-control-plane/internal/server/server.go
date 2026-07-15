@@ -270,6 +270,10 @@ func (h *Handler) registerRoutes(mux *http.ServeMux) {
 	routeAPI(mux, "DELETE", "/api/scan/sources/{source_id}", []string{"scan.write"}, h.deleteSource)
 
 	// Bindings.
+
+	// Binding chat settings.
+	routeAPI(mux, "GET", "/api/scan/bindings/chat-settings", []string{"scan.read"}, h.listBindingChatSettings)
+	routeAPI(mux, "PUT", "/api/scan/bindings/{binding_id}/chat-settings", []string{"scan.write"}, h.updateBindingChatSetting)
 	routeAPI(mux, "POST", "/api/scan/sources/{source_id}/bindings", []string{"scan.write"}, h.createSourceBinding)
 	routeAPI(mux, "PUT", "/api/scan/sources/{source_id}/bindings/{binding_id}", []string{"scan.write"}, h.updateSourceBinding)
 	routeAPI(mux, "DELETE", "/api/scan/sources/{source_id}/bindings/{binding_id}", []string{"scan.write"}, h.deleteSourceBinding)
