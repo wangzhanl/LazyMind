@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"gorm.io/gorm"
@@ -183,6 +184,13 @@ func TestTrashListAndRestoreSkill(t *testing.T) {
 	db := newSkillV2TestDB(t)
 	seedSkillWithHeadRevision(t, db, "skill1", "rev1")
 	seedSkillWithHeadRevision(t, db, "skill2", "rev2")
+	if err := db.Model(&testSkillV2SkillRow{}).Where("id = ?", "skill2").Updates(map[string]any{
+		"category":      "research",
+		"skill_name":    "论文精读备用",
+		"relative_root": "research/论文精读备用",
+	}).Error; err != nil {
+		t.Fatalf("rename skill2 fixture: %v", err)
+	}
 	svc := NewSkillService(SkillServiceDeps{DB: db, BlobStore: NewBlobStore(db, NewLocalObjectStore(t.TempDir())), Clock: fixedClock()})
 
 	if err := svc.DeleteSkill(context.Background(), DeleteSkillRequest{SkillID: "skill1", UserID: "user_001"}); err != nil {
@@ -223,6 +231,29 @@ func TestTrashListAndRestoreSkill(t *testing.T) {
 		if got := countRows(t, db, "skill_search_indexes", "skill_id = ?", "skill1"); got != 1 {
 			t.Fatalf("search index count after restore = %d, want 1", got)
 		}
+	}
+}
+
+func TestRestoreSkillRejectsActiveSamePath(t *testing.T) {
+	db := newSkillV2TestDB(t)
+	seedSkillWithHeadRevision(t, db, "skill1", "rev1")
+	svc := NewSkillService(SkillServiceDeps{DB: db, BlobStore: NewBlobStore(db, NewLocalObjectStore(t.TempDir())), Clock: fixedClock()})
+
+	if err := svc.DeleteSkill(context.Background(), DeleteSkillRequest{SkillID: "skill1", UserID: "user_001"}); err != nil {
+		t.Fatalf("DeleteSkill returned error: %v", err)
+	}
+	seedSkillWithHeadRevision(t, db, "skill-reuploaded", "rev-reuploaded")
+
+	err := svc.RestoreSkill(context.Background(), RestoreSkillRequest{SkillID: "skill1", UserID: "user_001"})
+	if err == nil || !strings.Contains(err.Error(), "already exists") {
+		t.Fatalf("RestoreSkill error = %v, want already exists", err)
+	}
+	var row testSkillV2SkillRow
+	if err := db.Where("id = ?", "skill1").Take(&row).Error; err != nil {
+		t.Fatalf("query skill1: %v", err)
+	}
+	if row.DeletedAt == nil {
+		t.Fatal("skill1 was restored despite active same-path skill")
 	}
 }
 
