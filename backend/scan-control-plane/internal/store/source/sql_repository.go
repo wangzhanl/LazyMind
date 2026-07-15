@@ -272,10 +272,10 @@ func (r *SQLRepository) Migrate(ctx context.Context) error {
 	if r.orm == nil {
 		return nil
 	}
-	if err := r.orm.WithContext(ctx).Exec("ALTER TABLE sources ADD COLUMN IF NOT EXISTS chat_enabled BOOLEAN NOT NULL DEFAULT TRUE").Error; err != nil {
+	if err := r.orm.WithContext(ctx).Exec("ALTER TABLE source_bindings ADD COLUMN IF NOT EXISTS chat_enabled BOOLEAN NOT NULL DEFAULT TRUE").Error; err != nil {
 		return err
 	}
-	return r.orm.WithContext(ctx).Exec("ALTER TABLE source_bindings DROP COLUMN IF EXISTS chat_enabled").Error
+	return r.orm.WithContext(ctx).Exec("ALTER TABLE sources DROP COLUMN IF EXISTS chat_enabled").Error
 }
 
 func (r *SQLRepository) ormDB(ctx context.Context) *gorm.DB {
