@@ -9,6 +9,7 @@ type Source struct {
 	Name              string
 	DatasetID         string
 	Status            string
+	ChatEnabled       bool
 	SourceOptions     JSON
 	IncludeExtensions JSON
 	ExcludeExtensions JSON

@@ -168,6 +168,21 @@ def test_move_calls_remote_fs_move(captured_requests):
     }
 
 
+def test_revision_id_is_forwarded_for_plugin_reads(captured_requests):
+    calls, responses = captured_requests
+    responses.extend([
+        FakeResponse({'items': []}),
+        FakeResponse({'exists': True}),
+    ])
+
+    fs = RemoteFS(base_url='http://core')
+    fs.ls('remote://plugins/u_abc/my-plugin', revision_id='rev-3')
+    assert fs.exists('remote://plugins/u_abc/my-plugin/plugin.yaml', revision_id='rev-3')
+
+    assert calls[0]['params']['revision_id'] == 'rev-3'
+    assert calls[1]['params']['revision_id'] == 'rev-3'
+
+
 def test_read_base64_decodes_json_content(captured_requests):
     calls, responses = captured_requests
     encoded = base64.b64encode(b'binary-data').decode('ascii')

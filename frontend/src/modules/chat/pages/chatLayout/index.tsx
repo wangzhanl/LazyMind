@@ -58,7 +58,7 @@ interface IChatLayoutProps {
 }
 
 const ChatLayout: FC<IChatLayoutProps> = (props) => {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
   const {
     setIsChatContent,
     initchatConfig,
@@ -426,7 +426,9 @@ const ChatLayout: FC<IChatLayoutProps> = (props) => {
         input,
         mode: "auto",
         create_time: new Date().toISOString(),
-        environment_context: buildEnvironmentContext(),
+        environment_context: buildEnvironmentContext(
+          i18n.resolvedLanguage || i18n.language,
+        ),
         ...(pluginContext ? { plugin_context: pluginContext } : {}),
         ...(pluginUIState ? { plugin_ui_state: pluginUIState } : {}),
         ...(artifactRefs.length > 0 ? { artifact_refs: artifactRefs } : {}),
@@ -553,6 +555,11 @@ const ChatLayout: FC<IChatLayoutProps> = (props) => {
       }
       const conversationId = detail.conversationId || "";
       if (!conversationId) {
+        if (sessionIdRef.current) {
+          chatRef.current?.disconnectConversationStream?.(sessionIdRef.current, {
+            persistResumeKey: true,
+          });
+        }
         setIsRestoringConversation(false);
         setConversationPluginSettings(undefined);
         setChatConfig({});
@@ -562,6 +569,11 @@ const ChatLayout: FC<IChatLayoutProps> = (props) => {
       }
       if (conversationId === sessionId) {
         return;
+      }
+      if (sessionIdRef.current) {
+        chatRef.current?.disconnectConversationStream?.(sessionIdRef.current, {
+          persistResumeKey: true,
+        });
       }
       setIsChatContent(true);
       loadConversation(conversationId);

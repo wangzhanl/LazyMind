@@ -118,6 +118,7 @@ func (e *DefaultEngine) newSource(sourceID, datasetID string, req CreateSourceRe
 		Name:              req.Name,
 		DatasetID:         datasetID,
 		Status:            SourceStatusActive,
+		ChatEnabled:        true,
 		SourceOptions:     jsonFromMap(req.SourceOptions),
 		IncludeExtensions: jsonFromStrings(req.IncludeExtensions),
 		ExcludeExtensions: jsonFromStrings(req.ExcludeExtensions),

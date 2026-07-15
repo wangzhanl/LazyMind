@@ -33,6 +33,7 @@ wget-log
 .claude
 .cursor
 .codex
+.playwright-cli/
 .worktrees/
 .codex-gocache/
 .codex-gomodcache/
@@ -85,6 +86,7 @@ lazyllm_cpp.egg-info/
 data/
 volumes/
 local/config.env
+local/.bin/
 local/runtime/
 desktop/build/
 desktop/cache/

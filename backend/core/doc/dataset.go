@@ -618,6 +618,8 @@ func ListDatasets(w http.ResponseWriter, r *http.Request) {
 	}
 	statsMap := calcDatasetStatsBatch(r.Context(), dsIDs)
 	parserCache := map[string][]ParserConfig{}
+	createdByDataSourceVal := false
+
 
 
 	for _, ds := range page {

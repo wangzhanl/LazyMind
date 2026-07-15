@@ -114,6 +114,16 @@ func upsertDefaultModel(tx *gorm.DB, now time.Time, providerID, providerName str
 	if name == "" || modelType == "" {
 		return errors.New("model name and type are required")
 	}
+	if item.MaxInputTokens != nil {
+		if modelType != "llm" && modelType != "vlm" {
+			return errors.New("model max_input_tokens is only supported for llm or vlm models")
+		}
+		maxInputTokens := strings.ToUpper(strings.TrimSpace(*item.MaxInputTokens))
+		if !maxInputTokensPattern.MatchString(maxInputTokens) {
+			return errors.New("model max_input_tokens must use a positive K or M value, for example 128K or 1M")
+		}
+		item.MaxInputTokens = &maxInputTokens
+	}
 
 	var row orm.DefaultModel
 	err := tx.Where("default_model_provider_id = ? AND name = ?", providerID, name).Take(&row).Error

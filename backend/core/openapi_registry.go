@@ -661,15 +661,16 @@ type addModelProviderGroupModelOpenAPIResponse struct {
 }
 
 type listModelProviderGroupModelsOpenAPIItem struct {
-	ID                       string `json:"id"`
-	UserModelProviderID      string `json:"user_model_provider_id"`
-	UserModelProviderGroupID string `json:"user_model_provider_group_id"`
-	Name                     string `json:"name"`
-	ModelType                string `json:"model_type"`
-	ProviderName             string `json:"provider_name"`
-	GroupName                string `json:"group_name"`
-	BaseURL                  string `json:"base_url"`
-	IsDefault                bool   `json:"is_default"`
+	ID                       string  `json:"id"`
+	UserModelProviderID      string  `json:"user_model_provider_id"`
+	UserModelProviderGroupID string  `json:"user_model_provider_group_id"`
+	Name                     string  `json:"name"`
+	ModelType                string  `json:"model_type"`
+	ProviderName             string  `json:"provider_name"`
+	GroupName                string  `json:"group_name"`
+	BaseURL                  string  `json:"base_url"`
+	IsDefault                bool    `json:"is_default"`
+	MaxInputTokens           *string `json:"max_input_tokens" desc:"Maximum catalog LLM or VLM input context window, for example 128K or 1M; null for other, custom, or unknown models" openapi_nullable:"true"`
 }
 
 type listModelProviderGroupModelsOpenAPIResponse struct {
@@ -681,14 +682,15 @@ type listUserModelsByModelTypeQueryParams struct {
 }
 
 type selectedModelOpenAPIItem struct {
-	ModelKey                 string `json:"model_key"`
-	ModelID                  string `json:"model_id"`
-	UserModelProviderID      string `json:"user_model_provider_id"`
-	UserModelProviderGroupID string `json:"user_model_provider_group_id"`
-	Name                     string `json:"name"`
-	ProviderName             string `json:"provider_name"`
-	GroupName                string `json:"group_name"`
-	BaseURL                  string `json:"base_url"`
+	ModelKey                 string  `json:"model_key"`
+	ModelID                  string  `json:"model_id"`
+	UserModelProviderID      string  `json:"user_model_provider_id"`
+	UserModelProviderGroupID string  `json:"user_model_provider_group_id"`
+	Name                     string  `json:"name"`
+	ProviderName             string  `json:"provider_name"`
+	GroupName                string  `json:"group_name"`
+	BaseURL                  string  `json:"base_url"`
+	MaxInputTokens           *string `json:"max_input_tokens" desc:"Maximum selected catalog LLM or VLM input context window, for example 128K or 1M; null for other, custom, or unknown models" openapi_nullable:"true"`
 }
 
 type listSelectedModelsOpenAPIResponse struct {
@@ -948,6 +950,20 @@ type skillOrganizeOpenAPIResponse struct {
 	Status    string `json:"status"`
 	RequestID string `json:"requestid"`
 	TaskID    string `json:"taskid"`
+}
+
+type skillMaintenanceTaskOpenAPIResponse struct {
+	ID        string `json:"id"`
+	RequestID string `json:"request_id"`
+	Type      string `json:"type"`
+	Status    string `json:"status"`
+	StartedAt string `json:"started_at"`
+}
+
+type skillMaintenanceStatusOpenAPIResponse struct {
+	HasActiveTask bool                                 `json:"has_active_task"`
+	Task          *skillMaintenanceTaskOpenAPIResponse `json:"task,omitempty"`
+	Message       string                               `json:"message,omitempty"`
 }
 
 type memoryReviewResultOpenAPIResponse struct {
@@ -1322,6 +1338,7 @@ type skillRevisionOpenAPIResponse struct {
 	CreatedBy        string `json:"created_by,omitempty"`
 	CreatedAt        string `json:"created_at"`
 	FileContent      string `json:"file_content,omitempty"`
+	IsHead           bool   `json:"is_head"`
 }
 
 type skillRevisionListOpenAPIResponse struct {
@@ -2281,6 +2298,15 @@ func registeredCoreOperations() []openAPIOperation {
 		},
 		{
 			Method:      "POST",
+			Path:        "/datasets/{dataset}/uploads:checkHashes",
+			Summary:     "Check reusable file hashes",
+			Tags:        []string{"tasks"},
+			PathParams:  datasetPathParams{},
+			RequestBody: jsonBodyOf(doc.CheckFileHashesRequest{}, true),
+			Responses:   map[int]openAPIResponse{200: resp("Missing file hashes", doc.CheckFileHashesResponse{})},
+		},
+		{
+			Method:      "POST",
 			Path:        "/datasets/{dataset}/uploads:initUpload",
 			Summary:     "Initialize dataset upload",
 			Tags:        []string{"tasks"},
@@ -2364,6 +2390,13 @@ func registeredCoreOperations() []openAPIOperation {
 			Summary:   "List skill tags",
 			Tags:      []string{"skills"},
 			Responses: map[int]openAPIResponse{200: resp("Skill tag list", skillTagsOpenAPIResponse{})},
+		},
+		{
+			Method:    "GET",
+			Path:      "/skills/maintenance-task",
+			Summary:   "Get current user's active Skill maintenance task",
+			Tags:      []string{"skills"},
+			Responses: map[int]openAPIResponse{200: resp("Skill maintenance task status", skillMaintenanceStatusOpenAPIResponse{})},
 		},
 		{
 			Method:    "GET",
@@ -2941,7 +2974,7 @@ func registeredCoreOperations() []openAPIOperation {
 			Method:      "GET",
 			Path:        "/model_providers/models",
 			Summary:     "List current user's models by model_type",
-			Description: "Requires query model_type (e.g. llm, embedding). Returns all non-deleted user_model_provider_group_models for the current user with that model_type across all providers and groups. Ordered by user_model_provider_id, group id, then name. Same items as GET .../groups/{group_id}/models.",
+			Description: "Requires query model_type (e.g. llm or vlm). Returns all non-deleted user_model_provider_group_models for the current user with that model_type across all providers and groups. Each item includes nullable max_input_tokens, the catalog LLM or VLM model's maximum input context window expressed as a string such as 128K or 1M; other, custom, or unknown models return null. Ordered by user_model_provider_id, group id, then name. Same items as GET .../groups/{group_id}/models.",
 			Tags:        []string{"model_providers"},
 			QueryParams: listUserModelsByModelTypeQueryParams{},
 			Responses:   map[int]openAPIResponse{200: resp("Models list", listModelProviderGroupModelsOpenAPIResponse{})},
@@ -2950,7 +2983,7 @@ func registeredCoreOperations() []openAPIOperation {
 			Method:      "GET",
 			Path:        "/model_providers/selected_models",
 			Summary:     "Get selected models by model_type",
-			Description: "Returns the current user's selected model for each model_type.",
+			Description: "Returns the current user's selected model for each model_type. Each selection includes nullable max_input_tokens, the selected catalog LLM or VLM model's maximum input context window expressed as a string such as 128K or 1M; other, custom, or unknown models return null.",
 			Tags:        []string{"model_providers"},
 			Responses:   map[int]openAPIResponse{200: resp("Selected models", listSelectedModelsOpenAPIResponse{})},
 		},
@@ -3005,7 +3038,7 @@ func registeredCoreOperations() []openAPIOperation {
 			Method:      "GET",
 			Path:        "/model_providers/{model_provider_id}/groups/{group_id}/models",
 			Summary:     "List models under a connection group",
-			Description: "Lists non-deleted user_model_provider_group_models for the group. Each item includes is_default (true when copied from default_models seeding; false for user-added models).",
+			Description: "Lists non-deleted user_model_provider_group_models for the group. Each item includes is_default (true when copied from default_models seeding; false for user-added models) and nullable max_input_tokens, the catalog LLM or VLM model's maximum input context window expressed as a string such as 128K or 1M. Other, custom, or unknown models return null.",
 			Tags:        []string{"model_providers"},
 			PathParams:  modelProviderGroupByIDPathParams{},
 			Responses:   map[int]openAPIResponse{200: resp("Group models list", listModelProviderGroupModelsOpenAPIResponse{})},

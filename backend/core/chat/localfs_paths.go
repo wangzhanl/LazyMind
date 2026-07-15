@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/url"
 	"sort"
+	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -152,9 +153,8 @@ func listActiveSourceIDs(ctx context.Context, r *http.Request, userID string) ([
 			break
 		}
 	}
-	return sourceIDs, nil
+	return infos, nil
 }
-
 func getScanSourceBindings(ctx context.Context, r *http.Request, userID, sourceID string) ([]scanSourceBinding, error) {
 	endpoint, err := scanControlPlaneURL("/api/scan/sources/" + url.PathEscape(sourceID))
 	if err != nil {
@@ -172,7 +172,6 @@ func getScanSourceBindings(ctx context.Context, r *http.Request, userID, sourceI
 	fmt.Printf("[CORE_LOCALFS_DEBUG] source=%s bindings=%+v\n", sourceID, payload.Bindings)
 	return payload.Bindings, nil
 }
-
 func scanControlPlaneURL(path string) (*url.URL, error) {
 	base := strings.TrimRight(common.ScanControlPlaneEndpoint(), "/")
 	endpoint, err := url.Parse(base + path)
@@ -181,7 +180,6 @@ func scanControlPlaneURL(path string) (*url.URL, error) {
 	}
 	return endpoint, nil
 }
-
 func doScanControlPlaneJSON(ctx context.Context, original *http.Request, userID, endpoint string, out any) error {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
 	if err != nil {
@@ -205,7 +203,6 @@ func doScanControlPlaneJSON(ctx context.Context, original *http.Request, userID,
 	}
 	return json.NewDecoder(resp.Body).Decode(out)
 }
-
 func scanTenantIDFromRequest(r *http.Request) string {
 	if tenantID := strings.TrimSpace(r.Header.Get("X-Tenant-ID")); tenantID != "" {
 		return tenantID
