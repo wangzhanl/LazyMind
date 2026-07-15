@@ -19,6 +19,7 @@ import (
 	"lazymind/core/evolution"
 	"lazymind/core/log"
 	"lazymind/core/plugin"
+	"lazymind/core/resourceupdate"
 	"lazymind/core/state"
 	"lazymind/core/store"
 	"lazymind/core/subagent"
