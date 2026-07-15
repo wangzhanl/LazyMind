@@ -22,6 +22,12 @@ import (
 	skillsearch "lazymind/core/skillv2/search"
 )
 
+const (
+	skillDraftStatusPendingConfirm = "pending_confirm"
+	skillDraftStatusPending        = "pending"
+	skillDraftStatusAutoPending    = "auto_pending"
+)
+
 func NewSkillService(deps SkillServiceDeps) *SkillService {
 	clock := deps.Clock
 	if clock == nil {
@@ -212,6 +218,11 @@ func (s *SkillService) PatchSkill(ctx context.Context, req PatchSkillRequest) (P
 				} else {
 					updates["auto_evo_started_at"] = nil
 					updates["auto_evo_finished_at"] = s.clock.Now()
+				}
+			}
+			if req.AutoEvo != nil && !skill.AutoEvo && *req.AutoEvo {
+				if err := markPendingSkillDraftAuto(ctx, tx, req.SkillID, s.clock.Now()); err != nil {
+					return err
 				}
 			}
 			if req.IsEnabled != nil {
@@ -1499,6 +1510,9 @@ func (s *SkillService) summaryFor(ctx context.Context, row skillRow) (SkillSumma
 	if head == "" {
 		draft.Type = "create"
 	}
+	if row.AutoEvo && strings.TrimSpace(draft.Status) == skillDraftStatusAutoPending {
+		draft.HasUncommittedDraft = false
+	}
 	return SkillSummary{
 		ID:             row.ID,
 		SkillID:        row.ID,
@@ -1514,6 +1528,45 @@ func (s *SkillService) summaryFor(ctx context.Context, row skillRow) (SkillSumma
 		DeletedAt:      row.DeletedAt,
 		DeletedBy:      valueOrEmpty(row.DeletedBy),
 	}, nil
+}
+
+func markPendingSkillDraftAuto(ctx context.Context, tx *gorm.DB, skillID string, now time.Time) error {
+	var draft skillDraftRow
+	if err := tx.WithContext(ctx).Where("skill_id = ?", skillID).Take(&draft).Error; err != nil {
+		if err == gorm.ErrRecordNotFound {
+			return nil
+		}
+		return err
+	}
+	if !isPendingSkillDraftStatus(draft.DraftStatus) {
+		return nil
+	}
+	var count int64
+	if err := tx.WithContext(ctx).Model(&skillDraftEntryRow{}).Where("skill_id = ?", skillID).Count(&count).Error; err != nil {
+		return err
+	}
+	nextStatus := ""
+	if count > 0 {
+		nextStatus = skillDraftStatusAutoPending
+	}
+	if strings.TrimSpace(draft.DraftStatus) == nextStatus {
+		return nil
+	}
+	return tx.WithContext(ctx).Model(&skillDraftRow{}).
+		Where("skill_id = ? AND version = ?", skillID, draft.Version).
+		Updates(map[string]any{
+			"draft_status": nextStatus,
+			"updated_at":   now,
+		}).Error
+}
+
+func isPendingSkillDraftStatus(status string) bool {
+	switch strings.TrimSpace(status) {
+	case skillDraftStatusPendingConfirm, skillDraftStatusPending:
+		return true
+	default:
+		return false
+	}
 }
 
 func (s *SkillService) draftSummary(ctx context.Context, skillID string) (DraftSummary, error) {

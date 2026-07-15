@@ -217,7 +217,7 @@ func (e *Engine) CommitDraft(ctx context.Context, req CommitDraftRequest) (Commi
 		if err := e.store.MarkActiveReviews(ctx, tx, req.ResourceID, "committed", req.UserID, now); err != nil {
 			return err
 		}
-		if err := e.store.EnforceRevisionLimit(ctx, tx, req.ResourceID, protectedIDs(revisionID, baseRevisionID)); err != nil {
+		if err := e.store.EnforceRevisionLimit(ctx, tx, req.ResourceID, protectedIDs(revisionID)); err != nil {
 			return err
 		}
 		if err := e.store.AfterCommit(ctx, tx, revision, entries); err != nil {
@@ -315,7 +315,7 @@ func (e *Engine) CommitEntriesTx(ctx context.Context, tx *gorm.DB, req CommitEnt
 	if err := e.store.MarkActiveReviews(ctx, tx, req.ResourceID, "committed", req.UserID, now); err != nil {
 		return CommitEntriesResponse{}, err
 	}
-	if err := e.store.EnforceRevisionLimit(ctx, tx, req.ResourceID, protectedIDs(revisionID, parentRevisionID)); err != nil {
+	if err := e.store.EnforceRevisionLimit(ctx, tx, req.ResourceID, protectedIDs(revisionID)); err != nil {
 		return CommitEntriesResponse{}, err
 	}
 	if err := e.store.AfterCommit(ctx, tx, revision, req.Entries); err != nil {
