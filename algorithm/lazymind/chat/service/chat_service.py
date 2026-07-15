@@ -24,11 +24,6 @@ from lazymind.chat.service.component import (
     filter_tools,
     normalize_history_for_agent,
 )
-from lazymind.chat.service.component.status_retry import (
-    _new_react_agent,
-    build_status_retry_query,
-    is_status_only_answer,
-)
 from lazymind.chat.engine.agent_core import build_react_agent, drive_agent
 from lazymind.chat.service.utils import (
     SensitiveFilter,
@@ -174,6 +169,14 @@ def _build_ask_user_tool() -> list:
     """
     from lazymind.chat.engine.tools.ask_user import ask_user
     return [ask_user]
+
+
+def _should_register_ask_user(agentic_config: Dict[str, Any]) -> bool:
+    """Auto plugin sessions are mechanically non-interactive."""
+    return not (
+        agentic_config.get('enable_plugin', True)
+        and agentic_config.get('plugin_mode') == 'auto'
+    )
 
 
 def _build_schedule_tools() -> list:
@@ -349,6 +352,12 @@ async def handle_chat(request: ChatRequest) -> Union[Dict[str, Any], StreamingRe
     personalization = request.personalization
     agent = request.agent
     plugin = request.plugin
+    from lazymind.chat.plugin.plugin_manager import (
+        _build_chat_agent_task_context,
+        guard_plugin_agent_stream,
+        is_plugin_driver_turn,
+        resolve_plugin_injection,
+    )
 
     conversation_id = (conversation.conversation_id or '').strip()
     user_id = (conversation.user_id or '').strip()
@@ -365,13 +374,9 @@ async def handle_chat(request: ChatRequest) -> Union[Dict[str, Any], StreamingRe
         f'[files_map_keys={sorted(message.files.keys()) if isinstance(message.files, dict) else None}]'
     )
     start_time = time.time()
-    plugin_context = plugin.plugin_context or {}
     priority = runtime.priority or LAZYMIND_LLM_PRIORITY
     query, agent_query = _normalize_cite_message_query_for_agent(message.query)
-    is_driver_turn = (
-        isinstance(plugin_context, dict)
-        and plugin_context.get('synthetic_source') == 'driver'
-    )
+    is_driver_turn = is_plugin_driver_turn(plugin.plugin_context)
     sensitive_word = None if is_driver_turn else check_sensitive_content(query)
     if sensitive_word:
         cost = round(time.time() - start_time, 3)
@@ -408,8 +413,15 @@ async def handle_chat(request: ChatRequest) -> Union[Dict[str, Any], StreamingRe
         'filters': filters if RAG_MODE and filters else {},
         'files': resolved_files,
         'history_files_per_turn': files_map,
+        'databases': retrieval.databases or [],
+        'dataset': retrieval.dataset,
         'local_fs_sources': retrieval.local_fs_sources or [],
         'priority': priority,
+        'llm_config': runtime.llm_config or {},
+        'tool_config': runtime.tool_config or {},
+        'ocr_config': runtime.ocr_config or {},
+        'mcp_config': runtime.mcp_config or [],
+        'environment_context': runtime.environment_context or {},
         'user_id': user_id or '',
         'use_memory': personalization.use_memory,
         'citation_state': translator.citation_state,
@@ -453,10 +465,6 @@ async def handle_chat(request: ChatRequest) -> Union[Dict[str, Any], StreamingRe
         else:
             display_files.append(name)
 
-    from lazymind.chat.plugin.plugin_manager import (
-        resolve_plugin_injection,
-        _build_chat_agent_task_context,
-    )
     # Register the active session so the cancel endpoint can find it by conversation_id.
     _conv_id_key = conversation_id  # already stripped above
     if _conv_id_key:
@@ -529,7 +537,10 @@ async def handle_chat(request: ChatRequest) -> Union[Dict[str, Any], StreamingRe
     schedule_tools = _build_schedule_tools()
     # ask_user is a ChatAgent-only stop-tool. It is NOT in DEFAULT_TOOLS so SubAgents
     # (whose tool resolution falls back to DEFAULT_TOOLS) never see it.
-    ask_user_tools = _build_ask_user_tool()
+    # Auto plugin mode is non-interactive by contract: ask_user must be absent,
+    # not merely discouraged by prompt text.
+    allow_ask_user = _should_register_ask_user(agentic_config)
+    ask_user_tools = _build_ask_user_tool() if allow_ask_user else []
     all_tools = (agent_tools + subagent_tools + attachment_tools
                  + schedule_tools + ask_user_tools + plugin_tools + mcp_tools)
     set_trace_context({
@@ -569,7 +580,7 @@ async def handle_chat(request: ChatRequest) -> Union[Dict[str, Any], StreamingRe
     # ask_user is always a stop-tool for ChatAgent regardless of plugin state.
     # Merge it with any plugin-level stop tools (e.g. advance_step_and_hand_off).
     stop_tools = list(plugin_stop_tools) if plugin_stop_tools else []
-    if 'ask_user' not in stop_tools:
+    if allow_ask_user and 'ask_user' not in stop_tools:
         stop_tools.append('ask_user')
     react_agent.set_stop_tools(stop_tools)
 
@@ -578,7 +589,21 @@ async def handle_chat(request: ChatRequest) -> Union[Dict[str, Any], StreamingRe
 
         try:
             async with rag_sem:
-                async for kind, payload in drive_agent(react_agent, agent_query, history=agent_history):
+                initial_agent_stream = drive_agent(
+                    react_agent, agent_query, history=agent_history,
+                )
+                guarded_agent_stream = guard_plugin_agent_stream(
+                    initial_agent_stream,
+                    all_tools=all_tools,
+                    query=query,
+                    runtime_prompt=runtime_prompt,
+                    agent=agent,
+                    runtime_config=_cfg,
+                    fs=FS,
+                    stop_tools=stop_tools,
+                    history=agent_history,
+                )
+                async for kind, payload in guarded_agent_stream:
                     if kind == 'event':
                         for frame in translator.feed(payload):
                             cost = round(time.time() - start_time, 3)
@@ -587,34 +612,6 @@ async def handle_chat(request: ChatRequest) -> Union[Dict[str, Any], StreamingRe
                         # 'final' -- payload is already the resolved result value;
                         # if future.result() raised, drive_agent propagated it before yielding.
                         final_result = payload
-
-                if translator.tool_call_turns == 0 and is_status_only_answer(final_result):
-                    LOG.info(
-                        f'[ChatServer] [STATUS_ONLY_RETRY] [sid={conversation.session_id}] '
-                        f'[result={str(final_result)[:120]}]'
-                    )
-                    retry_query = build_status_retry_query(agent_query)
-                    retry_agent = _new_react_agent(
-                        all_tools=all_tools,
-                        query=query,
-                        runtime_prompt=runtime_prompt,
-                        agent=agent,
-                        config=_cfg,
-                        fs=FS,
-                        stop_tools=stop_tools,
-                    )
-                    async for kind, payload in drive_agent(retry_agent, retry_query, history=agent_history):
-                        if kind == 'event':
-                            for frame in translator.feed(payload):
-                                cost = round(time.time() - start_time, 3)
-                                yield log_and_emit_frame(frame, cost, query, conversation.session_id, tag='RETRY_FEED')
-                        else:
-                            LOG.info(
-                                f'[ChatServer] [DBG_AGENT_FINAL_RETRY] [sid={conversation.session_id}] '
-                                f'[tool_call_turns={translator.tool_call_turns}] '
-                                f'[result_type={type(payload).__name__}] [result={str(payload)[:200]}]'
-                            )
-                            final_result = payload
 
             for frame in translator.finish(final_result):
                 cost = round(time.time() - start_time, 3)

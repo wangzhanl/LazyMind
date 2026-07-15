@@ -17,6 +17,7 @@ import (
 	"lazymind/core/common"
 	"lazymind/core/common/orm"
 	"lazymind/core/modelconfig"
+	"lazymind/core/plugin/graphengine"
 	"lazymind/core/store"
 )
 
@@ -306,11 +307,9 @@ func SavePluginDraft(w http.ResponseWriter, r *http.Request) {
 
 	// --- Optimistic-lock check for versioned fields ---
 	needsVersionCheck := body.PluginYAMLContent != nil || body.StateYAMLContent != nil
-	if needsVersionCheck && body.Version != nil {
-		if *body.Version != draft.Version {
-			common.ReplyErrWithData(w, "conflict", toDraftResponse(draft), http.StatusConflict)
-			return
-		}
+	if needsVersionCheck && body.Version == nil {
+		common.ReplyErr(w, "version required", http.StatusBadRequest)
+		return
 	}
 
 	updates := map[string]any{"updated_at": time.Now().UTC()}
@@ -334,17 +333,34 @@ func SavePluginDraft(w http.ResponseWriter, r *http.Request) {
 	if body.ScriptsContent != nil {
 		updates["scripts_content"] = *body.ScriptsContent
 	}
-	if needsVersionCheck && body.Version != nil {
-		updates["version"] = draft.Version + 1
+	if needsVersionCheck {
+		updates["version"] = gorm.Expr("version + 1")
 	}
 
-	if err := db.Model(&draft).Updates(updates).Error; err != nil {
+	query := db.Model(&orm.PluginDraft{}).Where("id = ? AND created_by = ?", draftID, userID)
+	if needsVersionCheck {
+		query = query.Where("version = ?", *body.Version)
+	}
+	result := query.Updates(updates)
+	if result.Error != nil {
+		err := result.Error
 		if strings.Contains(err.Error(), "idx_plugin_drafts_user_plugin_id") ||
 			strings.Contains(err.Error(), "unique") && strings.Contains(err.Error(), "plugin_id") {
 			common.ReplyErr(w, "plugin id already exists for this user", http.StatusConflict)
 			return
 		}
 		common.ReplyErr(w, "save failed", http.StatusInternalServerError)
+		return
+	}
+	if needsVersionCheck && result.RowsAffected == 0 {
+		// The version predicate and update execute as one SQL statement, so two
+		// concurrent writers cannot both pass a separate check and overwrite one
+		// another. Return the winner's authoritative state to the stale caller.
+		if err := db.Where("id = ? AND created_by = ?", draftID, userID).First(&draft).Error; err != nil {
+			common.ReplyErr(w, "reload failed", http.StatusInternalServerError)
+			return
+		}
+		common.ReplyErrWithData(w, "conflict", toDraftResponse(draft), http.StatusConflict)
 		return
 	}
 	// Reload to return the authoritative post-save state.
@@ -512,11 +528,10 @@ func AIGeneratePluginDraft(w http.ResponseWriter, r *http.Request) {
 	reusableScripts := map[string]string(nil)
 	if body.SkillID != "" && !body.Reanalyze {
 		var cached orm.PluginGenerationAnalysis
-		// A rejection is evaluator-dependent rather than a reusable generated artifact.
-		// Re-run it so prompt/model improvements cannot leave a Skill permanently
-		// blocked by an old negative analysis. Positive and confirmation-required
-		// analyses remain reusable for an unchanged Skill revision.
-		cacheErr := db.Where("user_id=? AND source_skill_id=? AND source_skill_revision_id=? AND source_skill_tree_hash=? AND status IN ?", userID, body.SkillID, skillSnapshot.RevisionID, skillSnapshot.TreeHash, []string{"generatable", "needs_confirmation"}).Order("created_at DESC").First(&cached).Error
+		// Only a positive analysis is a reusable generated artifact. Re-run rejected
+		// and confirmation-required results so analyzer improvements cannot leave a
+		// Skill blocked by a stale or non-user-resolvable verdict.
+		cacheErr := db.Where("user_id=? AND source_skill_id=? AND source_skill_revision_id=? AND source_skill_tree_hash=? AND status = ?", userID, body.SkillID, skillSnapshot.RevisionID, skillSnapshot.TreeHash, "generatable").Order("created_at DESC").First(&cached).Error
 		if cacheErr == nil {
 			now := time.Now().UTC()
 			clone := cached
@@ -704,18 +719,20 @@ func AIRepairPluginDraft(w http.ResponseWriter, r *http.Request) {
 		warnings, draft.PluginYAMLContent == "", draft.StateYAMLContent == "")
 
 	prevStatus := draft.GenerateStatus
+	beforeDiagnostics := diagnosePluginWithProfile(draft.PluginYAMLContent, draft.StateYAMLContent, draft.ScenarioContent, draft.ScriptsContent, graphengine.ProfilePublish)
 	payload := pluginDraftRepairPayload{
 		DraftID:      draftID,
 		UserID:       userID,
 		Target:       strings.TrimSpace(body.Target),
 		RepairHint:   strings.TrimSpace(body.RepairHint),
 		Warnings:     warnings,
+		Diagnostics:  repairDiagnosticsPayload(beforeDiagnostics),
 		PrevStatus:   prevStatus,
 		LLMConfig:    llmConfig,
 		DraftVersion: draft.Version,
 		Mode:         body.Mode,
 	}
-	repairRun := orm.PluginRepairRun{ID: uuid.NewString(), DraftID: draft.ID, UserID: userID, BasePluginRevisionID: draft.BaseRevisionID, DraftVersionBefore: draft.Version, Target: body.Target, Mode: body.Mode, SourceAnalysisID: body.SourceAnalysisID, SourceSkillRevisionID: draft.SourceSkillRevisionID, RepairHint: body.RepairHint, DiagnosticsBeforeJSON: diagnosticsJSON(diagnosePlugin(draft.PluginYAMLContent, draft.StateYAMLContent, draft.ScenarioContent, draft.ScriptsContent)), ChangesJSON: "{}", DiagnosticsAfterJSON: "{}", Status: "queued", CreatedAt: time.Now().UTC(), UpdatedAt: time.Now().UTC()}
+	repairRun := orm.PluginRepairRun{ID: uuid.NewString(), DraftID: draft.ID, UserID: userID, BasePluginRevisionID: draft.BaseRevisionID, DraftVersionBefore: draft.Version, Target: body.Target, Mode: body.Mode, SourceAnalysisID: body.SourceAnalysisID, SourceSkillRevisionID: draft.SourceSkillRevisionID, RepairHint: body.RepairHint, DiagnosticsBeforeJSON: diagnosticsJSON(beforeDiagnostics), ChangesJSON: "{}", DiagnosticsAfterJSON: "{}", Status: "queued", CreatedAt: time.Now().UTC(), UpdatedAt: time.Now().UTC()}
 	if err := db.Create(&repairRun).Error; err != nil {
 		common.ReplyErr(w, "create repair run failed", http.StatusInternalServerError)
 		return
