@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"lazymind/core/common/orm"
+	"lazymind/core/filediff"
 )
 
 func newResourceFSTestDB(t *testing.T) *orm.DB {
@@ -16,8 +17,6 @@ func newResourceFSTestDB(t *testing.T) *orm.DB {
 		t.Fatalf("connect db: %v", err)
 	}
 	if err := db.AutoMigrate(
-		&orm.SystemMemory{},
-		&orm.SystemUserPreference{},
 		&orm.PersonalResource{},
 		&orm.PersonalResourceBlob{},
 		&orm.PersonalResourceRevision{},
@@ -78,12 +77,20 @@ func TestServiceDraftCommitRevisionRollback(t *testing.T) {
 		Message:              "accept draft",
 		ExpectedDraftVersion: draft.DraftVersion,
 		CreatedBy:            "u1",
+		CreatedByName:        "Alice",
 	})
 	if err != nil {
 		t.Fatalf("CommitDraft returned error: %v", err)
 	}
 	if commit.Content != "updated memory" || commit.RevisionNo != 2 {
 		t.Fatalf("unexpected commit: %#v", commit)
+	}
+	var resource orm.PersonalResource
+	if err := db.Take(&resource, "id = ?", state.ID).Error; err != nil {
+		t.Fatalf("read resource after commit: %v", err)
+	}
+	if resource.UpdatedBy != "u1" || resource.UpdatedByName != "Alice" {
+		t.Fatalf("commit did not update actor fields: updated_by=%q updated_by_name=%q", resource.UpdatedBy, resource.UpdatedByName)
 	}
 
 	revisions, err := service.ListRevisions(context.Background(), ListRevisionsRequest{Ref: ref})
@@ -108,20 +115,98 @@ func TestServiceDraftCommitRevisionRollback(t *testing.T) {
 		RevisionID:             initialRevisionID,
 		ExpectedHeadRevisionID: commit.RevisionID,
 		CreatedBy:              "u1",
+		CreatedByName:          "Bob",
 	})
 	if err != nil {
 		t.Fatalf("Rollback returned error: %v", err)
 	}
-	if rollback.Content != "initial memory" || rollback.RevisionNo != 3 {
+	if rollback.Content != "initial memory" || rollback.RevisionID != initialRevisionID || rollback.RevisionNo != 1 {
 		t.Fatalf("unexpected rollback: %#v", rollback)
+	}
+	if err := db.Take(&resource, "id = ?", state.ID).Error; err != nil {
+		t.Fatalf("read resource after rollback: %v", err)
+	}
+	if resource.UpdatedBy != "u1" || resource.UpdatedByName != "Bob" {
+		t.Fatalf("rollback did not update actor fields: updated_by=%q updated_by_name=%q", resource.UpdatedBy, resource.UpdatedByName)
 	}
 
 	rolledBackHead, err := service.ReadFile(context.Background(), ReadFileRequest{Ref: ref, RefType: FileRefHead})
 	if err != nil {
 		t.Fatalf("ReadFile rolled back head returned error: %v", err)
 	}
-	if rolledBackHead.Content != "initial memory" || rolledBackHead.RevisionNo != 3 {
+	if rolledBackHead.Content != "initial memory" || rolledBackHead.RevisionNo != 1 {
 		t.Fatalf("unexpected rolled back head: %#v", rolledBackHead)
+	}
+
+	revisions, err = service.ListRevisions(context.Background(), ListRevisionsRequest{Ref: ref})
+	if err != nil {
+		t.Fatalf("ListRevisions after rollback returned error: %v", err)
+	}
+	if len(revisions.Items) != 2 || revisions.Items[0].RevisionNo != 2 || revisions.Items[0].IsHead || revisions.Items[1].RevisionNo != 1 || !revisions.Items[1].IsHead {
+		t.Fatalf("unexpected revisions after rollback: %#v", revisions.Items)
+	}
+
+	currentDraft, err := service.ReadFile(context.Background(), ReadFileRequest{Ref: ref, RefType: FileRefDraft})
+	if err != nil {
+		t.Fatalf("ReadFile draft after rollback returned error: %v", err)
+	}
+	branchDraft, err := service.WriteDraft(context.Background(), WriteDraftRequest{Ref: ref, Content: "branched memory", ExpectedDraftVersion: currentDraft.DraftVersion, UpdatedBy: "u1"})
+	if err != nil {
+		t.Fatalf("WriteDraft after rollback returned error: %v", err)
+	}
+	branchCommit, err := service.CommitDraft(context.Background(), CommitDraftRequest{Ref: ref, ExpectedDraftVersion: branchDraft.DraftVersion, CreatedBy: "u1"})
+	if err != nil {
+		t.Fatalf("CommitDraft after rollback returned error: %v", err)
+	}
+	if branchCommit.RevisionNo != 3 {
+		t.Fatalf("branch RevisionNo = %d, want 3", branchCommit.RevisionNo)
+	}
+	var branchRevision orm.PersonalResourceRevision
+	if err := db.Where("id = ?", branchCommit.RevisionID).Take(&branchRevision).Error; err != nil {
+		t.Fatalf("read branch revision: %v", err)
+	}
+	if branchRevision.ParentRevisionID == nil || *branchRevision.ParentRevisionID != initialRevisionID {
+		t.Fatalf("branch parent_revision_id = %v, want %s", branchRevision.ParentRevisionID, initialRevisionID)
+	}
+}
+
+func TestRollbackRejectsPendingDraft(t *testing.T) {
+	for _, resourceType := range []ResourceType{ResourceTypeMemory, ResourceTypeUserPreference} {
+		t.Run(string(resourceType), func(t *testing.T) {
+			db := newResourceFSTestDB(t)
+			service := NewService(ServiceDeps{DB: db.DB})
+			ref := ResourceRef{UserID: "u1", ResourceType: resourceType}
+			state, err := service.EnsureResource(context.Background(), ref, "v1")
+			if err != nil {
+				t.Fatalf("EnsureResource returned error: %v", err)
+			}
+			draft, err := service.WriteDraft(context.Background(), WriteDraftRequest{Ref: ref, Content: "v2", ExpectedDraftVersion: state.DraftVersion})
+			if err != nil {
+				t.Fatalf("WriteDraft returned error: %v", err)
+			}
+			commit, err := service.CommitDraft(context.Background(), CommitDraftRequest{Ref: ref, ExpectedDraftVersion: draft.DraftVersion})
+			if err != nil {
+				t.Fatalf("CommitDraft returned error: %v", err)
+			}
+			pending, err := service.WriteDraft(context.Background(), WriteDraftRequest{Ref: ref, Content: "pending", ExpectedDraftVersion: draft.DraftVersion + 1})
+			if err != nil {
+				t.Fatalf("WriteDraft pending returned error: %v", err)
+			}
+			if pending.DraftStatus == "" {
+				t.Fatal("pending draft status is empty")
+			}
+
+			if _, err := service.Rollback(context.Background(), RollbackRequest{Ref: ref, RevisionID: state.HeadRevisionID, ExpectedHeadRevisionID: commit.RevisionID}); !errors.Is(err, ErrConflict) {
+				t.Fatalf("Rollback error = %v, want ErrConflict", err)
+			}
+			head, err := service.ReadFile(context.Background(), ReadFileRequest{Ref: ref, RefType: FileRefHead})
+			if err != nil {
+				t.Fatalf("ReadFile head returned error: %v", err)
+			}
+			if head.RevisionID != commit.RevisionID || head.Content != "v2" {
+				t.Fatalf("head changed after rejected rollback: %#v", head)
+			}
+		})
 	}
 }
 
@@ -208,6 +293,149 @@ func TestReviewActionRejectAndUndoUpdatesDraftOnly(t *testing.T) {
 	}
 }
 
+func TestDraftPreviewRendersResolvedMemoryHunksAsContext(t *testing.T) {
+	db := newResourceFSTestDB(t)
+	service := NewService(ServiceDeps{DB: db.DB})
+	ref := ResourceRef{UserID: "u1", ResourceType: ResourceTypeMemory}
+	ctx := context.Background()
+
+	state, err := service.EnsureResource(ctx, ref, "title\nold one\nkeep\nold two\nend\n")
+	if err != nil {
+		t.Fatalf("EnsureResource returned error: %v", err)
+	}
+	draftContent := "title\nnew one\nkeep\nnew two\nend\n"
+	if _, err := service.WriteDraft(ctx, WriteDraftRequest{
+		Ref:                  ref,
+		Content:              draftContent,
+		ExpectedDraftVersion: state.DraftVersion,
+		UpdatedBy:            "u1",
+	}); err != nil {
+		t.Fatalf("WriteDraft returned error: %v", err)
+	}
+	preview, err := service.DraftPreview(ctx, DraftPreviewRequest{Ref: ref})
+	if err != nil {
+		t.Fatalf("DraftPreview returned error: %v", err)
+	}
+	hunkIDs := reviewHunkIDs(t, preview)
+	if len(hunkIDs) != 2 || preview.PendingCount != 2 {
+		t.Fatalf("unexpected initial review: hunks=%v preview=%#v", hunkIDs, preview)
+	}
+
+	if _, err := service.Action(ctx, ReviewActionRequest{
+		Ref:                   ref,
+		ReviewID:              preview.ReviewID,
+		ExpectedReviewVersion: preview.ReviewVersion,
+		UpdatedBy:             "u1",
+		Items: []ReviewActionItem{{
+			HunkID:   hunkIDs[0],
+			Decision: decisionAccepted,
+		}},
+	}); err != nil {
+		t.Fatalf("accept Action returned error: %v", err)
+	}
+	afterAccept, err := service.DraftPreview(ctx, DraftPreviewRequest{Ref: ref})
+	if err != nil {
+		t.Fatalf("DraftPreview after accept returned error: %v", err)
+	}
+	if afterAccept.AcceptedCount != 1 || afterAccept.PendingCount != 1 || afterAccept.RejectedCount != 0 {
+		t.Fatalf("unexpected counts after accept: %#v", afterAccept)
+	}
+	acceptedBlock := previewHunkBlock(t, afterAccept.Diff.DiffEntryLines, hunkIDs[0])
+	if previewHasChangedLine(acceptedBlock) || !previewHasContextText(acceptedBlock, "new one") {
+		t.Fatalf("accepted hunk should render as context: %#v", acceptedBlock)
+	}
+	pendingBlock := previewHunkBlock(t, afterAccept.Diff.DiffEntryLines, hunkIDs[1])
+	if !previewHasChangedLine(pendingBlock) {
+		t.Fatalf("pending hunk should keep diff lines: %#v", pendingBlock)
+	}
+
+	rejectAction, err := service.Action(ctx, ReviewActionRequest{
+		Ref:                   ref,
+		ReviewID:              afterAccept.ReviewID,
+		ExpectedReviewVersion: afterAccept.ReviewVersion,
+		UpdatedBy:             "u1",
+		Items: []ReviewActionItem{{
+			HunkID:   hunkIDs[1],
+			Decision: decisionRejected,
+		}},
+	})
+	if err != nil {
+		t.Fatalf("reject Action returned error: %v", err)
+	}
+	if rejectAction.DraftContent != "title\nnew one\nkeep\nold two\nend\n" {
+		t.Fatalf("unexpected draft after rejecting second hunk: %q", rejectAction.DraftContent)
+	}
+	afterReject, err := service.DraftPreview(ctx, DraftPreviewRequest{Ref: ref})
+	if err != nil {
+		t.Fatalf("DraftPreview after reject returned error: %v", err)
+	}
+	if afterReject.AcceptedCount != 1 || afterReject.RejectedCount != 1 || afterReject.PendingCount != 0 {
+		t.Fatalf("unexpected counts after reject: %#v", afterReject)
+	}
+	if block := previewHunkBlock(t, afterReject.Diff.DiffEntryLines, hunkIDs[0]); previewHasChangedLine(block) {
+		t.Fatalf("accepted hunk should stay context after all decisions: %#v", block)
+	}
+	rejectedBlock := previewHunkBlock(t, afterReject.Diff.DiffEntryLines, hunkIDs[1])
+	if previewHasChangedLine(rejectedBlock) || !previewHasContextText(rejectedBlock, "old two") {
+		t.Fatalf("rejected hunk should render as context: %#v", rejectedBlock)
+	}
+}
+
+func TestDraftPreviewSupportsUserPreferenceReviewDiff(t *testing.T) {
+	db := newResourceFSTestDB(t)
+	service := NewService(ServiceDeps{DB: db.DB})
+	ref := ResourceRef{UserID: "u1", ResourceType: ResourceTypeUserPreference}
+	ctx := context.Background()
+
+	baseContent := "---\nagent_persona: \"old\"\npreferred_name: \"\"\nresponse_style: \"\"\n---\n\nold preference\n"
+	draftContent := "---\nagent_persona: \"new\"\npreferred_name: \"\"\nresponse_style: \"\"\n---\n\nold preference\n"
+	state, err := service.EnsureResource(ctx, ref, baseContent)
+	if err != nil {
+		t.Fatalf("EnsureResource returned error: %v", err)
+	}
+	if _, err := service.WriteDraft(ctx, WriteDraftRequest{
+		Ref:                  ref,
+		Content:              draftContent,
+		ExpectedDraftVersion: state.DraftVersion,
+		UpdatedBy:            "u1",
+	}); err != nil {
+		t.Fatalf("WriteDraft returned error: %v", err)
+	}
+	preview, err := service.DraftPreview(ctx, DraftPreviewRequest{Ref: ref})
+	if err != nil {
+		t.Fatalf("DraftPreview returned error: %v", err)
+	}
+	hunkID := firstReviewHunkID(t, preview)
+	if preview.Path != UserPreferencePath || preview.ReviewID == "" || preview.PendingCount != 1 {
+		t.Fatalf("unexpected user preference preview: %#v", preview)
+	}
+
+	action, err := service.Action(ctx, ReviewActionRequest{
+		Ref:                   ref,
+		ReviewID:              preview.ReviewID,
+		ExpectedReviewVersion: preview.ReviewVersion,
+		UpdatedBy:             "u1",
+		Items: []ReviewActionItem{{
+			HunkID:   hunkID,
+			Decision: decisionAccepted,
+		}},
+	})
+	if err != nil {
+		t.Fatalf("Action returned error: %v", err)
+	}
+	if action.DraftContent != draftContent {
+		t.Fatalf("accepted user preference draft = %q, want %q", action.DraftContent, draftContent)
+	}
+	afterAccept, err := service.DraftPreview(ctx, DraftPreviewRequest{Ref: ref})
+	if err != nil {
+		t.Fatalf("DraftPreview after accept returned error: %v", err)
+	}
+	block := previewHunkBlock(t, afterAccept.Diff.DiffEntryLines, hunkID)
+	if afterAccept.AcceptedCount != 1 || afterAccept.PendingCount != 0 || previewHasChangedLine(block) {
+		t.Fatalf("accepted user preference hunk should render as context: preview=%#v block=%#v", afterAccept, block)
+	}
+}
+
 func TestReviewActionConflictsWhenDraftChangesAfterPreview(t *testing.T) {
 	db := newResourceFSTestDB(t)
 	service := NewService(ServiceDeps{DB: db.DB})
@@ -266,41 +494,63 @@ func TestResourceTypeForPathNormalizesLeadingSlash(t *testing.T) {
 	}
 }
 
-func TestSyncBusinessColumnsParsesPreferenceFileWithMissingMetadata(t *testing.T) {
-	db := newResourceFSTestDB(t)
-	row := orm.SystemUserPreference{
-		ID:            "preference-1",
-		UserID:        "u1",
-		Content:       "old",
-		AgentPersona:  "old agent",
-		PreferredName: "old name",
-		ResponseStyle: "old style",
-		Version:       1,
-	}
-	if err := db.Create(&row).Error; err != nil {
-		t.Fatalf("create preference: %v", err)
-	}
-	content := "---\nagent_persona: new agent\n---\n\nnew body"
-	err := syncBusinessColumns(context.Background(), db.DB, ResourceRef{UserID: "u1", ResourceType: ResourceTypeUserPreference}, content, 2)
-	if err != nil {
-		t.Fatalf("syncBusinessColumns returned error: %v", err)
-	}
-	var updated orm.SystemUserPreference
-	if err := db.Where("id = ?", row.ID).Take(&updated).Error; err != nil {
-		t.Fatalf("query updated preference: %v", err)
-	}
-	if updated.Content != "new body" || updated.AgentPersona != "new agent" || updated.PreferredName != "" || updated.ResponseStyle != "" || updated.Version != 2 {
-		t.Fatalf("unexpected synced preference: %#v", updated)
-	}
-}
-
 func firstReviewHunkID(t *testing.T, preview DraftPreviewResponse) string {
 	t.Helper()
-	for _, line := range preview.Diff.DiffEntryLines {
-		if line.Type == "HUNK" && line.HunkID != "" {
-			return line.HunkID
-		}
+	hunkIDs := reviewHunkIDs(t, preview)
+	if len(hunkIDs) > 0 {
+		return hunkIDs[0]
 	}
 	t.Fatalf("preview missing review hunk: %#v", preview.Diff.DiffEntryLines)
 	return ""
+}
+
+func reviewHunkIDs(t *testing.T, preview DraftPreviewResponse) []string {
+	t.Helper()
+	hunkIDs := []string{}
+	for _, line := range preview.Diff.DiffEntryLines {
+		if line.Type == "HUNK" && line.HunkID != "" {
+			hunkIDs = append(hunkIDs, line.HunkID)
+		}
+	}
+	if len(hunkIDs) == 0 {
+		t.Fatalf("preview missing review hunk: %#v", preview.Diff.DiffEntryLines)
+	}
+	return hunkIDs
+}
+
+func previewHunkBlock(t *testing.T, lines []filediff.DiffEntryLine, hunkID string) []filediff.DiffEntryLine {
+	t.Helper()
+	for i, line := range lines {
+		if line.Type != "HUNK" || line.HunkID != hunkID {
+			continue
+		}
+		end := len(lines)
+		for j := i + 1; j < len(lines); j++ {
+			if lines[j].Type == "HUNK" {
+				end = j
+				break
+			}
+		}
+		return lines[i:end]
+	}
+	t.Fatalf("hunk %q missing from lines: %#v", hunkID, lines)
+	return nil
+}
+
+func previewHasChangedLine(lines []filediff.DiffEntryLine) bool {
+	for _, line := range lines {
+		if line.Type == "ADDITION" || line.Type == "DELETION" {
+			return true
+		}
+	}
+	return false
+}
+
+func previewHasContextText(lines []filediff.DiffEntryLine, text string) bool {
+	for _, line := range lines {
+		if line.Type == "CONTEXT" && line.Text == text {
+			return true
+		}
+	}
+	return false
 }

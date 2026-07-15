@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"html"
 	"sort"
 	"strconv"
 	"strings"
@@ -129,6 +130,7 @@ func (s *Service) PrepareFile(ctx context.Context, req PrepareFileRequest) (skil
 	}
 	file := req.File
 	s.annotateFile(&file, session, decisions, canUndo)
+	file.DiffEntryLines = reviewDisplayDiffEntryLines(file.DiffEntryLines)
 	return file, nil
 }
 
@@ -481,8 +483,8 @@ func (s reviewVersionStore) AfterCommit(ctx context.Context, tx *gorm.DB, revisi
 	return skillsearch.RebuildSkillTx(ctx, tx, revision.ResourceID, revision.CreatedAt)
 }
 
-func (s reviewVersionStore) AfterRollback(ctx context.Context, tx *gorm.DB, revision versionfs.RevisionRecord, entries map[string]versionfs.Entry) error {
-	return skillsearch.RebuildSkillTx(ctx, tx, revision.ResourceID, revision.CreatedAt)
+func (s reviewVersionStore) AfterRollback(ctx context.Context, tx *gorm.DB, skillID string, revisionID string, entries map[string]versionfs.Entry, now time.Time) error {
+	return skillsearch.RebuildSkillTx(ctx, tx, skillID, now)
 }
 
 func (s reviewVersionStore) ListBlobHashes(ctx context.Context, tx *gorm.DB) ([]string, error) {
@@ -693,6 +695,69 @@ func (s *Service) annotateFile(file *skilldiff.DiffFile, session reviewSessionRo
 		DraftSnapshotHash: session.DraftSnapshotHash,
 	}, decisions, canUndo)
 	applyReviewFileToSkill(reviewFile, file)
+}
+
+func reviewDisplayDiffEntryLines(lines []skilldiff.DiffEntryLine) []skilldiff.DiffEntryLine {
+	out := make([]skilldiff.DiffEntryLine, 0, len(lines))
+	for i := 0; i < len(lines); {
+		line := lines[i]
+		if line.Type != "HUNK" {
+			out = append(out, line)
+			i++
+			continue
+		}
+		end := len(lines)
+		for j := i + 1; j < len(lines); j++ {
+			if lines[j].Type == "HUNK" {
+				end = j
+				break
+			}
+		}
+		switch strings.TrimSpace(line.Decision) {
+		case decisionAccepted:
+			out = append(out, line)
+			out = append(out, resolvedHunkLines(lines[i+1:end], decisionAccepted)...)
+		case decisionRejected:
+			out = append(out, line)
+			out = append(out, resolvedHunkLines(lines[i+1:end], decisionRejected)...)
+		default:
+			out = append(out, lines[i:end]...)
+		}
+		i = end
+	}
+	return out
+}
+
+func resolvedHunkLines(lines []skilldiff.DiffEntryLine, decision string) []skilldiff.DiffEntryLine {
+	out := make([]skilldiff.DiffEntryLine, 0, len(lines))
+	for _, line := range lines {
+		switch line.Type {
+		case "CONTEXT":
+			out = append(out, line)
+		case "ADDITION":
+			if decision == decisionAccepted {
+				out = append(out, resolvedContextLine(line, line.NewLine))
+			}
+		case "DELETION":
+			if decision == decisionRejected {
+				out = append(out, resolvedContextLine(line, line.OldLine))
+			}
+		default:
+			out = append(out, line)
+		}
+	}
+	return out
+}
+
+func resolvedContextLine(line skilldiff.DiffEntryLine, lineNo int) skilldiff.DiffEntryLine {
+	return skilldiff.DiffEntryLine{
+		Type:                    "CONTEXT",
+		Text:                    line.Text,
+		HTML:                    html.EscapeString(line.Text),
+		OldLine:                 lineNo,
+		NewLine:                 lineNo,
+		DisplayNoNewLineWarning: line.DisplayNoNewLineWarning,
+	}
 }
 
 func draftReviewSnapshot(ctx context.Context, db *gorm.DB, skillID string) (string, int64, string, error) {
@@ -1216,7 +1281,7 @@ type skillDraftRow struct {
 	SkillID        string     `gorm:"column:skill_id;type:varchar(36);primaryKey"`
 	BaseRevisionID *string    `gorm:"column:base_revision_id;type:varchar(36)"`
 	TaskID         string     `gorm:"column:task_id;type:text"`
-	ConversationID *string    `gorm:"column:conversation_id;type:varchar(36)"`
+	ConversationID *string    `gorm:"column:conversation_id;type:varchar(128)"`
 	UpdatedBy      *string    `gorm:"column:updated_by;type:text"`
 	Version        int64      `gorm:"column:version"`
 	DraftUpdatedAt *time.Time `gorm:"column:draft_updated_at"`

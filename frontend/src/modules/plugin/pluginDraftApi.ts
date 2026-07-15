@@ -25,6 +25,12 @@ export interface BuiltinPluginUiTab {
   label: string;
   layout: string;
   slots: BuiltinPluginUiTabSlot[];
+  composite_layout?: unknown;
+  composite_behavior?: {
+    hide_empty_columns?: boolean;
+    empty_column_scope?: 'selected' | 'tab';
+    mutually_exclusive?: Array<{ slots: string[]; prefer?: string[] }>;
+  };
 }
 
 export interface BuiltinPlugin {
@@ -75,6 +81,10 @@ export interface PluginDraftRecord {
   source_type: string;
   source_skill_id: string;
   source_skill_name: string;
+  source_skill_revision_id: string;
+  source_skill_revision_no: number;
+  source_skill_tree_hash: string;
+  source_analysis_id: string;
   // Optimistic-lock version. Increment on every save that touches plugin_yaml_content or state_yaml_content.
   version: number;
   created_at: string;
@@ -87,6 +97,7 @@ export interface PluginDraftRecord {
   published_status: string;
   base_revision_id: string;
   draft_dirty: boolean;
+  last_repair_run_id: string;
 }
 
 export interface ListPluginDraftsResponse {
@@ -154,6 +165,34 @@ export async function publishPluginDraft(id: string): Promise<PublishedPluginVer
   return resp.data.data;
 }
 
+export interface PluginDiagnostic {
+  code: string;
+  severity: 'error' | 'warning' | string;
+  path?: string;
+  node_id?: string;
+  edge_id?: string;
+  material_id?: string;
+  message: string;
+  details?: Record<string, unknown>;
+  fixable: boolean;
+}
+
+export interface PluginValidationResult {
+  valid: boolean;
+  profile: string;
+  schema_version: string;
+  graph_hash?: string;
+  diagnostics: PluginDiagnostic[];
+}
+
+export async function validatePluginDraft(id: string): Promise<PluginValidationResult> {
+  const resp = await axiosInstance.post<CoreResponse<PluginValidationResult>>(
+    `${coreBasePath}/plugin-drafts/${id}:validate`,
+    { profile: 'editor' },
+  );
+  return resp.data.data;
+}
+
 export interface PluginVersionSummary { revision_id: string; revision_no: number; tree_hash: string; message: string; created_by: string; created_at: string; current: boolean }
 export interface PluginVersionContent { plugin_ref: string; revision_id: string; revision_no: number; tree_hash: string; plugin_yaml_content: string; state_yaml_content: string; scenario_content: string; scripts_content: string; readonly: true }
 export async function listPluginVersions(pluginRef: string): Promise<PluginVersionSummary[]> { const r=await axiosInstance.get<CoreResponse<{versions:PluginVersionSummary[]}>>(`${coreBasePath}/published-plugins/${encodeURIComponent(pluginRef)}/versions`);return r.data.data.versions }
@@ -210,7 +249,15 @@ export interface RepairPluginDraftPayload {
   // Which part to repair: 'statemachine' | 'ui' | 'scenario'
   // 'statemachine' and 'ui' maps to state.yml repair; 'scenario' maps to scenario.md repair.
   target?: string;
+  mode?: 'plugin_local' | 'source_aware';
+  draft_version: number;
+  source_analysis_id?: string;
 }
+
+export interface WorkflowCandidate { id: string; name?: string; goal?: string; inputs?: unknown; outputs?: unknown; steps?: unknown; evidence_paths?: string[] }
+export interface PluginGenerationAnalysis { analysis_id: string; status: string; verdict_code: string; message: string; source_skill_revision_id: string; source_skill_revision_no: number; source_skill_tree_hash: string; candidates: WorkflowCandidate[]; selected_candidate_id: string; coverage: unknown; tool_mappings: unknown; scripts: Record<string,{classification:string;reason?:string}> }
+export async function getPluginGenerationAnalysis(id: string): Promise<PluginGenerationAnalysis> { const r=await axiosInstance.get<CoreResponse<PluginGenerationAnalysis>>(`${coreBasePath}/plugin-drafts/${id}/generation-analysis`); return r.data.data }
+export async function confirmPluginWorkflow(id: string, payload: {analysis_id:string;candidate_id:string;source_skill_revision_id:string;draft_version:number}): Promise<void> { await axiosInstance.post(`${coreBasePath}/plugin-drafts/${id}:confirm-workflow`,payload) }
 
 // Trigger AI repair for a plugin draft with warnings or incomplete state.yml.
 // Sends current YAML content to Python /repair endpoint and returns the patched draft.
@@ -223,6 +270,41 @@ export async function repairPluginDraft(
     payload,
   );
   return resp.data.data;
+}
+export interface RepairPreview { target:string;mode:string;draft_version:number;diagnostics:Array<{code:string;path:string;message:string;severity:string}>;planned_files:string[] }
+export interface PluginRepairRun { repair_id:string;status:string;target:string;diagnostics_after:Array<{code:string;path:string;message:string;severity:string}> }
+export async function getPluginRepairRun(draftId:string,repairId:string):Promise<PluginRepairRun>{const r=await axiosInstance.get<CoreResponse<PluginRepairRun>>(`${coreBasePath}/plugin-drafts/${draftId}/repair-runs/${repairId}`);return r.data.data}
+export async function previewPluginRepair(id:string,payload:{target:string;mode:string}):Promise<RepairPreview>{
+  const r=await axiosInstance.post<CoreResponse<RepairPreview>>(`${coreBasePath}/plugin-drafts/${id}:repair-preview`,payload);
+  const data = r.data.data;
+  const normalized = Array.isArray(data.diagnostics) ? data.diagnostics.map((raw) => {
+    // Compatibility with Core versions that serialized Go field names as
+    // Code/Path/Message/Severity instead of the lowercase API contract.
+    const item = raw as unknown as Record<string, unknown>;
+    return {
+      code: String(item.code ?? item.Code ?? 'unknown'),
+      path: String(item.path ?? item.Path ?? ''),
+      message: String(item.message ?? item.Message ?? ''),
+      severity: String(item.severity ?? item.Severity ?? 'error'),
+    };
+  }) : [];
+  const appliesToTarget = (code: string) => {
+    if (payload.target === 'full' || code === 'plugin_yaml_invalid') return true;
+    if (payload.target === 'statemachine') return code.startsWith('state_');
+    if (payload.target === 'ui') return code.startsWith('ui_');
+    if (payload.target === 'scenario') return code.startsWith('scenario_');
+    if (payload.target === 'scripts') return code.startsWith('scripts_') || code.startsWith('tool_script_');
+    return true;
+  };
+  const seen = new Set<string>();
+  const diagnostics = normalized.filter((item) => {
+    if (!appliesToTarget(item.code)) return false;
+    const key = `${item.code}\u0000${item.path}\u0000${item.message}\u0000${item.severity}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+  return { ...data, planned_files: data.planned_files ?? [], diagnostics };
 }
 
 // ─── Built-in plugin API ──────────────────────────────────────────────────────

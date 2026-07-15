@@ -1,6 +1,8 @@
 import type { StructuredAsset } from "../../shared";
 import type { SkillAssetRecord } from "../../skillApi";
 import type { SkillMarketSourceFilter, SkillSourceFilter } from "../../shared";
+import type { MarketSkillAsset } from "./skillMarketMockData";
+import { getMarketSource } from "./skillMarketMockData";
 
 export const mapSkillAssetRecordToStructuredAsset = (
   item: SkillAssetRecord,
@@ -15,6 +17,8 @@ export const mapSkillAssetRecordToStructuredAsset = (
   draft: item.draft,
   autoEvo: item.autoEvo,
   isEnabled: item.isEnabled,
+  deletedAt: item.deletedAt,
+  deletedBy: item.deletedBy,
 });
 
 export const filterInstalledSkills = (
@@ -62,6 +66,10 @@ export const filterMarketSkills = (
       return false;
     }
 
+    if (options.source !== "all" && getMarketSource(item) !== options.source) {
+      return false;
+    }
+
     if (!keyword) {
       return true;
     }
@@ -70,6 +78,27 @@ export const filterMarketSkills = (
       item.name.toLowerCase().includes(keyword) ||
       item.description.toLowerCase().includes(keyword)
     );
+  });
+};
+
+export const isMarketSkillInstalled = (
+  installedSkills: StructuredAsset[],
+  marketItem: StructuredAsset,
+): boolean => {
+  const marketSkill = marketItem as MarketSkillAsset;
+  if (marketSkill.installed) {
+    return true;
+  }
+
+  const marketItemId = marketSkill.marketItemId?.trim() || marketItem.id.trim();
+  const normalizedName = marketItem.name.trim().toLowerCase();
+
+  return installedSkills.some((skill) => {
+    const installedMarketId = (skill as MarketSkillAsset).marketItemId?.trim();
+    if (installedMarketId && marketItemId && installedMarketId === marketItemId) {
+      return true;
+    }
+    return skill.name.trim().toLowerCase() === normalizedName;
   });
 };
 

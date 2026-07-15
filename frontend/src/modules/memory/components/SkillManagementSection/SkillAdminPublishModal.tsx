@@ -1,8 +1,8 @@
 import { useState } from "react";
 import { Button, Input, Modal, Upload, message } from "antd";
-import { InboxOutlined } from "@ant-design/icons";
+import { DeleteOutlined, InboxOutlined, PaperClipOutlined } from "@ant-design/icons";
 import { getLocalizedErrorMessage } from "@/components/request";
-import { createSkillAsset } from "../../skillApi";
+import { publishSkillToMarket } from "../../skillApi";
 import { uploadSkillTempFile } from "../../skillUpload";
 
 interface SkillAdminPublishModalProps {
@@ -32,6 +32,10 @@ export default function SkillAdminPublishModal({
     onClose();
   };
 
+  const handleClearFile = () => {
+    setSelectedFile(null);
+  };
+
   const handleSubmit = async () => {
     if (!repoUrl.trim() && !selectedFile) {
       message.warning(t("admin.memorySkillAdminPublishMissing"));
@@ -47,21 +51,15 @@ export default function SkillAdminPublishModal({
 
       if (selectedFile) {
         const upload = await uploadSkillTempFile(selectedFile);
-        await createSkillAsset({
+        await publishSkillToMarket({
           name,
-          description: t("admin.memorySkillAdminPublishDefaultDesc"),
           category: "team",
-          tags: [],
-          isEnabled: true,
           source: { type: "uploaded_zip", uploadId: upload.uploadId },
         });
       } else {
-        await createSkillAsset({
+        await publishSkillToMarket({
           name,
-          description: t("admin.memorySkillAdminPublishDefaultDesc"),
           category: "team",
-          tags: [],
-          isEnabled: true,
           source: { type: "url", url: repoUrl.trim() },
         });
       }
@@ -110,14 +108,21 @@ export default function SkillAdminPublishModal({
         <Upload.Dragger
           accept=".zip,.tgz,.tar,.gz"
           multiple={false}
-          showUploadList={Boolean(selectedFile)}
+          showUploadList={false}
           beforeUpload={(file) => {
+            const name = file.name.toLowerCase();
+            const valid =
+              name.endsWith(".zip") ||
+              name.endsWith(".tgz") ||
+              name.endsWith(".tar") ||
+              name.endsWith(".gz");
+            if (!valid) {
+              message.warning(t("admin.memorySkillUploadPackageTypeError"));
+              return false;
+            }
             setSelectedFile(file);
             setRepoUrl("");
             return false;
-          }}
-          onRemove={() => {
-            setSelectedFile(null);
           }}
           className="memory-skill-file-drop"
         >
@@ -129,6 +134,22 @@ export default function SkillAdminPublishModal({
           </p>
           <p className="ant-upload-hint">{t("admin.memorySkillUploadFileHint")}</p>
         </Upload.Dragger>
+        {selectedFile ? (
+          <div className="memory-skill-selected-file">
+            <span className="memory-skill-selected-file-name">
+              <PaperClipOutlined />
+              <span title={selectedFile.name}>{selectedFile.name}</span>
+            </span>
+            <Button
+              type="text"
+              size="small"
+              danger
+              icon={<DeleteOutlined />}
+              aria-label={t("common.delete")}
+              onClick={handleClearFile}
+            />
+          </div>
+        ) : null}
       </div>
     </Modal>
   );

@@ -9,6 +9,7 @@ import {
   Space,
   Spin,
   Tag,
+  Tooltip,
   Tree,
   Typography,
   Upload,
@@ -25,6 +26,7 @@ import {
 import type { DataNode } from "antd/es/tree";
 import MarkdownViewer from "@/modules/knowledge/components/MarkdownViewer";
 import { getLocalizedErrorMessage } from "@/components/request";
+import { splitMarkdownFrontMatter } from "../../shared";
 import {
   commitSkillDraft,
   commitSkillDraftReview,
@@ -70,6 +72,15 @@ import {
   resolveParentPathFromSelection,
 } from "./skillTreeUtils";
 
+const SKILL_UPLOAD_ACCEPT_EXTS = new Set([
+  ".md", ".markdown",
+  ".txt", ".json", ".yaml", ".yml", ".toml",
+  ".py", ".js", ".ts", ".css", ".html", ".sh",
+]);
+
+const SKILL_UPLOAD_ACCEPT_ATTR =
+  ".md,.markdown,.txt,.json,.yaml,.yml,.toml,.py,.js,.ts,.css,.html,.sh";
+
 interface SkillPackageEditorProps {
   skillId: string;
   canEdit: boolean;
@@ -111,6 +122,7 @@ export default function SkillPackageEditor({
   const [selectedPath, setSelectedPath] = useState("");
   const [fileContent, setFileContent] = useState("");
   const [originalContent, setOriginalContent] = useState("");
+  const [skillFrontMatter, setSkillFrontMatter] = useState("");
   const [fileBinary, setFileBinary] = useState<boolean | null>(null);
   const [fileLoading, setFileLoading] = useState(false);
   const [fileDiff, setFileDiff] = useState<SkillDiffFileRecord | null>(null);
@@ -151,7 +163,7 @@ export default function SkillPackageEditor({
   );
   const allFilesViewed =
     !reviewMode || changedPaths.every((path) => reviewedPaths.has(path));
-  const usesHunkReview = reviewMode && Boolean(reviewMeta?.reviewId);
+  const usesHunkReview = Boolean(reviewMeta?.reviewId);
   const allHunksDecided =
     !usesHunkReview ||
     changedPaths.every((path) => {
@@ -304,10 +316,21 @@ export default function SkillPackageEditor({
           return;
         }
 
+        const toEditorContent = (content: string) => {
+          if (path !== SKILL_MD_PATH) {
+            setSkillFrontMatter("");
+            return content;
+          }
+          const split = splitMarkdownFrontMatter(content);
+          setSkillFrontMatter(split?.frontMatter || "");
+          return split ? split.content : content;
+        };
+
         const cachedFile = contentCacheRef.current.get(path);
         if (cachedFile && !reviewMode) {
-          setFileContent(cachedFile.content);
-          setOriginalContent(cachedFile.content);
+          const editorContent = toEditorContent(cachedFile.content);
+          setFileContent(editorContent);
+          setOriginalContent(editorContent);
           setFileBinary(cachedFile.binary);
           return;
         }
@@ -317,8 +340,9 @@ export default function SkillPackageEditor({
           content: file.content,
           binary: file.binary,
         });
-        setFileContent(file.content);
-        setOriginalContent(file.content);
+        const editorContent = toEditorContent(file.content);
+        setFileContent(editorContent);
+        setOriginalContent(editorContent);
         setFileBinary(file.binary);
       } catch (error) {
         console.error("Load skill file failed:", error);
@@ -368,9 +392,13 @@ export default function SkillPackageEditor({
     setSaving(true);
     try {
       const status = draftStatus || (await getSkillDraftStatus(skillId));
+      const persistedContent =
+        selectedPath === SKILL_MD_PATH && skillFrontMatter
+          ? `${skillFrontMatter}${fileContent}`
+          : fileContent;
       const nextVersion = await writeSkillDraftText(skillId, {
         path: selectedPath,
-        content: fileContent,
+        content: persistedContent,
         expectedDraftVersion: status.draftVersion,
       });
       setDraftStatus((previous) =>
@@ -379,7 +407,7 @@ export default function SkillPackageEditor({
       setOriginalContent(fileContent);
       setFileBinary(false);
       contentCacheRef.current.set(selectedPath, {
-        content: fileContent,
+        content: persistedContent,
         binary: false,
       });
       setIsEditing(false);
@@ -431,7 +459,7 @@ export default function SkillPackageEditor({
     hunkId: string,
     decision: SkillDraftReviewDecision,
   ) => {
-    if (!reviewMode || !selectedPath || !reviewMeta?.reviewId) {
+    if (!selectedPath || !reviewMeta?.reviewId) {
       return;
     }
     setHunkSubmitting((previous) => ({ ...previous, [hunkId]: decision }));
@@ -699,6 +727,15 @@ export default function SkillPackageEditor({
     if (!selectedPath || !draftStatus || reviewMode) {
       return false;
     }
+    const ext = file.name.toLowerCase().replace(/^.*(\.[^.]+)$/, "$1");
+    if (!SKILL_UPLOAD_ACCEPT_EXTS.has(ext)) {
+      message.warning(t("admin.memorySkillPackageUploadFileTypeError"));
+      return false;
+    }
+    if (file.size > 512 * 1024) {
+      message.warning(t("admin.memorySkillPackageUploadFileSizeError"));
+      return false;
+    }
     try {
       const upload = await uploadSkillTempFile(file);
       const nextVersion = await uploadSkillDraftFile(skillId, {
@@ -749,7 +786,8 @@ export default function SkillPackageEditor({
     return (
       <SkillDiffHunkPanel
         diffEntryLines={diffEntryLines}
-        reviewMode={reviewMode && Boolean(reviewMeta?.reviewId)}
+        stripFrontMatter={selectedPath === SKILL_MD_PATH}
+        hunkReviewActive={Boolean(reviewMeta?.reviewId || fileDiff?.review?.reviewId)}
         hunkSubmitting={hunkSubmitting}
         onHunkDecision={(hunk, decision) => void handleHunkDecision(hunk.hunkId, decision)}
         t={t}
@@ -931,10 +969,21 @@ export default function SkillPackageEditor({
         {canManageSelectedFile ? (
           <Space wrap className="memory-skill-package-file-actions">
             <Upload
+              accept={SKILL_UPLOAD_ACCEPT_ATTR}
               showUploadList={false}
               beforeUpload={(file) => void handleUploadFile(file as File)}
             >
-              <Button icon={<UploadOutlined />}>{t("admin.memorySkillPackageUploadFile")}</Button>
+              <Tooltip
+                placement="bottomRight"
+                title={
+                  <>
+                    <div>{t("admin.memorySkillPackageUploadFileTooltip").split("\n")[0]}</div>
+                    <div style={{ marginTop: 4 }}>{t("admin.memorySkillPackageUploadFileTooltip").split("\n")[1]}</div>
+                  </>
+                }
+              >
+                <Button icon={<UploadOutlined />}>{t("admin.memorySkillPackageUploadFile")}</Button>
+              </Tooltip>
             </Upload>
             {canEditSelectedFile ? (
               isEditing ? (

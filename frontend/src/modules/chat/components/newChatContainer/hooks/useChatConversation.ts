@@ -159,8 +159,8 @@ export function useChatConversation({
           ? index
           : id
             ? newList.findIndex(
-                (msg) => msg.id === id || msg.history_id === id,
-              )
+              (msg) => msg.id === id || msg.history_id === id,
+            )
             : newList.length - 1;
       if (targetIndex >= 0) {
         newList[targetIndex] = { ...newList[targetIndex], ...data };
@@ -308,11 +308,11 @@ export function useChatConversation({
           streamManager.removeStreamEntry(previousConversationId);
 
           const streamCallbacks: Record<string, (event: CustomEvent) => void> =
-            {
-              message: (event) => onMessage(event),
-              error: (event) => onError(event),
-              timeout: (event) => onTimeout(event),
-            };
+          {
+            message: (event) => onMessage(event),
+            error: (event) => onError(event),
+            timeout: (event) => onTimeout(event),
+          };
           streamManager.registerStream(
             result.conversation_id,
             sseRef.current,
@@ -351,7 +351,7 @@ export function useChatConversation({
     if (
       isActiveConversation &&
       result.finish_reason ===
-        ChatConversationsResponseFinishReasonEnum.FinishReasonStop
+      ChatConversationsResponseFinishReasonEnum.FinishReasonStop
     ) {
       scroll.isMouseScrollingRef.current = true;
     }
@@ -384,7 +384,7 @@ export function useChatConversation({
       const isLastAssistantCompleted =
         assistantMessage?.role === RoleTypes.ASSISTANT &&
         assistantMessage?.finish_reason ===
-          ChatConversationsResponseFinishReasonEnum.FinishReasonStop;
+        ChatConversationsResponseFinishReasonEnum.FinishReasonStop;
 
       if (
         !assistantMessage ||
@@ -507,7 +507,7 @@ export function useChatConversation({
             sessionStorage.setItem(CHAT_RESUME_CONVERSATION_KEY, realId);
             onConversationIdChange?.(realId);
           })
-          .catch(() => {});
+          .catch(() => { });
       }, 400);
     }
   };
@@ -745,6 +745,7 @@ export function useChatConversation({
         ChatConversationsResponseFinishReasonEnum.FinishReasonStop,
       create_time,
       model_mode: "value_engineering",
+      mentions: params.mentions || [],
     };
     const assistantMessage = {
       role: RoleTypes.ASSISTANT,
@@ -764,6 +765,7 @@ export function useChatConversation({
     scroll.scrollToEnd();
     openSSE(inputs, ChatConversationsRequestActionEnum.ChatActionNext, {
       ...(params.run_in_background ? { run_in_background: true } : {}),
+      ...(params.mentions?.length ? { mentions: params.mentions } : {}),
     });
 
     const currentId = currentConversationIdRef.current;
