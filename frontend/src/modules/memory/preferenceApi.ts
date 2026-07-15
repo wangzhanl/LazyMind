@@ -1063,3 +1063,113 @@ export async function discardPersonalResourceDraft(
   const payload = unwrapEnvelope<RawObject>(response.data);
   return toBoolean(payload?.discarded, true);
 }
+
+export interface PersonalResourceRevisionRecord {
+  id: string;
+  revisionId: string;
+  revisionNo: number;
+  changeSource: string;
+  message: string;
+  createdAt: string;
+  createdBy: string;
+  parentRevisionId: string;
+  isHead: boolean;
+}
+
+const normalizePersonalResourceRevision = (
+  item: RawObject,
+): PersonalResourceRevisionRecord => {
+  const nested =
+    item.revisionSummary && typeof item.revisionSummary === 'object'
+      ? (item.revisionSummary as RawObject)
+      : item.revision_summary && typeof item.revision_summary === 'object'
+        ? (item.revision_summary as RawObject)
+        : null;
+  const source = nested || item;
+  const revisionId = toStringValue(
+    source.revision_id,
+    toStringValue(source.id, ''),
+  );
+
+  return {
+    id: toStringValue(source.id, revisionId),
+    revisionId,
+    revisionNo: toNumberValue(source.revision_no, 0),
+    changeSource: toStringValue(source.change_source, ''),
+    message: toStringValue(source.message, ''),
+    createdAt: toStringValue(source.created_at, ''),
+    createdBy: toStringValue(source.created_by, ''),
+    parentRevisionId: toStringValue(source.parent_revision_id, ''),
+    isHead: Boolean(source.is_head),
+  };
+};
+
+export async function listPersonalResourceRevisions(
+  resourceType: PersonalResourceApiType,
+): Promise<PersonalResourceRevisionRecord[]> {
+  const response = await axiosInstance.get(
+    `${coreBasePath}/personal-resource/${resourceType}/revisions`,
+  );
+  const payload = unwrapEnvelope<{ items?: RawObject[] }>(response.data);
+  return (payload.items || []).map((item) =>
+    normalizePersonalResourceRevision(item || {}),
+  );
+}
+
+export async function getPersonalResourceRevision(
+  resourceType: PersonalResourceApiType,
+  revisionId: string,
+): Promise<{ revision: PersonalResourceRevisionRecord; content: string }> {
+  const response = await axiosInstance.get(
+    `${coreBasePath}/personal-resource/${resourceType}/revisions/${encodeURIComponent(revisionId)}`,
+  );
+  const payload = unwrapEnvelope<RawObject>(response.data);
+  return {
+    revision: normalizePersonalResourceRevision(payload || {}),
+    content: toStringValue(payload?.content, ""),
+  };
+}
+
+export class RollbackConflictError extends Error {
+  readonly isConflict = true;
+  constructor(message = 'rollback conflict: uncommitted draft exists') {
+    super(message);
+    this.name = 'RollbackConflictError';
+  }
+}
+
+export async function rollbackPersonalResource(
+  resourceType: PersonalResourceApiType,
+  options: {
+    revisionId: string;
+    expectedHeadRevisionId?: string;
+    message?: string;
+  },
+): Promise<{ revisionId: string; revisionNo: number; content: string }> {
+  const requestPayload: RawObject = {
+    revision_id: options.revisionId,
+  };
+  if (options.expectedHeadRevisionId) {
+    requestPayload.expected_head_revision_id = options.expectedHeadRevisionId;
+  }
+  if (options.message) {
+    requestPayload.message = options.message;
+  }
+
+  const response = await axiosInstance.post(
+    `${coreBasePath}/personal-resource/${resourceType}:rollback`,
+    requestPayload,
+  ).catch((err: unknown) => {
+    const status = (err as { response?: { status?: number } })?.response?.status;
+    if (status === 409) {
+      throw new RollbackConflictError();
+    }
+    throw err;
+  });
+  const payload = unwrapEnvelope<RawObject>(response.data);
+  return {
+    revisionId: toStringValue(payload?.revision_id, ""),
+    revisionNo: toNumberValue(payload?.revision_no, 0),
+    content: toStringValue(payload?.content, ""),
+  };
+}

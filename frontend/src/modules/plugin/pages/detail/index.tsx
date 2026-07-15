@@ -3,7 +3,7 @@ import { useParams, useNavigate, useOutletContext } from 'react-router-dom';
 import { Alert, Breadcrumb, Button, Modal, Input, Spin, Select, Space, Tag, message } from 'antd';
 import { SyncOutlined, CheckCircleOutlined } from '@ant-design/icons';
 import { useTranslation } from 'react-i18next';
-import { getPluginDraft, listPluginDrafts, updatePluginDraftContent, aiGeneratePluginDraft, repairPluginDraft, publishPluginDraft, listPluginVersions, getPluginVersion, editPluginVersion, getPluginGenerationAnalysis, confirmPluginWorkflow, previewPluginRepair, getPluginRepairRun } from '../../pluginDraftApi';
+import { getPluginDraft, listPluginDrafts, updatePluginDraftContent, aiGeneratePluginDraft, repairPluginDraft, publishPluginDraft, listPluginVersions, getPluginVersion, editPluginVersion, getPluginGenerationAnalysis, confirmPluginWorkflow, previewPluginRepair, getPluginRepairRun, validatePluginDraft } from '../../pluginDraftApi';
 import type { PluginDraftRecord } from '../../pluginDraftApi';
 import type { PluginVersionSummary, PluginVersionContent, PluginGenerationAnalysis, RepairPreview } from '../../pluginDraftApi';
 import StateGraphEditor from '../../components/StateGraphEditor';
@@ -42,8 +42,10 @@ function resolvePhase(status: string): GeneratePhase {
   }
 }
 
-
-
+function asSaveConflictError(error?: unknown): Error & { isSaveConflict: true } {
+  const conflict = error instanceof Error ? error : new Error('plugin draft version conflict');
+  return Object.assign(conflict, { isSaveConflict: true as const });
+}
 
 export default function PluginDetailPage() {
   const { pluginId } = useParams<{ pluginId: string }>();
@@ -71,6 +73,12 @@ export default function PluginDetailPage() {
   const draftRef = useRef<PluginDraftRecord | null>(null);
   // Keep ref in sync for use in handleSave (avoids stale closure over version).
   useEffect(() => { draftRef.current = draft; }, [draft]);
+  // Auto-saves must be applied in order: each successful write advances the
+  // optimistic-lock version used by the next write.
+  const saveQueueRef = useRef<Promise<void>>(Promise.resolve());
+  // Once another editor/background job wins the optimistic lock, keep the
+  // local canvas intact but stop sending writes until the user reloads.
+  const saveConflictRef = useRef(false);
   // Persist artifacts panel open/close state across version remounts.
   // Default false — user explicitly opens the panel by clicking the 素材 button.
   const showArtifactsRef = useRef(false);
@@ -80,6 +88,7 @@ export default function PluginDetailPage() {
   // True while the :ai-repair API call is in-flight (keeps Modal open with a spinner).
   const [repairSubmitting, setRepairSubmitting] = useState(false);
   const [publishing, setPublishing] = useState(false);
+  const [hasAuthoritativeErrors, setHasAuthoritativeErrors] = useState(false);
   const [versions, setVersions] = useState<PluginVersionSummary[]>([]);
   const [selectedRevision, setSelectedRevision] = useState<string>('draft');
   const [versionContent, setVersionContent] = useState<PluginVersionContent | null>(null);
@@ -335,41 +344,67 @@ export default function PluginDetailPage() {
   }, []);
 
   const handleSave = useCallback(
-    async (payload: SavePayload) => {
-      if (!pluginId) return;
-      const currentVersion = draftRef.current?.version ?? 1;
-      let updated: PluginDraftRecord;
-      try {
-        updated = await updatePluginDraftContent(pluginId, {
-          state_yaml_content: payload.stateYaml,
-          state_layout_content: payload.stateLayoutContent,
-          plugin_yaml_content: payload.pluginYaml,
-          scenario_content: payload.scenarioContent,
-          scripts_content: payload.scriptsContent,
-          version: currentVersion,
-        });
-      } catch (err: unknown) {
-        // 409 Conflict: two sub-cases.
-        // 1. Version conflict: AI write bumped the version — refresh draft and rethrow.
-        // 2. Plugin id duplicate: another draft by this user already uses the same plugin id.
-        const status = (err as { response?: { status?: number; data?: { message?: string; data?: PluginDraftRecord } } })?.response?.status;
-        if (status === 409) {
-          const body = (err as { response: { data: { message?: string; data?: PluginDraftRecord } } }).response?.data;
-          if (body?.message && body.message.includes('plugin id already exists')) {
-            message.error(t('selfEvolutionRun.pluginDetailPluginIdDuplicate'));
-            throw err;
-          }
-          // Version conflict: update local version and let editor retry.
-          const latest = body?.data;
-          if (latest) setDraft(latest);
-          message.warning(t('selfEvolutionRun.pluginDetailAiUpdatedRetrying'));
+    (payload: SavePayload) => {
+      if (!pluginId) return Promise.resolve();
+      const save = saveQueueRef.current.catch(() => undefined).then(async () => {
+        if (saveConflictRef.current) {
+          throw asSaveConflictError();
         }
-        throw err;
-      }
-      setDraft(updated);
+        const currentVersion = draftRef.current?.version ?? 0;
+        let updated: PluginDraftRecord;
+        try {
+          updated = await updatePluginDraftContent(pluginId, {
+            state_yaml_content: payload.stateYaml,
+            state_layout_content: payload.stateLayoutContent,
+            plugin_yaml_content: payload.pluginYaml,
+            scenario_content: payload.scenarioContent,
+            scripts_content: payload.scriptsContent,
+            version: currentVersion,
+          });
+        } catch (err: unknown) {
+          // A stale version means another window or a background job changed
+          // the draft. Never adopt its version and retry the whole local
+          // snapshot: that would silently overwrite the other writer.
+          const response = (err as { response?: { status?: number; data?: { message?: string } } })?.response;
+          if (response?.status === 409) {
+            if (response.data?.message?.includes('plugin id already exists')) {
+              message.error(t('selfEvolutionRun.pluginDetailPluginIdDuplicate'));
+              throw err;
+            }
+            if (response.data?.message === 'conflict') {
+              saveConflictRef.current = true;
+              message.warning(t('selfEvolutionRun.pluginDetailSaveConflict'));
+              throw asSaveConflictError(err);
+            }
+          }
+          throw err;
+        }
+        // Update the ref synchronously so the next queued save uses this
+        // response's version even before React commits setDraft.
+        draftRef.current = updated;
+        setDraft(updated);
+      });
+      saveQueueRef.current = save;
+      return save;
     },
-    [pluginId],
+    [pluginId, t],
   );
+
+  const handleValidate = useCallback(async (): Promise<ValidationError[]> => {
+    if (!pluginId) return [];
+    const result = await validatePluginDraft(pluginId);
+    const diagnostics = result.diagnostics.map((item) => ({
+      code: item.code,
+      message: item.message,
+      severity: item.severity,
+      nodeId: item.node_id,
+      edgeKey: item.edge_id,
+      materialId: item.material_id,
+      details: item.details as Record<string, unknown> | undefined,
+    }));
+    setHasAuthoritativeErrors(result.diagnostics.some((item) => item.severity === 'error'));
+    return diagnostics;
+  }, [pluginId]);
 
   const handlePublish = useCallback(async () => {
     if (!draft) return;
@@ -598,7 +633,7 @@ export default function PluginDetailPage() {
             </div>
           )}
           <StateGraphEditor
-            key={`${draft.version}:${selectedRevision}`}
+            key={`${draft.generate_status}:${selectedRevision}`}
             initialStateYaml={stateYaml}
             initialPluginYaml={pluginYaml}
             initialScenarioContent={(viewingHistory ? versionContent.scenario_content : draft.scenario_content) || undefined}
@@ -653,9 +688,10 @@ export default function PluginDetailPage() {
             topbarActions={viewingHistory ? (
               <Button onClick={() => void handleEditHistoricalVersion()}>编辑此版本</Button>
             ) : editorReady ? (
-              <Button type="primary" loading={publishing} disabled={(draft.published && !draft.draft_dirty) || isRepairing || isStillGenerating} title={draft.published && !draft.draft_dirty ? '草稿相对于基础版本没有变更' : undefined} onClick={handlePublish}>发布插件</Button>
+              <Button type="primary" loading={publishing} disabled={hasAuthoritativeErrors || (draft.published && !draft.draft_dirty) || isRepairing || isStillGenerating} title={hasAuthoritativeErrors ? '请先修复 Go 校验返回的错误' : draft.published && !draft.draft_dirty ? '草稿相对于基础版本没有变更' : undefined} onClick={handlePublish}>发布插件</Button>
             ) : null}
             onSave={handleSave}
+            onValidate={handleValidate}
             onClose={() => navigate('/memory-management/plugins')}
             showEmptyHint={showEmptyHint}
           />

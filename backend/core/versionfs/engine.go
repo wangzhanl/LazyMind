@@ -173,6 +173,9 @@ func (e *Engine) CommitDraft(ctx context.Context, req CommitDraftRequest) (Commi
 		if baseRevisionID != head.RevisionID {
 			return ErrDraftBaseConflict
 		}
+		if baseRevisionID != head.RevisionID {
+			return ErrDraftBaseConflict
+		}
 		entries, err := e.store.DraftEntries(ctx, tx, req.ResourceID, baseRevisionID)
 		if err != nil {
 			return err
