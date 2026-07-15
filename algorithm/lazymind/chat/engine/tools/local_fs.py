@@ -18,7 +18,6 @@ from dataclasses import dataclass
 import fnmatch
 import glob as _glob
 import json
-import logging
 import os
 import re
 import shutil
@@ -28,8 +27,6 @@ from typing import Any, Dict, List, Optional
 import lazyllm
 
 from lazymind.chat.engine.tools.infra import tool_error, tool_success
-
-logger = logging.getLogger(__name__)
 
 _RG_BINARY = shutil.which('rg') or ''
 _RG_TIMEOUT = 30
@@ -52,7 +49,6 @@ class LocalFSToolGroup:
     __public_apis__ = ['ls', 'glob', 'grep', 'read', 'info']
 
     def _get_scopes(self) -> List[LocalFSScope]:
-        logger.info("[LOCAL_FS_DEBUG] agentic_config local_fs_sources=%s", json.dumps(lazyllm.globals.get("agentic_config", {}).get("local_fs_sources", []), ensure_ascii=False))
         config = lazyllm.globals.get('agentic_config') or {}
         sources = config.get('local_fs_sources') or []
         if not isinstance(sources, list):
