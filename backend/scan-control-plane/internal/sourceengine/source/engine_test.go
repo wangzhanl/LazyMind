@@ -1855,15 +1855,16 @@ func (c *sourceSpyConnector) MapObject(context.Context, connector.RawObject) (co
 }
 
 type sourceCoreSpy struct {
-	createdDatasets []string
-	deletedDatasets []string
-	createdFolders  []string
-	deletedFolders  []string
-	datasetRequests []coreclient.CreateDatasetRequest
-	folderRequests  []coreclient.CreateBindingRootDocumentRequest
-	datasetDeletes  []coreclient.DeleteDatasetRequest
-	deleteRequests  []coreclient.DeleteDocumentRequest
-	batchDeletes    []coreclient.BatchDeleteDocumentsRequest
+	createdDatasets  []string
+	deletedDatasets  []string
+	createdFolders   []string
+	deletedFolders   []string
+	datasetRequests  []coreclient.CreateDatasetRequest
+	folderRequests   []coreclient.CreateBindingRootDocumentRequest
+	datasetDeletes   []coreclient.DeleteDatasetRequest
+	datasetUpdates   []coreclient.UpdateDatasetRequest
+	deleteRequests   []coreclient.DeleteDocumentRequest
+	batchDeletes     []coreclient.BatchDeleteDocumentsRequest
 }
 
 func (c *sourceCoreSpy) CreateDataset(_ context.Context, req coreclient.CreateDatasetRequest) (coreclient.CreateDatasetResponse, error) {
@@ -1876,6 +1877,11 @@ func (c *sourceCoreSpy) CreateDataset(_ context.Context, req coreclient.CreateDa
 func (c *sourceCoreSpy) DeleteDataset(_ context.Context, req coreclient.DeleteDatasetRequest) error {
 	c.deletedDatasets = append(c.deletedDatasets, req.DatasetID)
 	c.datasetDeletes = append(c.datasetDeletes, req)
+	return nil
+}
+
+func (c *sourceCoreSpy) UpdateDataset(_ context.Context, req coreclient.UpdateDatasetRequest) error {
+	c.datasetUpdates = append(c.datasetUpdates, req)
 	return nil
 }
 
@@ -2208,6 +2214,19 @@ func operationKey(callerID, requestID string) string {
 	return callerID + "\x00" + requestID
 }
 
+
+func (r *sourceEngineRepoStub) UpdateBindingChatEnabled(_ context.Context, bindingID string, chatEnabled bool) error {
+	for sourceID, bindings := range r.bindings {
+		for i := range bindings {
+			if bindings[i].BindingID == bindingID {
+				bindings[i].ChatEnabled = chatEnabled
+				r.bindings[sourceID] = bindings
+				return nil
+			}
+		}
+	}
+	return store.NewStoreError(store.ErrCodeBindingNotFound, "binding not found")
+}
 var _ SourceRepository = (*sourceEngineRepoStub)(nil)
 var _ coreclient.ResourceClient = (*sourceCoreSpy)(nil)
 var _ connector.SourceConnector = (*sourceSpyConnector)(nil)
