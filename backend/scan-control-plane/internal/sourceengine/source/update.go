@@ -4,6 +4,7 @@ import (
 	"context"
 	"time"
 
+	"github.com/lazymind/scan_control_plane/internal/coreclient"
 	store "github.com/lazymind/scan_control_plane/internal/store/source"
 )
 
@@ -59,6 +60,16 @@ func (e *DefaultEngine) UpdateSource(ctx context.Context, callerID, sourceID str
 		return UpdateSourceResponse{}, mapStoreError(err)
 	}
 	result.Bindings = bindingsToResponse(bindings)
+
+	// Sync display_name to core dataset when source name changes
+	if req.Name != nil {
+		_ = e.core.UpdateDataset(ctx, coreclient.UpdateDatasetRequest{
+			DatasetID:   src.DatasetID,
+			DisplayName: src.Name,
+			UserID:      callerID,
+		})
+	}
+
 	return result, nil
 }
 
