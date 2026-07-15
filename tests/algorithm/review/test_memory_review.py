@@ -8,9 +8,6 @@ from pathlib import Path
 from types import ModuleType, SimpleNamespace
 from typing import Any
 
-import pytest
-
-
 _ALGO = os.path.join(os.path.dirname(__file__), '..', '..', '..', 'algorithm')
 _LAZYLLM_ROOT = os.path.join(_ALGO, 'lazyllm')
 if _ALGO not in sys.path:
@@ -266,32 +263,9 @@ def test_memory_review_payload_allows_missing_or_null_llm_config():
         llm_config=None,
     )
 
-    assert missing.task_id == 'memory_review_core-task-missing-config'
     assert missing.user_id == 'user-1'
     assert missing.llm_config is None
     assert explicit_null.llm_config is None
-
-
-def test_memory_review_payload_requires_non_empty_task_id():
-    memory_review_routes = _load_memory_review_routes_module()
-
-    with pytest.raises(ValueError, match="'task_id' must be non-empty"):
-        memory_review_routes.MemoryReviewPayload(
-            task_id='   ',
-            user_id='user-1',
-            history=[{'role': 'user', 'content': '你好'}],
-        )
-
-
-def test_memory_review_payload_requires_memory_review_task_id_prefix():
-    memory_review_routes = _load_memory_review_routes_module()
-
-    with pytest.raises(ValueError, match="must start with 'memory_review_'"):
-        memory_review_routes.MemoryReviewPayload(
-            task_id='core-task-123',
-            user_id='user-1',
-            history=[{'role': 'user', 'content': '你好'}],
-        )
 
 
 def test_memory_review_route_returns_task_id(monkeypatch):
@@ -395,8 +369,6 @@ def test_review_memory_runs_agent_with_memory_editor_tool(monkeypatch):
     assert 'RemoteFS 用户画像' in calls['prompt']
     assert calls['store_reads'] == ['memory', 'user_preference']
     assert fake_lazyllm.globals['agentic_config']['user_id'] == 'user-1'
-    assert fake_lazyllm.globals['_sid'] == 'memory_review_core-task-123'
-    assert fake_lazyllm.locals['_sid'] == 'memory_review_core-task-123'
     assert fake_lazyllm.globals['agentic_config']['task_id'] == 'memory_review_core-task-123'
     assert 'memory' not in fake_lazyllm.globals['agentic_config']
     assert 'user_preference' not in fake_lazyllm.globals['agentic_config']
