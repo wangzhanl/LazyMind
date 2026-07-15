@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/lazymind/scan_control_plane/internal/sourceengine/connector"
+	"github.com/lazymind/scan_control_plane/internal/coreclient"
 	"github.com/lazymind/scan_control_plane/internal/sourceengine/filefilter"
 	sourceengine "github.com/lazymind/scan_control_plane/internal/sourceengine/source"
 	statepkg "github.com/lazymind/scan_control_plane/internal/sourceengine/state"
@@ -33,11 +34,19 @@ type Store interface {
 	GetParseTask(ctx context.Context, taskID string) (store.ParseTaskWithRefs, error)
 	SaveParseTask(ctx context.Context, task store.ParseTask) error
 	ClearTaskDeadLetter(ctx context.Context, taskID string) error
+	ListDocumentsByBinding(ctx context.Context, sourceID, bindingID string) ([]store.Document, error)
+	DeleteObjectsByBinding(ctx context.Context, sourceID, bindingID string) error
+	DeleteDocumentStatesByBinding(ctx context.Context, sourceID, bindingID string) error
+	DeleteParseTasksByBinding(ctx context.Context, sourceID, bindingID string) error
+	DeleteBinding(ctx context.Context, sourceID, bindingID string, deletedAt time.Time) (store.BindingDeleteResult, error)
+	ListSyncRuns(ctx context.Context, sourceID, bindingID string) ([]store.SyncRun, error)
+	ListDocumentStatesBySourceState(ctx context.Context, sourceID string, sourceState string) ([]store.DocumentState, error)
 }
 
 type DBTaskPlanner struct {
 	store            Store
 	sync             ManualSyncScheduler
+	core             coreclient.ResourceClient
 	clock            func() time.Time
 	newID            func(prefix string) string
 	maxManualObjects int
@@ -90,11 +99,25 @@ func WithManualSyncScheduler(sync ManualSyncScheduler) Option {
 	}
 }
 
+func WithCoreResource(core coreclient.ResourceClient) Option {
+	return func(p *DBTaskPlanner) {
+		p.core = core
+	}
+}
+
 func (p *DBTaskPlanner) SetManualSyncScheduler(sync ManualSyncScheduler) {
 	p.sync = sync
 }
 
 func (p *DBTaskPlanner) GenerateTasks(ctx context.Context, req GenerateRequest) (GenerateResult, error) {
+	// 处理待清理的文件（PENDING_DELETION）
+	if err := p.processRemovedBindings(ctx, req.SourceID, req.CallerID); err != nil {
+		return GenerateResult{}, err
+	}
+	// 处理需要首次同步的新 binding（跳过 queueManualSyncs 已覆盖的 binding）
+	if err := p.processNewBindings(ctx, req); err != nil {
+		return GenerateResult{}, err
+	}
 	if p.shouldQueueManualSync(req) {
 		return p.queueManualSyncs(ctx, req)
 	}
@@ -907,6 +930,20 @@ func coverageBool(coverage store.JSON, key string) bool {
 	return value
 }
 
+// uniqueBindingIDs 从 DocumentState 列表中提取唯一的 bindingID。
+func uniqueBindingIDs(states []store.DocumentState) []string {
+	seen := make(map[string]struct{}, len(states))
+	out := make([]string, 0, len(states))
+	for _, st := range states {
+		if _, ok := seen[st.BindingID]; ok {
+			continue
+		}
+		seen[st.BindingID] = struct{}{}
+		out = append(out, st.BindingID)
+	}
+	return out
+}
+
 func coverageString(coverage store.JSON, key string) string {
 	value, _ := coverage[key].(string)
 	return strings.TrimSpace(value)
@@ -927,4 +964,118 @@ func stringSliceFromJSON(value any) []string {
 	default:
 		return nil
 	}
+}
+
+
+// processNewBindings 自动发现需要首次同步的新 binding，触发全量同步。
+// 如果主请求已指定 mode=full/partial，对应的 binding 会由 queueManualSyncs 处理，此处跳过。
+func (p *DBTaskPlanner) processNewBindings(ctx context.Context, req GenerateRequest) error {
+	// 如果主请求已指定 mode=full/partial/all，该 binding 由 queueManualSyncs 处理，跳过以免重复
+	skipBinding := ""
+	if p.shouldQueueManualSync(req) {
+		skipBinding = req.BindingID
+	}
+	bindings, err := p.store.ListBindings(ctx, req.SourceID)
+	if err != nil {
+		return err
+	}
+	for _, b := range bindings {
+		if b.Status != "ACTIVE" {
+			continue
+		}
+		if skipBinding != "" && b.BindingID == skipBinding {
+			continue
+		}
+		// 检查是否已有 SyncRun，避免重复触发
+		runs, err := p.store.ListSyncRuns(ctx, req.SourceID, b.BindingID)
+		if err != nil {
+			return err
+		}
+		if len(runs) > 0 {
+			continue
+		}
+		// 触发首次全量同步
+		if p.sync != nil {
+			if _, err := p.sync.TriggerSourceSync(ctx, sourceengine.TriggerSourceSyncRequest{
+				SourceID:  req.SourceID,
+				BindingID: b.BindingID,
+			}); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+// processRemovedBindings 处理标记为 PENDING_DELETION 的文件及其所属 binding。
+// 清理顺序：Core 文档 → Core 文件夹 → scan 本地元数据 → 软删除 binding。
+func (p *DBTaskPlanner) processRemovedBindings(ctx context.Context, sourceID, callerID string) error {
+	states, err := p.store.ListDocumentStatesBySourceState(ctx, sourceID, statepkg.SourceStatePendingDeletion)
+	if err != nil {
+		return err
+	}
+	if len(states) == 0 {
+		return nil
+	}
+	bindingIDs := uniqueBindingIDs(states)
+	// 获取 source 的 DatasetID
+	source, err := p.store.GetSource(ctx, sourceID)
+	if err != nil {
+		return err
+	}
+	for _, bindingID := range bindingIDs {
+		// 获取 binding 的 CoreParentDocumentID
+		binding, err := p.store.GetBinding(ctx, sourceID, bindingID)
+		if err != nil {
+			return fmt.Errorf("get binding %s: %w", bindingID, err)
+		}
+		// 查出该 binding 下所有已解析文件的 CoreDocumentID
+		docs, err := p.store.ListDocumentsByBinding(ctx, sourceID, bindingID)
+		if err != nil {
+			return err
+		}
+		coreDocIDs := make([]string, 0, len(docs))
+		for _, doc := range docs {
+			if doc.CoreDocumentID != "" {
+				coreDocIDs = append(coreDocIDs, doc.CoreDocumentID)
+			}
+		}
+		// 逐个删除 Core 侧的子文档（使用已验证的 DeleteDocument API）
+		for _, coreDocID := range coreDocIDs {
+			if p.core != nil {
+				if err := p.core.DeleteDocument(ctx, coreclient.DeleteDocumentRequest{
+					DatasetID:  source.DatasetID,
+					DocumentID: coreDocID,
+					UserID:     callerID,
+				}); err != nil {
+					return fmt.Errorf("delete core doc %s for binding %s: %w", coreDocID, bindingID, err)
+				}
+			}
+		}
+		// 删除 Core 侧的根文件夹
+		if parentID := binding.CoreParentDocumentID; parentID != "" && p.core != nil {
+			if err := p.core.DeleteDocument(ctx, coreclient.DeleteDocumentRequest{
+				DatasetID:  source.DatasetID,
+				DocumentID: parentID,
+				UserID:     callerID,
+			}); err != nil {
+				return fmt.Errorf("delete core folder for binding %s: %w", bindingID, err)
+			}
+		}
+		// 清理 scan 侧本地元数据
+		if err := p.store.DeleteObjectsByBinding(ctx, sourceID, bindingID); err != nil {
+			return err
+		}
+		if err := p.store.DeleteDocumentStatesByBinding(ctx, sourceID, bindingID); err != nil {
+			return err
+		}
+		if err := p.store.DeleteParseTasksByBinding(ctx, sourceID, bindingID); err != nil {
+			return err
+		}
+		// 软删除 binding
+		if _, err := p.store.DeleteBinding(ctx, sourceID, bindingID, p.clock().UTC()); err != nil {
+			return err
+		}
+	}
+	return nil
 }
