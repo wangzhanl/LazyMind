@@ -938,7 +938,7 @@ type listModelProviderGroupModelsOpenAPIItem struct {
 	GroupName                string  `json:"group_name"`
 	BaseURL                  string  `json:"base_url"`
 	IsDefault                bool    `json:"is_default"`
-	MaxInputTokens           *string `json:"max_input_tokens" desc:"Maximum catalog LLM or VLM input context window, for example 128K or 1M; null for other, custom, or unknown models" openapi_nullable:"true"`
+	MaxInputTokens           *string `json:"max_input_tokens" desc:"Maximum catalog LLM or VLM input context window, for example 128K or 1M; null for other, custom, or unknown models" nullable:"true"`
 }
 
 type listModelProviderGroupModelsOpenAPIResponse struct {
@@ -958,7 +958,7 @@ type selectedModelOpenAPIItem struct {
 	ProviderName             string  `json:"provider_name"`
 	GroupName                string  `json:"group_name"`
 	BaseURL                  string  `json:"base_url"`
-	MaxInputTokens           *string `json:"max_input_tokens" desc:"Maximum selected catalog LLM or VLM input context window, for example 128K or 1M; null for other, custom, or unknown models" openapi_nullable:"true"`
+	MaxInputTokens           *string `json:"max_input_tokens" desc:"Maximum selected catalog LLM or VLM input context window, for example 128K or 1M; null for other, custom, or unknown models" nullable:"true"`
 }
 
 type listSelectedModelsOpenAPIResponse struct {
