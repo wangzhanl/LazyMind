@@ -479,6 +479,11 @@ func ListDatasets(w http.ResponseWriter, r *http.Request) {
 	orderBy := strings.TrimSpace(q.Get("order_by"))
 	keyword := strings.TrimSpace(q.Get("keyword"))
 	rawTags := q["tags"]
+	sourceFilter := strings.ToLower(strings.TrimSpace(q.Get("source")))
+	if sourceFilter != "cloud" && sourceFilter != "manual" {
+		sourceFilter = ""
+	}
+
 
 	pageSize := 20
 	if pageSizeStr != "" {
@@ -541,6 +546,8 @@ func ListDatasets(w http.ResponseWriter, r *http.Request) {
 	scanOffset := 0
 	hasMoreRows := true
 	candidates := make([]orm.Dataset, 0, pageSize)
+	pageSourceMap := make(map[string]bool, pageSize)
+
 
 
 	for hasMoreRows && len(page) < pageSize {
@@ -583,14 +590,19 @@ func ListDatasets(w http.ResponseWriter, r *http.Request) {
 			sourceMap := batchCheckDatasetsHaveSource(r.Context(), candidateIDs)
 
 			for _, c := range candidates {
-				if sourceMap[c.ID] {
+				if sourceFilter == "cloud" && !sourceMap[c.ID] {
+					continue
+				}
+				if sourceFilter == "manual" && sourceMap[c.ID] {
 					continue
 				}
 				if total >= offset && len(page) < pageSize {
 					page = append(page, c)
+					pageSourceMap[c.ID] = sourceMap[c.ID]
 				}
 				total++
 			}
+
 			candidates = candidates[:0]
 		}
 
@@ -609,6 +621,7 @@ func ListDatasets(w http.ResponseWriter, r *http.Request) {
 	createdByDataSourceVal := false
 
 
+
 	for _, ds := range page {
 		datasetACL := datasetACLForUserWithGroups(&ds, userID, groupIDs)
 		algo := parseDatasetAlgo(ds.Ext)
@@ -619,6 +632,8 @@ func ListDatasets(w http.ResponseWriter, r *http.Request) {
 		}
 		parsers := mergeParserConfigs(parseDatasetParsers(ds.Ext), liveParsers)
 		stats := statsMap[ds.ID]
+		createdByDataSource := pageSourceMap[ds.ID]
+
 		out = append(out, Dataset{
 			Name:           "datasets/" + ds.ID,
 			DatasetID:      ds.ID,
@@ -642,7 +657,7 @@ func ListDatasets(w http.ResponseWriter, r *http.Request) {
 			Type:           datasetTypeToPB(ds.Type),
 			Tags:           parseDatasetTags(ds.Ext),
 			DefaultDataset: isDefaultDatasetForUser(r.Context(), userID, ds.ID),
-			CreatedByDataSource: &createdByDataSourceVal,
+			CreatedByDataSource: &createdByDataSource,
 		})
 	}
 

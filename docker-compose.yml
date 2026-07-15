@@ -421,8 +421,8 @@ services:
     volumes:
       - ./data/core/uploads:/var/lib/lazymind/uploads
       - ./data/traces:/var/lib/lazymind/traces
-      - *lazyllm-src-mount
       - *algorithm-src-mount
+      - *lazyllm-src-mount
     environment:
       <<: [*db-conn, *upload-paths, *llm-api-keys, *trace-config]
       LAZYMIND_DOCUMENT_SERVICE_PORT: "8000"
@@ -698,6 +698,9 @@ services:
       # Router mode: mount algorithm source so child processes can load different versions.
       - ./algorithm/lazymind:/opt/lazymind
       - ./plugins:/app/plugins:ro
+      - type: bind
+        source: *file-watcher-watch-host-dir
+        target: *file-watcher-watch-host-dir
     healthcheck:
       test: ['CMD-SHELL', 'curl -sf http://localhost:8046/health || exit 1']
       interval: 10s

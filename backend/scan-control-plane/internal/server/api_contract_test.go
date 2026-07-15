@@ -946,15 +946,10 @@ func (s *serverSourceEngineStub) UpdateSource(_ context.Context, _ string, _ str
 	if req.Name != nil {
 		name = *req.Name
 	}
-	chatEnabled := false
-	if req.ChatEnabled != nil {
-		chatEnabled = *req.ChatEnabled
-	}
 	return sourceengine.UpdateSourceResponse{
 		Source: sourceengine.SourceResponse{
 			SourceID:      "source-1",
 			Name:          name,
-			ChatEnabled:   chatEnabled,
 			DatasetID:     "dataset-1",
 			Status:        sourceengine.SourceStatusActive,
 			ConfigVersion: req.ConfigVersion + 1,
@@ -993,6 +988,13 @@ func (s *serverSourceEngineStub) UpdateBinding(context.Context, string, string, 
 func (s *serverSourceEngineStub) DeleteBinding(context.Context, string, string) (sourceengine.DeleteBindingResponse, error) {
 	return sourceengine.DeleteBindingResponse{}, nil
 }
+
+func (s *serverSourceEngineStub) UpdateBindingChatEnabled(_ context.Context, bindingID string, chatEnabled bool) error {
+	return nil
+}
+
+
+
 
 
 func (s *serverSourceEngineStub) BatchGetSourcesByDatasetIDs(_ context.Context, datasetIDs []string) (map[string]bool, error) {
@@ -1165,106 +1167,37 @@ func (a *apiContractLocalAgentStub) ExportFile(context.Context, localfs.ExportFi
 }
 
 
-func TestUpdateSourceHandlerModifiesNameAndChatEnabled(t *testing.T) {
+func TestUpdateSourceHandlerModifiesName(t *testing.T) {
 	t.Parallel()
 
-	t.Run("modify name only", func(t *testing.T) {
-		t.Parallel()
+	engine := &serverSourceEngineStub{}
+	handler := NewHandler(WithSourceEngine(engine), WithAccessChecker(allowAccess{}))
+	body := `{"config_version":10,"name":"renamed-source"}`
+	req := httptest.NewRequest(http.MethodPut, "/api/scan/sources/source-1", strings.NewReader(body))
+	setAPIContractActor(req)
+	w := httptest.NewRecorder()
 
-		engine := &serverSourceEngineStub{}
-		handler := NewHandler(WithSourceEngine(engine), WithAccessChecker(allowAccess{}))
-		body := `{"config_version":10,"name":"renamed-source"}`
-		req := httptest.NewRequest(http.MethodPut, "/api/scan/sources/source-1", strings.NewReader(body))
-		setAPIContractActor(req)
-		w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
 
-		handler.ServeHTTP(w, req)
-
-		if w.Code != http.StatusOK {
-			t.Fatalf("expected 200, got %d body=%s", w.Code, w.Body.String())
-		}
-		if engine.updateCalls != 1 {
-			t.Fatalf("expected 1 UpdateSource call, got %d", engine.updateCalls)
-		}
-		if engine.lastUpdate.Name == nil || *engine.lastUpdate.Name != "renamed-source" {
-			t.Fatalf("expected name=renamed-source, got %v", engine.lastUpdate.Name)
-		}
-		if engine.lastUpdate.ConfigVersion != 10 {
-			t.Fatalf("expected config_version=10, got %d", engine.lastUpdate.ConfigVersion)
-		}
-		if engine.lastUpdate.ChatEnabled != nil {
-			t.Fatalf("expected chat_enabled not set, got %v", *engine.lastUpdate.ChatEnabled)
-		}
-		var resp sourceengine.UpdateSourceResponse
-		if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
-			t.Fatalf("decode response: %v", err)
-		}
-		if resp.Source.Name != "renamed-source" {
-			t.Fatalf("response source.name=renamed-source, got %s", resp.Source.Name)
-		}
-	})
-
-	t.Run("modify chat_enabled only", func(t *testing.T) {
-		t.Parallel()
-
-		engine := &serverSourceEngineStub{}
-		handler := NewHandler(WithSourceEngine(engine), WithAccessChecker(allowAccess{}))
-		body := `{"config_version":10,"chat_enabled":true}`
-		req := httptest.NewRequest(http.MethodPut, "/api/scan/sources/source-1", strings.NewReader(body))
-		setAPIContractActor(req)
-		w := httptest.NewRecorder()
-
-		handler.ServeHTTP(w, req)
-
-		if w.Code != http.StatusOK {
-			t.Fatalf("expected 200, got %d body=%s", w.Code, w.Body.String())
-		}
-		if engine.updateCalls != 1 {
-			t.Fatalf("expected 1 UpdateSource call, got %d", engine.updateCalls)
-		}
-		if engine.lastUpdate.ChatEnabled == nil || *engine.lastUpdate.ChatEnabled != true {
-			t.Fatalf("expected chat_enabled=true, got %v", engine.lastUpdate.ChatEnabled)
-		}
-		if engine.lastUpdate.Name != nil {
-			t.Fatalf("expected name not set, got %v", *engine.lastUpdate.Name)
-		}
-		var resp sourceengine.UpdateSourceResponse
-		if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
-			t.Fatalf("decode response: %v", err)
-		}
-		if resp.Source.ChatEnabled != true {
-			t.Fatalf("response source.chat_enabled=true, got %v", resp.Source.ChatEnabled)
-		}
-	})
-
-	t.Run("modify both name and chat_enabled", func(t *testing.T) {
-		t.Parallel()
-
-		engine := &serverSourceEngineStub{}
-		handler := NewHandler(WithSourceEngine(engine), WithAccessChecker(allowAccess{}))
-		body := `{"config_version":10,"name":"renamed-source","chat_enabled":true}`
-		req := httptest.NewRequest(http.MethodPut, "/api/scan/sources/source-1", strings.NewReader(body))
-		setAPIContractActor(req)
-		w := httptest.NewRecorder()
-
-		handler.ServeHTTP(w, req)
-
-		if w.Code != http.StatusOK {
-			t.Fatalf("expected 200, got %d body=%s", w.Code, w.Body.String())
-		}
-		if engine.updateCalls != 1 {
-			t.Fatalf("expected 1 UpdateSource call, got %d", engine.updateCalls)
-		}
-		if engine.lastUpdate.Name == nil || *engine.lastUpdate.Name != "renamed-source" {
-			t.Fatalf("expected name=renamed-source, got %v", engine.lastUpdate.Name)
-		}
-		if engine.lastUpdate.ChatEnabled == nil || *engine.lastUpdate.ChatEnabled != true {
-			t.Fatalf("expected chat_enabled=true, got %v", engine.lastUpdate.ChatEnabled)
-		}
-		if engine.lastUpdate.ConfigVersion != 10 {
-			t.Fatalf("expected config_version=10, got %d", engine.lastUpdate.ConfigVersion)
-		}
-	})
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", w.Code, w.Body.String())
+	}
+	if engine.updateCalls != 1 {
+		t.Fatalf("expected 1 UpdateSource call, got %d", engine.updateCalls)
+	}
+	if engine.lastUpdate.Name == nil || *engine.lastUpdate.Name != "renamed-source" {
+		t.Fatalf("expected name=renamed-source, got %v", engine.lastUpdate.Name)
+	}
+	if engine.lastUpdate.ConfigVersion != 10 {
+		t.Fatalf("expected config_version=10, got %d", engine.lastUpdate.ConfigVersion)
+	}
+	var resp sourceengine.UpdateSourceResponse
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if resp.Source.Name != "renamed-source" {
+		t.Fatalf("response source.name=renamed-source, got %s", resp.Source.Name)
+	}
 }
 
 var _ sourceengine.Engine = (*serverSourceEngineStub)(nil)
