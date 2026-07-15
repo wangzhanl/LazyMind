@@ -10,7 +10,6 @@ import (
 	"lazymind/core/datasource"
 	"net/http"
 	"net/url"
-	"sort"
 	"os"
 	"strconv"
 	"strings"
@@ -35,23 +34,28 @@ type scanSourceListResponse struct {
 	Total int                  `json:"total"`
 }
 type scanSourceListItem struct {
-	SourceID  string `json:"source_id"`
-	Status    string `json:"status"`
-	DatasetID string `json:"dataset_id"`
-	TenantID  string `json:"tenant_id,omitempty"`
+	SourceID    string `json:"source_id"`
+	Status      string `json:"status"`
+	DatasetID   string `json:"dataset_id"`
+	TenantID    string `json:"tenant_id,omitempty"`
+	ChatEnabled bool   `json:"chat_enabled"`
 }
 type scanGetSourceResponse struct {
 	Bindings []scanSourceBinding `json:"bindings"`
 }
 type scanSourceBinding struct {
-	BindingID         string   `json:"binding_id"`
 	ConnectorType     string   `json:"connector_type"`
 	TargetType        string   `json:"target_type"`
 	TargetRef         string   `json:"target_ref"`
 	Status            string   `json:"status"`
-	ChatEnabled       bool     `json:"chat_enabled"`
 	DeletedAt         any      `json:"deleted_at"`
 	IncludeExtensions []string `json:"include_extensions,omitempty"`
+}
+type scanSourceInfo struct {
+	SourceID    string
+	DatasetID   string
+	TenantID    string
+	ChatEnabled bool
 }
 
 func applyLocalFSPathsForChat(ctx context.Context, r *http.Request, db *gorm.DB, userID string, reqBody map[string]any) error {
@@ -71,64 +75,44 @@ func applyLocalFSPathsForChat(ctx context.Context, r *http.Request, db *gorm.DB,
 	reqBody["local_fs_sources"] = sources
 	return nil
 }
-
 func loadLocalFSSourcesForChat(ctx context.Context, r *http.Request, userID string) ([]map[string]any, error) {
-	sourceIDs, err := listActiveSourceIDs(ctx, r, userID)
+	sourceInfos, err := listReadableScanSourceInfos(ctx, r, userID)
 	if err != nil {
-		fmt.Printf("[CORE_LOCALFS_DEBUG] listActiveSourceIDs error: %v\n", err)
+		fmt.Printf("[CORE_LOCALFS_DEBUG] listReadableScanSourceInfos error: %v\n", err)
 		return nil, err
 	}
-	fmt.Printf("[CORE_LOCALFS_DEBUG] sourceIDs=%v\n", sourceIDs)
-
+	fmt.Printf("[CORE_LOCALFS_DEBUG] sourceInfos=%+v\n", sourceInfos)
 	var sources []map[string]any
-	for _, sourceID := range sourceIDs {
-		bindings, err := getScanSourceBindings(ctx, r, userID, sourceID)
+	for _, info := range sourceInfos {
+		if !info.ChatEnabled {
+			continue
+		}
+		bindings, err := getScanSourceBindings(ctx, r, userID, info.SourceID)
 		if err != nil {
 			return nil, err
 		}
-
-		var paths []string
-		extSeen := map[string]bool{}
-		for _, b := range bindings {
-			if !isLocalFSActiveAndChatEnabled(b) {
-				continue
-			}
-			targetRef := strings.TrimSpace(b.TargetRef)
-			if targetRef == "" {
-				continue
-			}
-			paths = append(paths, targetRef)
-			for _, ext := range b.IncludeExtensions {
-				e := normalizeFileExtension(ext)
-				if e != "" && !extSeen[e] {
-					extSeen[e] = true
-				}
-			}
-		}
-
-		if len(paths) == 0 || len(extSeen) == 0 {
+		extensions := collectLocalFSExtensions(bindings)
+		if len(extensions) == 0 {
 			continue
 		}
-
-		var fileExtensions []string
-		for ext := range extSeen {
-			fileExtensions = append(fileExtensions, ext)
+		tenantID := strings.TrimSpace(info.TenantID)
+		if tenantID == "" {
+			tenantID = "root"
 		}
-		sort.Strings(fileExtensions)
-
+		path := fmt.Sprintf("%s/tenants/%s/datasets/%s/docs/files/",
+			localFSUploadsRoot(),
+			tenantID, info.DatasetID)
 		sources = append(sources, map[string]any{
-			"source_id":       sourceID,
-			"paths":           paths,
-			"file_extensions": fileExtensions,
+			"source_id":       info.SourceID,
+			"paths":           []string{path},
+			"file_extensions": extensions,
 		})
 	}
-
 	fmt.Printf("[CORE_LOCALFS_DEBUG] local_fs_sources=%v\n", sources)
 	return sources, nil
 }
-
-func listActiveSourceIDs(ctx context.Context, r *http.Request, userID string) ([]string, error) {
-	var sourceIDs []string
+func listReadableScanSourceInfos(ctx context.Context, r *http.Request, userID string) ([]scanSourceInfo, error) {
+	var infos []scanSourceInfo
 	for page := 1; page <= localFSScanMaxPages; page++ {
 		endpoint, err := scanControlPlaneURL("/api/scan/sources")
 		if err != nil {
@@ -145,9 +129,15 @@ func listActiveSourceIDs(ctx context.Context, r *http.Request, userID string) ([
 		}
 		for _, item := range payload.Items {
 			sourceID := strings.TrimSpace(item.SourceID)
-			if sourceID != "" && isActiveStatus(item.Status) {
-				sourceIDs = append(sourceIDs, sourceID)
+			if sourceID == "" || !isActiveStatus(item.Status) {
+				continue
 			}
+			infos = append(infos, scanSourceInfo{
+				SourceID:    sourceID,
+				DatasetID:   strings.TrimSpace(item.DatasetID),
+				TenantID:    strings.TrimSpace(item.TenantID),
+				ChatEnabled: item.ChatEnabled,
+			})
 		}
 		if len(payload.Items) == 0 || page*localFSScanPageSize >= payload.Total {
 			break
@@ -209,18 +199,36 @@ func scanTenantIDFromRequest(r *http.Request) string {
 	}
 	return defaultScanTenantID
 }
-
-func isLocalFSActiveAndChatEnabled(binding scanSourceBinding) bool {
+func isLocalFSTypeAndActive(binding scanSourceBinding) bool {
 	if binding.DeletedAt != nil || !isActiveStatus(binding.Status) {
-		return false
-	}
-	if !binding.ChatEnabled {
 		return false
 	}
 	return strings.EqualFold(strings.TrimSpace(binding.ConnectorType), "local_fs") ||
 		strings.EqualFold(strings.TrimSpace(binding.TargetType), "local_path")
 }
-
+func collectLocalFSExtensions(bindings []scanSourceBinding) []string {
+	seen := map[string]bool{}
+	var exts []string
+	for _, b := range bindings {
+		if !isLocalFSTypeAndActive(b) {
+			continue
+		}
+		for _, ext := range b.IncludeExtensions {
+			e := normalizeFileExtension(ext)
+			if e != "" && !seen[e] {
+				seen[e] = true
+				exts = append(exts, e)
+			}
+		}
+	}
+	return exts
+}
+func localFSUploadsRoot() string {
+	if root := strings.TrimSpace(os.Getenv("LAZYMIND_UPLOAD_ROOT")); root != "" {
+		return strings.TrimRight(root, "/")
+	}
+	return "/var/lib/lazymind/uploads"
+}
 func normalizeFileExtension(ext string) string {
 	e := strings.TrimSpace(ext)
 	e = strings.TrimPrefix(e, ".")
@@ -230,7 +238,6 @@ func normalizeFileExtension(ext string) string {
 	}
 	return e
 }
-
 func isActiveStatus(status string) bool {
 	status = strings.ToUpper(strings.TrimSpace(status))
 	return status == "" || status == "ACTIVE"
