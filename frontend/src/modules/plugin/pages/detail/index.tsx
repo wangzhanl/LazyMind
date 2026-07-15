@@ -3,7 +3,7 @@ import { useParams, useNavigate, useOutletContext } from 'react-router-dom';
 import { Alert, Breadcrumb, Button, Modal, Input, Spin, Select, Space, Tag, message } from 'antd';
 import { SyncOutlined, CheckCircleOutlined } from '@ant-design/icons';
 import { useTranslation } from 'react-i18next';
-import { getPluginDraft, listPluginDrafts, updatePluginDraftContent, aiGeneratePluginDraft, repairPluginDraft, publishPluginDraft, listPluginVersions, getPluginVersion, editPluginVersion, getPluginGenerationAnalysis, confirmPluginWorkflow, previewPluginRepair, getPluginRepairRun } from '../../pluginDraftApi';
+import { getPluginDraft, listPluginDrafts, updatePluginDraftContent, aiGeneratePluginDraft, repairPluginDraft, publishPluginDraft, listPluginVersions, getPluginVersion, editPluginVersion, getPluginGenerationAnalysis, confirmPluginWorkflow, previewPluginRepair, getPluginRepairRun, validatePluginDraft } from '../../pluginDraftApi';
 import type { PluginDraftRecord } from '../../pluginDraftApi';
 import type { PluginVersionSummary, PluginVersionContent, PluginGenerationAnalysis, RepairPreview } from '../../pluginDraftApi';
 import StateGraphEditor from '../../components/StateGraphEditor';
@@ -88,6 +88,7 @@ export default function PluginDetailPage() {
   // True while the :ai-repair API call is in-flight (keeps Modal open with a spinner).
   const [repairSubmitting, setRepairSubmitting] = useState(false);
   const [publishing, setPublishing] = useState(false);
+  const [hasAuthoritativeErrors, setHasAuthoritativeErrors] = useState(false);
   const [versions, setVersions] = useState<PluginVersionSummary[]>([]);
   const [selectedRevision, setSelectedRevision] = useState<string>('draft');
   const [versionContent, setVersionContent] = useState<PluginVersionContent | null>(null);
@@ -389,6 +390,22 @@ export default function PluginDetailPage() {
     [pluginId, t],
   );
 
+  const handleValidate = useCallback(async (): Promise<ValidationError[]> => {
+    if (!pluginId) return [];
+    const result = await validatePluginDraft(pluginId);
+    const diagnostics = result.diagnostics.map((item) => ({
+      code: item.code,
+      message: item.message,
+      severity: item.severity,
+      nodeId: item.node_id,
+      edgeKey: item.edge_id,
+      materialId: item.material_id,
+      details: item.details as Record<string, unknown> | undefined,
+    }));
+    setHasAuthoritativeErrors(result.diagnostics.some((item) => item.severity === 'error'));
+    return diagnostics;
+  }, [pluginId]);
+
   const handlePublish = useCallback(async () => {
     if (!draft) return;
     setPublishing(true);
@@ -469,15 +486,12 @@ export default function PluginDetailPage() {
   let stateYaml = rawStateYaml;
   if (!viewingHistory && rawStateYaml && draft.state_layout_content) {
     try {
-      const layoutObj = JSON.parse(draft.state_layout_content) as Record<string, { x: number; y: number; w?: number; width?: number }>;
+      const layoutObj = JSON.parse(draft.state_layout_content) as Record<string, unknown>;
       if (Object.keys(layoutObj).length > 0) {
         // Prepend x-layout block to state YAML so the parser picks it up.
         // Support both 'w' (legacy) and 'width' (current NodeLayout field name).
         const layoutYaml = `x-layout:\n${Object.entries(layoutObj)
-          .map(([id, pos]) => {
-            const w = pos.w ?? pos.width;
-            return `  ${id}: { x: ${pos.x}, y: ${pos.y}${w != null ? `, w: ${w}` : ''} }`;
-          })
+          .map(([id, value]) => `  ${JSON.stringify(id)}: ${JSON.stringify(value)}`)
           .join('\n')}\n`;
         stateYaml = layoutYaml + rawStateYaml;
       }
@@ -505,9 +519,6 @@ export default function PluginDetailPage() {
       )}
       {draft.generate_status === 'rejected' && (
         <Alert className="plugin-detail-banner" type="error" showIcon message={t('selfEvolutionRun.pluginWorkflowRejected')} description={draft.generate_error} />
-      )}
-      {generationAnalysis && draft.generate_status !== 'needs_confirmation' && (
-        <details className="plugin-detail-banner"><summary>{t('selfEvolutionRun.pluginAnalysisReport')}</summary><h4>{t('selfEvolutionRun.pluginCoverageReport')}</h4><pre>{JSON.stringify(generationAnalysis.coverage,null,2)}</pre><h4>{t('selfEvolutionRun.pluginToolMappingReport')}</h4><pre>{JSON.stringify(generationAnalysis.tool_mappings,null,2)}</pre><h4>{t('selfEvolutionRun.pluginScriptReport')}</h4><pre>{JSON.stringify(generationAnalysis.scripts,null,2)}</pre></details>
       )}
       {/* Generation progress banner — shown while Phase 3 is still running (editor already ready) */}
       {isPhase3Running && !repairModalOpen && (
@@ -626,6 +637,11 @@ export default function PluginDetailPage() {
             defaultShowArtifacts={showArtifactsRef.current}
             onArtifactsChange={(show) => { showArtifactsRef.current = show; }}
             designBriefContent={draft.design_brief_content || undefined}
+            skillConversionReport={generationAnalysis && draft.generate_status !== 'needs_confirmation' ? {
+              coverage: generationAnalysis.coverage,
+              toolMappings: generationAnalysis.tool_mappings,
+              scripts: generationAnalysis.scripts,
+            } : undefined}
             pluginName={
               <Space size={8}>
                 <Breadcrumb items={[
@@ -671,9 +687,10 @@ export default function PluginDetailPage() {
             topbarActions={viewingHistory ? (
               <Button onClick={() => void handleEditHistoricalVersion()}>编辑此版本</Button>
             ) : editorReady ? (
-              <Button type="primary" loading={publishing} disabled={(draft.published && !draft.draft_dirty) || isRepairing || isStillGenerating} title={draft.published && !draft.draft_dirty ? '草稿相对于基础版本没有变更' : undefined} onClick={handlePublish}>发布插件</Button>
+              <Button type="primary" loading={publishing} disabled={hasAuthoritativeErrors || (draft.published && !draft.draft_dirty) || isRepairing || isStillGenerating} title={hasAuthoritativeErrors ? '请先修复 Go 校验返回的错误' : draft.published && !draft.draft_dirty ? '草稿相对于基础版本没有变更' : undefined} onClick={handlePublish}>发布插件</Button>
             ) : null}
             onSave={handleSave}
+            onValidate={handleValidate}
             onClose={() => navigate('/memory-management/plugins')}
             showEmptyHint={showEmptyHint}
           />
