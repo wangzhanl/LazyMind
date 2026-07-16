@@ -45,7 +45,7 @@ func TestSubmitSkillOrganizeForwardsCoreManagedFields(t *testing.T) {
 		return &algo.SkillOrganizeResponse{
 			Code: 0,
 			Data: algo.SkillOrganizeData{
-				Status:    "running",
+				Status:    "pending",
 				RequestID: req.RequestID,
 				TaskID:    "org_smoke_20260707183512345678",
 			},
@@ -90,13 +90,16 @@ func TestSubmitSkillOrganizeForwardsCoreManagedFields(t *testing.T) {
 	if reservation.Status != orm.ResourceUpdateTaskStatusDone {
 		t.Fatalf("organize reservation status = %q, want done", reservation.Status)
 	}
+	if reservation.ResultID != "org_smoke_20260707183512345678" {
+		t.Fatalf("organize reservation result_id = %q", reservation.ResultID)
+	}
 
 	var out common.APIResponse
 	if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
 		t.Fatalf("decode response: %v", err)
 	}
 	data, ok := out.Data.(map[string]any)
-	if !ok || data["taskid"] != "org_smoke_20260707183512345678" || data["status"] != "running" {
+	if !ok || data["taskid"] != "org_smoke_20260707183512345678" || data["status"] != "pending" {
 		t.Fatalf("unexpected response: %#v", out)
 	}
 }
