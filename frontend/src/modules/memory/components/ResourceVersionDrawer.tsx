@@ -429,10 +429,7 @@ export default function ResourceVersionDrawer({
           return;
         }
         console.error("Load resource versions failed:", error);
-        setErrorMessage(
-          getLocalizedErrorMessage(error, t("admin.memoryVersionLoadFailed")) ||
-            t("admin.memoryVersionLoadFailed"),
-        );
+        setErrorMessage(getLocalizedErrorMessage(error));
         setRevisions([]);
         setSkillRevisionCache([]);
         setPersonalRevisionCache([]);
@@ -505,10 +502,7 @@ export default function ResourceVersionDrawer({
           return;
         }
         console.error("Load revision detail failed:", error);
-        setDetailError(
-          getLocalizedErrorMessage(error, t("admin.memoryVersionDetailLoadFailed")) ||
-            t("admin.memoryVersionDetailLoadFailed"),
-        );
+        setDetailError(getLocalizedErrorMessage(error));
       } finally {
         if (!ignore) {
           setDetailLoading(false);
@@ -565,14 +559,9 @@ export default function ResourceVersionDrawer({
             error instanceof SkillRollbackConflictError ||
             error instanceof PersonalRollbackConflictError;
           if (isConflict) {
-            message.warning(t('admin.memoryVersionRollbackConflict'));
             return;
           }
           console.error('Rollback resource version failed:', error);
-          message.error(
-            getLocalizedErrorMessage(error, t('admin.memoryVersionRollbackFailed')) ||
-              t('admin.memoryVersionRollbackFailed'),
-          );
           throw error;
         } finally {
           setRollingBack(false);
