@@ -179,14 +179,7 @@ func (e *DefaultEngine) GetSource(ctx context.Context, req GetSourceRequest) (Ge
 		if err != nil {
 			return GetSourceResponse{}, mapStoreError(err)
 		}
-		// 过滤掉已软删除的 binding（DELETING 状态）
-		activeBindings := make([]store.Binding, 0, len(bindings))
-		for _, b := range bindings {
-			if b.Status != BindingStatusDeleting {
-				activeBindings = append(activeBindings, b)
-			}
-		}
-		resp.Bindings = bindingsToResponse(activeBindings)
+		resp.Bindings = bindingsToResponse(bindings)
 	}
 	if req.IncludeSummary {
 		summary, err := e.GetSourceSummary(ctx, SourceSummaryRequest{CallerID: req.CallerID, SourceID: req.SourceID})

@@ -203,19 +203,6 @@ func (r *SQLRepository) UpdateSourceWithBindings(ctx context.Context, mutation S
 		if err := releaseCurrentBindingTargets(ctx, tx, mutation, mutation.Now); err != nil {
 			return err
 		}
-		// 处理待清理的 binding：状态改为 PENDING_CLEANUP，文件标记 PENDING_DELETION
-		for _, item := range mutation.PendingCleanupBindings {
-			if err := tx.Model(&ormBinding{}).Where("binding_id = ?", item.BindingID).Update("status", "PENDING_CLEANUP").Error; err != nil {
-				return err
-			}
-			if err := tx.Model(&ormDocumentState{}).Where("source_id = ? AND binding_id = ?", item.SourceID, item.BindingID).Updates(map[string]any{
-				"source_state":   "PENDING_DELETION",
-				"pending_action": "DELETE",
-				"updated_at":     mutation.Now,
-			}).Error; err != nil {
-				return err
-			}
-		}
 		for _, item := range mutation.DeleteBindings {
 			binding, cleanup, err := r.softDeleteBindingTx(ctx, tx, item.SourceID, item.BindingID, item.DeletedAt)
 			if err != nil {

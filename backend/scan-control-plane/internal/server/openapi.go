@@ -268,10 +268,6 @@ func openAPISchemas() map[string]any {
 		"UpdateSourceResponse":             object([]string{"source", "bindings"}, props("source", schemaRef("SourceResponse"), "bindings", arrayOf("SourceBindingResponse"), "created_binding_ids", stringArray(), "updated_binding_ids", stringArray(), "removed_binding_ids", stringArray(), "job_ids", stringArray(), "job_errors", arrayOf("JobError"))),
 		"DeleteSourceResponse":             object([]string{"deleted", "source_id"}, props("deleted", boolSchema(), "source_id", stringSchema(), "removed_binding_ids", stringArray(), "removed_dataset_id", stringSchema())),
 		"SourceBindingRequest":             sourceBindingRequestSchema(),
-		"AppendSourceRequest":              appendSourceRequestSchema(),
-		"AppendSourceResponse":             appendSourceResponseSchema(),
-		"JobError":                         jobErrorSchema(),
-		"SourceAppendBindingRequest":       sourceAppendBindingRequestSchema(),
 		"SourceChatSettingEntry":           sourceChatSettingEntrySchema(),
 		"BindingChatSettingEntry":          bindingChatSettingEntrySchema(),
 		"SourceBindingResponse":            sourceBindingResponseSchema(),
@@ -316,40 +312,11 @@ func openAPISchemas() map[string]any {
 		"BindingStatus":                    enumSchema("ACTIVE", "PAUSED", "DELETING", "ERROR"),
 		"CloudAuthConnectionStatus":        enumSchema("ACTIVE", "EXPIRED", "REVOKED", "ERROR", "PENDING"),
 		"SyncMode":                         enumSchema("manual", "scheduled", "watch"),
-		"SourceState":                      enumSchema("NEW", "MODIFIED", "DELETED", "UNCHANGED", "OUT_OF_SCOPE", "PENDING_DELETION"),
+		"SourceState":                      enumSchema("NEW", "MODIFIED", "DELETED", "UNCHANGED", "OUT_OF_SCOPE"),
 		"SyncState":                        enumSchema("IDLE", "SCHEDULED", "PENDING", "RUNNING", "FAILED"),
 		"TaskAction":                       enumSchema("CREATE", "REPARSE", "DELETE"),
 		"ParseTaskStatus":                  enumSchema("PENDING", "RUNNING", "SUBMITTED", "SUCCEEDED", "FAILED", "SUPERSEDED"),
 	}
-}
-
-func appendSourceRequestSchema() map[string]any {
-	return object([]string{"bindings"}, props(
-		"bindings", arrayOf("SourceAppendBindingRequest"),
-	))
-}
-
-func jobErrorSchema() map[string]any {
-	return object([]string{"code", "message"}, props(
-		"code", stringSchema(),
-		"message", stringSchema(),
-		"details", objectSchema(),
-	))
-}
-
-func sourceAppendBindingRequestSchema() map[string]any {
-	return object([]string{}, props(
-		"target_ref", stringSchema(),
-		"display_name", stringSchema(),
-	))
-}
-
-func appendSourceResponseSchema() map[string]any {
-	return object([]string{"new_binding_ids", "new_bindings"}, props(
-		"new_binding_ids", stringArray(),
-		"new_bindings", arrayOf("SourceBindingResponse"),
-		"sync_job_errors", arrayOf("JobError"),
-	))
 }
 
 func connectorSpecSchema() map[string]any {

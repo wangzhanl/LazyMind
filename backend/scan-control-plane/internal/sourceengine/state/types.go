@@ -12,8 +12,7 @@ const (
 	SourceStateModified   = "MODIFIED"
 	SourceStateUnchanged  = "UNCHANGED"
 	SourceStateDeleted    = "DELETED"
-	SourceStateOutOfScope  = "OUT_OF_SCOPE"
-	SourceStatePendingDeletion = "PENDING_DELETION"
+	SourceStateOutOfScope = "OUT_OF_SCOPE"
 
 	PendingActionCreate  = "CREATE"
 	PendingActionReparse = "REPARSE"

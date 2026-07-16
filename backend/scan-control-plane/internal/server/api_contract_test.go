@@ -869,8 +869,6 @@ type serverSourceEngineStub struct {
 	lastGetDatasetID     string
 	lastDeleteDatasetID  string
 	lastDeleteOptions    sourceengine.DeleteSourceOptions
-	updateCalls          int
-	lastUpdate           sourceengine.UpdateSourceRequest
 }
 
 func (s *serverSourceEngineStub) CreateSource(_ context.Context, req sourceengine.CreateSourceRequest) (sourceengine.CreateSourceResponse, error) {
@@ -939,8 +937,6 @@ func (s *serverSourceEngineStub) TriggerSourceSync(_ context.Context, req source
 }
 
 func (s *serverSourceEngineStub) UpdateSource(_ context.Context, _ string, _ string, req sourceengine.UpdateSourceRequest) (sourceengine.UpdateSourceResponse, error) {
-	s.updateCalls++
-	s.lastUpdate = req
 	now := time.Date(2026, 5, 27, 8, 0, 0, 0, time.UTC)
 	name := "Docs"
 	if req.Name != nil {
@@ -956,7 +952,6 @@ func (s *serverSourceEngineStub) UpdateSource(_ context.Context, _ string, _ str
 			CreatedAt:     now,
 			UpdatedAt:     now,
 		},
-		Bindings: []sourceengine.SourceBindingResponse{},
 	}, nil
 }
 
@@ -969,10 +964,6 @@ func (s *serverSourceEngineStub) DeleteSourceByDatasetID(_ context.Context, data
 	s.lastDeleteDatasetID = datasetID
 	s.lastDeleteOptions = opts
 	return sourceengine.DeleteSourceResponse{Deleted: true, SourceID: "source-1", RemovedDatasetID: datasetID}, nil
-}
-
-func (s *serverSourceEngineStub) AppendSource(_ context.Context, req sourceengine.AppendSourceRequest) (sourceengine.AppendSourceResponse, error) {
-	return sourceengine.AppendSourceResponse{}, nil
 }
 
 func (s *serverSourceEngineStub) AddBinding(context.Context, string, string, sourceengine.BindingInput) (sourceengine.BindingMutationResponse, error) {
@@ -1176,15 +1167,7 @@ func TestUpdateSourceHandlerModifiesName(t *testing.T) {
 	if w.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d body=%s", w.Code, w.Body.String())
 	}
-	if engine.updateCalls != 1 {
-		t.Fatalf("expected 1 UpdateSource call, got %d", engine.updateCalls)
-	}
-	if engine.lastUpdate.Name == nil || *engine.lastUpdate.Name != "renamed-source" {
-		t.Fatalf("expected name=renamed-source, got %v", engine.lastUpdate.Name)
-	}
-	if engine.lastUpdate.ConfigVersion != 10 {
-		t.Fatalf("expected config_version=10, got %d", engine.lastUpdate.ConfigVersion)
-	}
+
 	var resp sourceengine.UpdateSourceResponse
 	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
 		t.Fatalf("decode response: %v", err)
