@@ -1862,7 +1862,6 @@ type sourceCoreSpy struct {
 	datasetRequests  []coreclient.CreateDatasetRequest
 	folderRequests   []coreclient.CreateBindingRootDocumentRequest
 	datasetDeletes   []coreclient.DeleteDatasetRequest
-	datasetUpdates   []coreclient.UpdateDatasetRequest
 	deleteRequests   []coreclient.DeleteDocumentRequest
 	batchDeletes     []coreclient.BatchDeleteDocumentsRequest
 }
@@ -1881,7 +1880,6 @@ func (c *sourceCoreSpy) DeleteDataset(_ context.Context, req coreclient.DeleteDa
 }
 
 func (c *sourceCoreSpy) UpdateDataset(_ context.Context, req coreclient.UpdateDatasetRequest) error {
-	c.datasetUpdates = append(c.datasetUpdates, req)
 	return nil
 }
 

@@ -43,8 +43,7 @@ CREATE TABLE public.source_bindings (
     last_error jsonb,
     deleted_at timestamp with time zone,
     created_at timestamp with time zone NOT NULL,
-    updated_at timestamp with time zone NOT NULL,
-    chat_enabled boolean NOT NULL DEFAULT TRUE
+    updated_at timestamp with time zone NOT NULL
 );
 
 CREATE INDEX idx_source_bindings_source
