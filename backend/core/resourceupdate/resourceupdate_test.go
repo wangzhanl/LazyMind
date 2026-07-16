@@ -2586,7 +2586,3 @@ func skillContentWithCategory(name, description, body, category string) string {
 	lines = append(lines, "---", body)
 	return strings.Join(lines, "\n")
 }
-
-
-
-
