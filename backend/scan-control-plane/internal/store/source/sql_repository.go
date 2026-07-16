@@ -268,7 +268,6 @@ WHERE rowid IN (
 	return r.orm.Exec(statement).Error
 }
 
-
 func (r *SQLRepository) ormDB(ctx context.Context) *gorm.DB {
 	if r.orm == nil {
 		return nil
@@ -353,4 +352,14 @@ func normalizeSQLPageSize(pageSize int) int {
 		return 20
 	}
 	return pageSize
+}
+
+// Migrate applies incremental schema changes not covered by the baseline migration (idempotent).
+func (r *SQLRepository) Migrate(ctx context.Context) error {
+	if r.orm == nil {
+		return nil
+	}
+	return r.orm.WithContext(ctx).Exec(
+		"ALTER TABLE source_bindings ADD COLUMN IF NOT EXISTS chat_enabled BOOLEAN NOT NULL DEFAULT TRUE",
+	).Error
 }
