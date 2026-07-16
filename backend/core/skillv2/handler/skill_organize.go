@@ -227,7 +227,6 @@ func submitSkillOrganize(ctx context.Context, db *gorm.DB, userID string, req sk
 		RequestID:    req.RequestID,
 		UserID:       userID,
 		Skills:       req.Skills,
-		FSBaseURL:    common.CoreSelfEndpoint(),
 		ArtifactDir:  req.ArtifactDir,
 		ModelConfigs: modelConfigs,
 	})

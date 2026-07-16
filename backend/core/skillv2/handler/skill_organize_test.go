@@ -28,7 +28,6 @@ func TestSubmitSkillOrganizeForwardsCoreManagedFields(t *testing.T) {
 		store.Init(oldDB, nil, nil)
 	})
 
-	t.Setenv("LAZYMIND_CORE_SELF_URL", "http://core.test")
 	db := testutil.NewTestDB(t)
 	testutil.SeedSkillWithRevision(t, db, "skill1", "rev1")
 	store.Init(db.DB, nil, nil)
@@ -73,9 +72,6 @@ func TestSubmitSkillOrganizeForwardsCoreManagedFields(t *testing.T) {
 	}
 	if strings.Join(captured.Skills, ",") != "skills/research/论文精读" {
 		t.Fatalf("unexpected forwarded skills: %#v", captured.Skills)
-	}
-	if captured.FSBaseURL != "http://core.test" {
-		t.Fatalf("fs_base_url = %q", captured.FSBaseURL)
 	}
 	if captured.ArtifactDir != "tmp/a-skill-org" {
 		t.Fatalf("artifact_dir = %q", captured.ArtifactDir)
