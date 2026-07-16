@@ -30,7 +30,7 @@ func TestSkillReviewWorkerDefersWithoutConsumingAttempt(t *testing.T) {
 	db := newResourceUpdateTestDB(t)
 	now := time.Date(2026, 7, 13, 10, 0, 0, 0, time.UTC)
 	insertSkillReviewStats(t, db, map[string]any{
-		"id": "org-running", "requestid": "org-running", "userid": "user-1", "status": "running",
+		"id": "org-running", "requestid": "org-running", "userid": "user-1", "status": "organize_apply",
 		"started_at": now.Format(time.RFC3339Nano), "duration_ms": 0, "summary": "{}",
 	})
 	insertTask(t, db, orm.ResourceUpdateTask{
@@ -728,6 +728,94 @@ func TestSkillReviewTaskListDropsCompletedRunFromRunningFilter(t *testing.T) {
 	}
 }
 
+func TestSkillReviewTaskListUsesCompletedAlgorithmRunForLegacyFailedCoreTask(t *testing.T) {
+	db := newResourceUpdateTestDB(t)
+	createSkillReviewStatsTable(t, db)
+	ctx := context.Background()
+	now := time.Date(2026, 7, 16, 7, 0, 0, 0, time.UTC)
+	insertTask(t, db, orm.ResourceUpdateTask{
+		ID:           "legacy-failed-task",
+		TaskType:     orm.ResourceUpdateTaskTypeGenerateReview,
+		ResourceType: orm.ResourceUpdateResourceTypeSkill,
+		UserID:       "user-1",
+		TriggerType:  orm.ResourceUpdateTriggerTypeManual,
+		TriggerID:    "skill_review_manual:user-1:req-legacy",
+		Status:       orm.ResourceUpdateTaskStatusFailed,
+		RequestJSON: marshalJSON(t, skillGenerateRequestJSON{
+			RequestID:    "req-legacy",
+			UserID:       "user-1",
+			WindowFrozen: true,
+		}),
+		ErrorCode:    "skill_review_unexpected_response",
+		AttemptCount: 3,
+		NextRunAt:    now,
+		CreatedAt:    now,
+		UpdatedAt:    now,
+	})
+	insertSkillReviewStats(t, db, map[string]any{
+		"id": "algorithm-completed", "requestid": "req-legacy", "userid": "user-1", "status": "completed",
+		"started_at": "2026-07-16T15:00:01Z", "duration_ms": 1000,
+		"summary": map[string]any{
+			"counts": map[string]any{"draft": 1},
+			"apply": map[string]any{
+				"output_count": 1,
+				"applied":      []map[string]any{{"type": "new", "name": "generated-skill"}},
+			},
+		},
+	})
+	insertSkillReviewStats(t, db, map[string]any{
+		"id": "algorithm-zombie", "requestid": "req-legacy", "userid": "user-1", "status": "review_draft",
+		"started_at": "2026-07-16T15:01:01Z", "duration_ms": 1, "summary": map[string]any{"stage": "review_draft"},
+	})
+
+	resp, err := buildSkillReviewTaskList(ctx, db, "user-1", "", "req-legacy", 1, 1000)
+	if err != nil {
+		t.Fatalf("build task list: %v", err)
+	}
+	if len(resp.Items) != 1 || resp.Items[0].Status != orm.ResourceUpdateTaskStatusDone ||
+		resp.Items[0].RunStatus != "completed" || resp.Items[0].ResultCount != 1 ||
+		resp.Items[0].Task.Status != orm.ResourceUpdateTaskStatusFailed {
+		t.Fatalf("unexpected reconciled task status: %#v", resp)
+	}
+}
+
+func TestSkillReviewTaskListUsesBoundAlgorithmTaskID(t *testing.T) {
+	db := newResourceUpdateTestDB(t)
+	createSkillReviewStatsTable(t, db)
+	ctx := context.Background()
+	now := time.Date(2026, 7, 16, 7, 0, 0, 0, time.UTC)
+	insertTask(t, db, orm.ResourceUpdateTask{
+		ID:           "bound-task",
+		TaskType:     orm.ResourceUpdateTaskTypeGenerateReview,
+		ResourceType: orm.ResourceUpdateResourceTypeSkill,
+		UserID:       "user-1",
+		TriggerType:  orm.ResourceUpdateTriggerTypeManual,
+		TriggerID:    "skill_review_manual:user-1:req-bound",
+		Status:       orm.ResourceUpdateTaskStatusDone,
+		ResultID:     "algorithm-bound",
+		RequestJSON:  marshalJSON(t, skillGenerateRequestJSON{RequestID: "req-bound", UserID: "user-1", WindowFrozen: true}),
+		NextRunAt:    now,
+		CreatedAt:    now,
+		UpdatedAt:    now,
+	})
+	insertSkillReviewStats(t, db, map[string]any{
+		"id": "algorithm-other", "requestid": "req-bound", "userid": "user-1", "status": "completed",
+		"started_at": "2026-07-16T15:00:01Z", "duration_ms": 1000, "summary": map[string]any{"skill_count": 1},
+	})
+	insertSkillReviewStats(t, db, map[string]any{
+		"id": "algorithm-bound", "requestid": "req-bound", "userid": "user-1", "status": "review_miner",
+		"started_at": "2026-07-16T15:01:01Z", "duration_ms": 1, "summary": map[string]any{"stage": "review_miner"},
+	})
+
+	resp, err := buildSkillReviewTaskList(ctx, db, "user-1", "", "req-bound", 1, 1000)
+	if err != nil {
+		t.Fatalf("build task list: %v", err)
+	}
+	if len(resp.Items) != 1 || resp.Items[0].Status != orm.ResourceUpdateTaskStatusRunning || resp.Items[0].RunStatus != "review_miner" {
+		t.Fatalf("unexpected bound task status: %#v", resp)
+	}
+}
+
 func TestSkillPreflightFreezesRequestAndSkipsWhenBelowThreshold(t *testing.T) {
 	db := newResourceUpdateTestDB(t)
 	ctx := context.Background()
@@ -870,7 +958,7 @@ func TestSkillWorkerCallsReviewWithoutPendingSkillResults(t *testing.T) {
 	}
 	worker.callers.Skill = func(_ context.Context, req algo.SkillReviewRequest) (*algo.SkillReviewResponse, int, error) {
 		captured = req
-		return &algo.SkillReviewResponse{Code: 0, Data: algo.SkillReviewData{Status: "completed", RequestID: req.RequestID, TaskID: "review_task_1"}}, 200, nil
+		return &algo.SkillReviewResponse{Code: 0, Data: algo.SkillReviewData{Status: "pending", RequestID: req.RequestID, TaskID: "review_task_1"}}, 200, nil
 	}
 
 	result, err := worker.RunOnce(ctx)
@@ -906,6 +994,9 @@ func TestSkillWorkerCallsReviewWithoutPendingSkillResults(t *testing.T) {
 	}
 	if got.Status != orm.ResourceUpdateTaskStatusDone {
 		t.Fatalf("expected done task, got %s", got.Status)
+	}
+	if got.ResultID != "review_task_1" || got.AttemptCount != 1 {
+		t.Fatalf("expected one accepted algorithm task, got result_id=%q attempts=%d", got.ResultID, got.AttemptCount)
 	}
 	assertRequestJSONHasNoSensitiveFields(t, got.RequestJSON)
 	if status := skillReviewResultStatus(t, db, "pending-1"); status != "pending" {
@@ -967,7 +1058,7 @@ func TestSkillWorkerPassesManualThresholds(t *testing.T) {
 	}
 	worker.callers.Skill = func(_ context.Context, req algo.SkillReviewRequest) (*algo.SkillReviewResponse, int, error) {
 		captured = req
-		return &algo.SkillReviewResponse{Code: 0, Data: algo.SkillReviewData{Status: "running", RequestID: req.RequestID}}, 200, nil
+		return &algo.SkillReviewResponse{Code: 0, Data: algo.SkillReviewData{Status: "running", RequestID: req.RequestID, TaskID: "review_manual_task"}}, 200, nil
 	}
 
 	result, err := worker.RunOnce(ctx)
@@ -1125,7 +1216,7 @@ func TestSchedulerDefersSkillReviewWhileMaintenanceTaskIsRunning(t *testing.T) {
 		UpdatedAt:     now,
 	})
 	insertSkillReviewStats(t, db, map[string]any{
-		"id": "org-running", "requestid": "org-running", "userid": "user-1", "status": "running",
+		"id": "org-running", "requestid": "org-running", "userid": "user-1", "status": "organize_apply",
 		"started_at": now.Format(time.RFC3339Nano), "duration_ms": 0, "summary": "{}",
 	})
 
