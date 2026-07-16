@@ -268,7 +268,6 @@ WHERE rowid IN (
 	return r.orm.Exec(statement).Error
 }
 
-
 func (r *SQLRepository) ormDB(ctx context.Context) *gorm.DB {
 	if r.orm == nil {
 		return nil
@@ -355,7 +354,7 @@ func normalizeSQLPageSize(pageSize int) int {
 	return pageSize
 }
 
-// Migrate 执行基线迁移未涵盖的增量 schema 变更（幂等，可重复执行）。
+// Migrate applies incremental schema changes not covered by the baseline migration (idempotent).
 func (r *SQLRepository) Migrate(ctx context.Context) error {
 	if r.orm == nil {
 		return nil
