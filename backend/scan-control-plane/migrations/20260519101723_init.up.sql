@@ -43,8 +43,7 @@ CREATE TABLE public.source_bindings (
     last_error jsonb,
     deleted_at timestamp with time zone,
     created_at timestamp with time zone NOT NULL,
-    updated_at timestamp with time zone NOT NULL,
-    chat_enabled boolean NOT NULL DEFAULT TRUE
+    updated_at timestamp with time zone NOT NULL
 );
 
 CREATE INDEX idx_source_bindings_source
@@ -75,7 +74,7 @@ CREATE TABLE public.source_object_index (
     provider_meta_json jsonb,
     last_seen_run_id text,
     created_at timestamp with time zone NOT NULL,
-    updated_at timestamp with time zone NOT NULL,
+    updated_at timestamp with time zone NOT NULL
     PRIMARY KEY (binding_id, object_key)
 );
 
@@ -104,7 +103,7 @@ CREATE TABLE public.source_document_states (
     last_synced_at timestamp with time zone,
     last_error jsonb,
     created_at timestamp with time zone NOT NULL,
-    updated_at timestamp with time zone NOT NULL,
+    updated_at timestamp with time zone NOT NULL
     PRIMARY KEY (source_id, binding_id, object_key)
 );
 

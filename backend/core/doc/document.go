@@ -729,7 +729,7 @@ func DeleteDocument(w http.ResponseWriter, r *http.Request) {
 		common.ReplyErr(w, "external delete failed", http.StatusBadGateway)
 		return
 	}
-	// 删除上传的源文件（upload_xxx），清理共享文件夹中的残留文件
+	// Delete uploaded source files and clean up residual files in the shared folder.
 	if err := deleteUploadedFiles(r.Context(), ds.TenantID, datasetID, rowsToDelete); err != nil {
 		log.Logger.Error().Err(err).Str("handler", "DeleteDocument").Msg("failed to delete uploaded files")
 	}
@@ -1250,7 +1250,7 @@ func BatchDeleteDocument(w http.ResponseWriter, r *http.Request) {
 		common.ReplyErr(w, "external delete failed", http.StatusBadGateway)
 		return
 	}
-	// 删除上传的源文件（upload_xxx），清理共享文件夹中的残留文件
+	// Delete uploaded source files and clean up residual files in the shared folder.
 	if err := deleteUploadedFiles(r.Context(), ds.TenantID, datasetID, rowsToDelete); err != nil {
 		log.Logger.Error().Err(err).Str("handler", "DeleteDocument").Msg("failed to delete uploaded files")
 	}
@@ -1522,8 +1522,8 @@ func deleteExternalDocs(r *http.Request, datasetID string, rows []orm.Document) 
 	return nil
 }
 
-// deleteUploadedFiles 删除文档关联的上传文件，清理共享文件夹中的残留 upload_xxx 文件。
-// 通过 UploadedFile.document_id 关联查询 upload_file_id，再删除对应文件目录。
+// deleteUploadedFiles deletes uploaded files associated with documents and cleans up residual upload_xxx file directories in the shared folder.
+// Finds the corresponding upload_file_id via UploadedFile.document_id, then removes the file directory.
 func deleteUploadedFiles(ctx context.Context, tenantID, datasetID string, rows []orm.Document) error {
 	docIDs := make([]string, 0, len(rows))
 	for _, row := range rows {
@@ -1535,7 +1535,7 @@ func deleteUploadedFiles(ctx context.Context, tenantID, datasetID string, rows [
 	if len(docIDs) == 0 {
 		return nil
 	}
-	// 查询 UploadedFile 表，通过 document_id 找到对应的 upload_file_id
+	// Look up the corresponding upload_file_id from the UploadedFile table by document_id.
 	var uploadedFiles []orm.UploadedFile
 	if err := store.DB().WithContext(ctx).
 		Where("document_id IN ? AND deleted_at IS NULL", docIDs).
@@ -1570,7 +1570,7 @@ func deleteUploadedFiles(ctx context.Context, tenantID, datasetID string, rows [
 				Msg("removed upload file directory")
 		}
 	}
-	// 软删除 UploadedFile 记录
+	// Soft-delete UploadedFile records.
 	now := time.Now().UTC()
 	fileIDs := make([]string, 0, len(uploadedFiles))
 	for _, uf := range uploadedFiles {
