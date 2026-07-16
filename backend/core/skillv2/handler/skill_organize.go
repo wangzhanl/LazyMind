@@ -223,10 +223,14 @@ func submitSkillOrganize(ctx context.Context, db *gorm.DB, userID string, req sk
 	if err != nil {
 		return nil, 0, fmt.Errorf("load model configs: %w", err)
 	}
+	algorithmSkills := make([]string, len(req.Skills))
+	for i, skillPath := range req.Skills {
+		algorithmSkills[i] = strings.TrimPrefix(skillPath, skillOrganizeBaseDir+"/")
+	}
 	return skillOrganizeCaller(ctx, algo.SkillOrganizeRequest{
 		RequestID:    req.RequestID,
 		UserID:       userID,
-		Skills:       req.Skills,
+		Skills:       algorithmSkills,
 		ArtifactDir:  req.ArtifactDir,
 		ModelConfigs: modelConfigs,
 	})

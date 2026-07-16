@@ -70,7 +70,7 @@ func TestSubmitSkillOrganizeForwardsCoreManagedFields(t *testing.T) {
 	if captured.UserID != "user_001" || captured.RequestID != "org_smoke" {
 		t.Fatalf("unexpected forwarded request identity: %#v", captured)
 	}
-	if strings.Join(captured.Skills, ",") != "skills/research/论文精读" {
+	if strings.Join(captured.Skills, ",") != "research/论文精读" {
 		t.Fatalf("unexpected forwarded skills: %#v", captured.Skills)
 	}
 	if captured.ArtifactDir != "tmp/a-skill-org" {
