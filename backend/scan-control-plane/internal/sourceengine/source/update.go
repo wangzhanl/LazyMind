@@ -19,11 +19,11 @@ func (e *DefaultEngine) UpdateSource(ctx context.Context, callerID, sourceID str
 	}
 	now := e.clock().UTC()
 
-	// 保存原始名称，未真正改名时跳过 core 同步
+	// Save the original name; skip core sync if the name hasn't actually changed.
 	originalName := src.Name
 
 	if req.Name != nil {
-		// 数据源层同名校验（DB 事务之前）
+		// Check for duplicate name at the source level (before DB transaction).
 		if *req.Name != originalName {
 			if err := e.ensureSourceNameUnique(ctx, src.TenantID, src.SourceID, *req.Name); err != nil {
 				return UpdateSourceResponse{}, err
@@ -33,7 +33,7 @@ func (e *DefaultEngine) UpdateSource(ctx context.Context, callerID, sourceID str
 		if err := validateSourceName(*req.Name); err != nil {
 			return UpdateSourceResponse{}, err
 		}
-		// 名称确实变了：先同步到 Core（DB 事务之前），core 失败则整体回滚
+		// Name has actually changed: sync to Core first (before DB transaction); roll back entirely if Core fails.
 		if *req.Name != originalName {
 			if err := e.core.UpdateDataset(ctx, coreclient.UpdateDatasetRequest{
 				DatasetID:   src.DatasetID,
@@ -222,7 +222,7 @@ func compensatePreparedMutations(ctx context.Context, e *DefaultEngine, changes 
 	}
 }
 
-// ensureSourceNameUnique 检查同一 tenant 下是否已存在同名数据源（排除自身）。
+// ensureSourceNameUnique checks whether a source with the same name already exists under the same tenant (excluding itself).
 func (e *DefaultEngine) ensureSourceNameUnique(ctx context.Context, tenantID, sourceID, name string) error {
 	records, _, err := e.repo.ListSources(ctx, store.SourceListRequest{
 		TenantID: tenantID,
