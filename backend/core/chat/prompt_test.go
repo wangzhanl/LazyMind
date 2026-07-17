@@ -167,8 +167,16 @@ func TestPromptLibraryFavoriteAndUsage(t *testing.T) {
 		}
 	}
 	for i := 0; i < 2; i++ {
-		if rec := request(UsePrompt, "u1"); rec.Code != http.StatusOK {
+		rec := request(UsePrompt, "u1")
+		if rec.Code != http.StatusOK {
 			t.Fatalf("use attempt %d failed: status=%d body=%s", i+1, rec.Code, rec.Body.String())
+		}
+		var stateResp promptStateResponse
+		if err := json.Unmarshal(rec.Body.Bytes(), &stateResp); err != nil {
+			t.Fatalf("decode use attempt %d response: %v", i+1, err)
+		}
+		if stateResp.ID != "preset-general-qa" || !stateResp.IsFavorite || stateResp.UsageCount != int64(i+1) || stateResp.LastUsedAt == nil {
+			t.Fatalf("unexpected use attempt %d response: %#v", i+1, stateResp)
 		}
 	}
 
