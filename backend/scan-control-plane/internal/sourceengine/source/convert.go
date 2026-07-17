@@ -68,7 +68,7 @@ func bindingToResponse(binding store.Binding) SourceBindingResponse {
 		IncludeExtensions:      jsonStringSlice(binding.IncludeExtensions, "items"),
 		ExcludeExtensions:      jsonStringSlice(binding.ExcludeExtensions, "items"),
 		ChatEnabled:            binding.ChatEnabled,
-			Status:                 binding.Status,
+		Status:                 binding.Status,
 		LastError:              store.CloneJSON(binding.LastError),
 		DeletedAt:              binding.DeletedAt,
 		CreatedAt:              binding.CreatedAt,

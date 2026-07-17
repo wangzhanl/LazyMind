@@ -1,4 +1,5 @@
 import { axiosInstance, BASE_URL } from '@/components/request';
+import type { RawAxiosRequestConfig } from 'axios';
 
 const coreBasePath = `${BASE_URL}/api/core`;
 
@@ -25,6 +26,12 @@ export interface BuiltinPluginUiTab {
   label: string;
   layout: string;
   slots: BuiltinPluginUiTabSlot[];
+  composite_layout?: unknown;
+  composite_behavior?: {
+    hide_empty_columns?: boolean;
+    empty_column_scope?: 'selected' | 'tab';
+    mutually_exclusive?: Array<{ slots: string[]; prefer?: string[] }>;
+  };
 }
 
 export interface BuiltinPlugin {
@@ -118,8 +125,14 @@ export async function createPluginDraft(payload: { name: string; content?: strin
   return resp.data.data;
 }
 
-export async function getPluginDraft(id: string): Promise<PluginDraftRecord> {
-  const resp = await axiosInstance.get<CoreResponse<PluginDraftRecord>>(`${coreBasePath}/plugin-drafts/${id}`);
+export async function getPluginDraft(
+  id: string,
+  options?: RawAxiosRequestConfig,
+): Promise<PluginDraftRecord> {
+  const resp = await axiosInstance.get<CoreResponse<PluginDraftRecord>>(
+    `${coreBasePath}/plugin-drafts/${id}`,
+    options,
+  );
   return resp.data.data;
 }
 
@@ -156,6 +169,34 @@ export interface PublishedPluginVersion {
 
 export async function publishPluginDraft(id: string): Promise<PublishedPluginVersion> {
   const resp = await axiosInstance.post<CoreResponse<PublishedPluginVersion>>(`${coreBasePath}/plugin-drafts/${id}:publish`);
+  return resp.data.data;
+}
+
+export interface PluginDiagnostic {
+  code: string;
+  severity: 'error' | 'warning' | string;
+  path?: string;
+  node_id?: string;
+  edge_id?: string;
+  material_id?: string;
+  message: string;
+  details?: Record<string, unknown>;
+  fixable: boolean;
+}
+
+export interface PluginValidationResult {
+  valid: boolean;
+  profile: string;
+  schema_version: string;
+  graph_hash?: string;
+  diagnostics: PluginDiagnostic[];
+}
+
+export async function validatePluginDraft(id: string): Promise<PluginValidationResult> {
+  const resp = await axiosInstance.post<CoreResponse<PluginValidationResult>>(
+    `${coreBasePath}/plugin-drafts/${id}:validate`,
+    { profile: 'editor' },
+  );
   return resp.data.data;
 }
 

@@ -9,6 +9,7 @@ import {
   Space,
   Spin,
   Tag,
+  Tooltip,
   Tree,
   Typography,
   Upload,
@@ -70,6 +71,15 @@ import {
   pickDefaultFilePath,
   resolveParentPathFromSelection,
 } from "./skillTreeUtils";
+
+const SKILL_UPLOAD_ACCEPT_EXTS = new Set([
+  ".md", ".markdown",
+  ".txt", ".json", ".yaml", ".yml", ".toml",
+  ".py", ".js", ".ts", ".css", ".html", ".sh",
+]);
+
+const SKILL_UPLOAD_ACCEPT_ATTR =
+  ".md,.markdown,.txt,.json,.yaml,.yml,.toml,.py,.js,.ts,.css,.html,.sh";
 
 interface SkillPackageEditorProps {
   skillId: string;
@@ -247,10 +257,7 @@ export default function SkillPackageEditor({
       }
     } catch (error) {
       console.error("Load skill package failed:", error);
-      setErrorMessage(
-        getLocalizedErrorMessage(error, t("admin.memorySkillPackageLoadFailed")) ||
-          t("admin.memorySkillPackageLoadFailed"),
-      );
+      setErrorMessage(getLocalizedErrorMessage(error));
     } finally {
       setLoading(false);
     }
@@ -336,10 +343,6 @@ export default function SkillPackageEditor({
         setFileBinary(file.binary);
       } catch (error) {
         console.error("Load skill file failed:", error);
-        message.error(
-          getLocalizedErrorMessage(error, t("admin.memorySkillPackageFileLoadFailed")) ||
-            t("admin.memorySkillPackageFileLoadFailed"),
-        );
       } finally {
         setFileLoading(false);
       }
@@ -407,9 +410,6 @@ export default function SkillPackageEditor({
       message.success(t("common.saveSuccess"));
     } catch (error) {
       console.error("Save skill file failed:", error);
-      message.error(
-        getLocalizedErrorMessage(error, t("common.saveFailed")) || t("common.saveFailed"),
-      );
     } finally {
       setSaving(false);
     }
@@ -427,10 +427,6 @@ export default function SkillPackageEditor({
       await onSkillUpdated?.();
     } catch (error) {
       console.error("Commit skill draft failed:", error);
-      message.error(
-        getLocalizedErrorMessage(error, t("admin.memorySkillDraftCommitFailed")) ||
-          t("admin.memorySkillDraftCommitFailed"),
-      );
     } finally {
       setCommitting(false);
     }
@@ -478,10 +474,6 @@ export default function SkillPackageEditor({
       await refreshCurrentFileDiff();
     } catch (error) {
       console.error("Submit skill draft review action failed:", error);
-      message.error(
-        getLocalizedErrorMessage(error, t("admin.memorySkillHunkActionFailed")) ||
-          t("admin.memorySkillHunkActionFailed"),
-      );
     } finally {
       setHunkSubmitting((previous) => {
         const next = { ...previous };
@@ -523,10 +515,6 @@ export default function SkillPackageEditor({
       }
     } catch (error) {
       console.error("Undo skill draft review failed:", error);
-      message.error(
-        getLocalizedErrorMessage(error, t("admin.memorySkillDraftReviewUndoFailed")) ||
-          t("admin.memorySkillDraftReviewUndoFailed"),
-      );
     } finally {
       setUndoing(false);
     }
@@ -556,10 +544,6 @@ export default function SkillPackageEditor({
       await onSkillUpdated?.();
     } catch (error) {
       console.error("Confirm skill draft failed:", error);
-      message.error(
-        getLocalizedErrorMessage(error, t("admin.memorySkillDraftConfirmFailed")) ||
-          t("admin.memorySkillDraftConfirmFailed"),
-      );
     } finally {
       setCommitting(false);
     }
@@ -584,10 +568,6 @@ export default function SkillPackageEditor({
           await onSkillUpdated?.();
         } catch (error) {
           console.error("Discard skill draft failed:", error);
-          message.error(
-            getLocalizedErrorMessage(error, t("admin.memorySkillDraftDiscardFailed")) ||
-              t("admin.memorySkillDraftDiscardFailed"),
-          );
         }
       },
     });
@@ -638,9 +618,6 @@ export default function SkillPackageEditor({
       message.success(t("common.saveSuccess"));
     } catch (error) {
       console.error("Create skill path failed:", error);
-      message.error(
-        getLocalizedErrorMessage(error, t("common.saveFailed")) || t("common.saveFailed"),
-      );
     }
   };
 
@@ -704,10 +681,6 @@ export default function SkillPackageEditor({
           message.success(t("admin.memorySkillPackageDeleteSuccess"));
         } catch (error) {
           console.error("Delete skill file failed:", error);
-          message.error(
-            getLocalizedErrorMessage(error, t("admin.memorySkillPackageDeleteFailed")) ||
-              t("admin.memorySkillPackageDeleteFailed"),
-          );
         }
       },
     });
@@ -715,6 +688,15 @@ export default function SkillPackageEditor({
 
   const handleUploadFile = async (file: File) => {
     if (!selectedPath || !draftStatus || reviewMode) {
+      return false;
+    }
+    const ext = file.name.toLowerCase().replace(/^.*(\.[^.]+)$/, "$1");
+    if (!SKILL_UPLOAD_ACCEPT_EXTS.has(ext)) {
+      message.warning(t("admin.memorySkillPackageUploadFileTypeError"));
+      return false;
+    }
+    if (file.size > 512 * 1024) {
+      message.warning(t("admin.memorySkillPackageUploadFileSizeError"));
       return false;
     }
     try {
@@ -733,9 +715,6 @@ export default function SkillPackageEditor({
       message.success(t("common.saveSuccess"));
     } catch (error) {
       console.error("Upload skill file failed:", error);
-      message.error(
-        getLocalizedErrorMessage(error, t("common.saveFailed")) || t("common.saveFailed"),
-      );
     }
     return false;
   };
@@ -950,10 +929,21 @@ export default function SkillPackageEditor({
         {canManageSelectedFile ? (
           <Space wrap className="memory-skill-package-file-actions">
             <Upload
+              accept={SKILL_UPLOAD_ACCEPT_ATTR}
               showUploadList={false}
               beforeUpload={(file) => void handleUploadFile(file as File)}
             >
-              <Button icon={<UploadOutlined />}>{t("admin.memorySkillPackageUploadFile")}</Button>
+              <Tooltip
+                placement="bottomRight"
+                title={
+                  <>
+                    <div>{t("admin.memorySkillPackageUploadFileTooltip").split("\n")[0]}</div>
+                    <div style={{ marginTop: 4 }}>{t("admin.memorySkillPackageUploadFileTooltip").split("\n")[1]}</div>
+                  </>
+                }
+              >
+                <Button icon={<UploadOutlined />}>{t("admin.memorySkillPackageUploadFile")}</Button>
+              </Tooltip>
             </Upload>
             {canEditSelectedFile ? (
               isEditing ? (

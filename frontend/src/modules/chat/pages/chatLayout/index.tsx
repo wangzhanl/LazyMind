@@ -1,5 +1,6 @@
 import { FC, type ReactNode, useRef, useState, useEffect, useCallback } from "react";
 import { useTranslation } from "react-i18next";
+import { localizeErrorCode } from "@/components/request";
 import { message } from "antd";
 import { AgentAppsAuth } from "@/components/auth";
 import {
@@ -157,6 +158,13 @@ const ChatLayout: FC<IChatLayoutProps> = (props) => {
   const hasPluginSession = usePluginStore((s) =>
     sessionId ? (s.sessionByConversation[sessionId] ?? null) !== null : false,
   );
+  const pluginDefinitionChanged = usePluginStore((s) =>
+    sessionId
+      ? s.sessionByConversation[sessionId]?.runtime_error_code ===
+        "PLUGIN_DEFINITION_CHANGED"
+      : false,
+  );
+  const chatEnabled = canChat && !pluginDefinitionChanged;
 
   // When the user changes KB selection during an active plugin session, persist it on the
   // conversation so analyze_subject KB prefetch inherits filters.kb_id.
@@ -420,7 +428,7 @@ const ChatLayout: FC<IChatLayoutProps> = (props) => {
             tags: chatConfig?.tags,
           },
         },
-        models: ["LazyMind 大模型"],
+        models: [t("chat.lazyMindModel")],
         // enable_thinking: think ? true : false,
         stream: true,
         input,
@@ -433,6 +441,9 @@ const ChatLayout: FC<IChatLayoutProps> = (props) => {
         ...(pluginUIState ? { plugin_ui_state: pluginUIState } : {}),
         ...(artifactRefs.length > 0 ? { artifact_refs: artifactRefs } : {}),
         ...(extras?.run_in_background ? { run_in_background: true } : {}),
+        ...(Array.isArray(extras?.mentions) && extras.mentions.length > 0
+          ? { mentions: extras.mentions }
+          : {}),
         // If the user changed plugin settings before a conversation was created,
         // carry them in the first request so Go can persist them on ensureConversation.
         // Only send the three known fields to avoid polluting the payload with API response leftovers.
@@ -550,7 +561,7 @@ const ChatLayout: FC<IChatLayoutProps> = (props) => {
       const detail =
         (event as CustomEvent<{ conversationId?: string; source?: string }>)
           .detail || {};
-      if (detail.source !== "sidebar") {
+      if (detail.source !== "sidebar" && detail.source !== "mention") {
         return;
       }
       const conversationId = detail.conversationId || "";
@@ -567,7 +578,7 @@ const ChatLayout: FC<IChatLayoutProps> = (props) => {
         chatRef.current?.createNewChat();
         return;
       }
-      if (conversationId === sessionId) {
+      if (conversationId === sessionIdRef.current) {
         return;
       }
       if (sessionIdRef.current) {
@@ -589,11 +600,14 @@ const ChatLayout: FC<IChatLayoutProps> = (props) => {
         handleConversationSelect,
       );
     };
-  }, [sessionId, setIsChatContent, loadConversation]);
+  }, [setIsChatContent, loadConversation, setChatConfigFn]);
 
   function parseErrorData(data: string) {
     const dataObject = UIUtils.jsonParser(data) || {};
-    return dataObject.message;
+    return localizeErrorCode(
+      `${dataObject.error_code || dataObject.code || ""}`,
+      localizeErrorCode("2000509"),
+    );
   }
 
   const isFileTypeSupported = (file: File): boolean => {
@@ -680,7 +694,7 @@ const ChatLayout: FC<IChatLayoutProps> = (props) => {
       )}
       <ChatContainerComponent
         ref={chatRef}
-        canChat={canChat}
+        canChat={chatEnabled}
         initialCard={isRestoringConversation ? null : <InitialCard />}
         sessionId={sessionId}
         onOpenSSE={onOpenSSE}
@@ -705,9 +719,19 @@ const ChatLayout: FC<IChatLayoutProps> = (props) => {
         embeddingReady={embeddingReady}
         multimodalEmbeddingReady={multimodalEmbeddingReady}
         rerankReady={rerankReady}
-        disabledReason={autoRunning ? t("chat.autoAdvanceRunning") : chatDisabledReason}
-        disabledDescription={autoRunning ? undefined : chatDisabledDescription}
-        disabledAction={autoRunning ? undefined : chatDisabledAction}
+        disabledReason={
+          pluginDefinitionChanged
+            ? t("chat.pluginDefinitionChanged")
+            : autoRunning
+              ? t("chat.autoAdvanceRunning")
+              : chatDisabledReason
+        }
+        disabledDescription={
+          autoRunning || pluginDefinitionChanged ? undefined : chatDisabledDescription
+        }
+        disabledAction={
+          autoRunning || pluginDefinitionChanged ? undefined : chatDisabledAction
+        }
       />
       {tasks.length > 0 && isTaskPanelCollapsed && (
         <button

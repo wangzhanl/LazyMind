@@ -9,6 +9,7 @@ from lazymind.chat.config import DEFAULT_CHAT_DATASET
 
 class ChatMessageOptions(BaseModel):
     query: str
+    user_query: Optional[str] = None
     history: Optional[List[Dict[str, Any]]] = None
     files: Optional[Dict[str, List[str]]] = None
     current_turn_seq: Optional[int] = None
@@ -19,6 +20,7 @@ class ChatConversationOptions(BaseModel):
     conversation_id: Optional[str] = None
     user_id: Optional[str] = None
     mode: Optional[str] = 'auto'
+    intent_context: Optional[Dict[str, Any]] = None
 
 
 class ChatRetrievalOptions(BaseModel):
