@@ -268,7 +268,6 @@ WHERE rowid IN (
 	return r.orm.Exec(statement).Error
 }
 
-
 func (r *SQLRepository) ormDB(ctx context.Context) *gorm.DB {
 	if r.orm == nil {
 		return nil

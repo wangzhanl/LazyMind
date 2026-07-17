@@ -290,12 +290,6 @@ export interface CheckDatabaseConnectionResponse {
     'table_count': number;
     'tables'?: Array<string>;
 }
-export interface CheckFileHashesRequest {
-    'hashes': Array<string>;
-}
-export interface CheckFileHashesResponse {
-    'missing_hashes'?: Array<string>;
-}
 export interface CheckModelProviderData {
     'message'?: string;
     'success': boolean;
@@ -330,7 +324,6 @@ export interface CompleteUploadRequest {
     'idempotency_key'?: string;
 }
 export interface CompleteUploadResponse {
-    'content_hash'?: string;
     'content_url'?: string;
     'convert_error'?: string;
     'convert_status'?: string;
@@ -2107,7 +2100,7 @@ export interface WordGroupConflictResponse {
 export const AgentApiAxiosParamCreator = function (configuration?: Configuration) {
     return {
         /**
-         * Proxies Evo GET /candidates/{candidate_id} after validating the thread_id prefix is known to Core.
+         * Proxies Evo GET /candidates/{candidate_id} after validating the thread_id prefix belongs to the current user.
          * @summary Get Evo candidate
          * @param {string} candidateId 
          * @param {*} [options] Override http request option.
@@ -2141,16 +2134,18 @@ export const AgentApiAxiosParamCreator = function (configuration?: Configuration
             };
         },
         /**
-         * Proxies Evo GET /candidates. When thread_id is provided, Core validates that the thread belongs to the current user before proxying.
+         * Proxies Evo GET /candidates for a current-user thread. The thread_id query parameter is required by Core for ownership enforcement.
          * @summary List Evo candidates
-         * @param {string} [threadId]
+         * @param {string} threadId 
          * @param {string} [status] 
          * @param {number} [pageSize] 
          * @param {string} [pageToken] 
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
          */
-        apiCoreAgentCandidatesGet: async (threadId?: string, status?: string, pageSize?: number, pageToken?: string, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
+        apiCoreAgentCandidatesGet: async (threadId: string, status?: string, pageSize?: number, pageToken?: string, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
+            // verify required parameter 'threadId' is not null or undefined
+            assertParamExists('apiCoreAgentCandidatesGet', 'threadId', threadId)
             const localVarPath = `/api/core/agent/candidates`;
             // use dummy base URL string because the URL constructor only accepts absolute URLs.
             const localVarUrlObj = new URL(localVarPath, DUMMY_BASE_URL);
@@ -2307,7 +2302,7 @@ export const AgentApiAxiosParamCreator = function (configuration?: Configuration
         /**
          * Proxies Evo GET /router/algorithms.
          * @summary List Evo router algorithms
-         * @param {string} [threadId]
+         * @param {string} [threadId] 
          * @param {string} [algorithmId] 
          * @param {string} [status] 
          * @param {string} [routerAdminUrl] 
@@ -3284,7 +3279,7 @@ export const AgentApiFp = function(configuration?: Configuration) {
     const localVarAxiosParamCreator = AgentApiAxiosParamCreator(configuration)
     return {
         /**
-         * Proxies Evo GET /candidates/{candidate_id} after validating the thread_id prefix is known to Core.
+         * Proxies Evo GET /candidates/{candidate_id} after validating the thread_id prefix belongs to the current user.
          * @summary Get Evo candidate
          * @param {string} candidateId 
          * @param {*} [options] Override http request option.
@@ -3297,16 +3292,16 @@ export const AgentApiFp = function(configuration?: Configuration) {
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
         },
         /**
-         * Proxies Evo GET /candidates. When thread_id is provided, Core validates that the thread belongs to the current user before proxying.
+         * Proxies Evo GET /candidates for a current-user thread. The thread_id query parameter is required by Core for ownership enforcement.
          * @summary List Evo candidates
-         * @param {string} [threadId]
+         * @param {string} threadId 
          * @param {string} [status] 
          * @param {number} [pageSize] 
          * @param {string} [pageToken] 
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
          */
-        async apiCoreAgentCandidatesGet(threadId?: string, status?: string, pageSize?: number, pageToken?: string, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<{ [key: string]: any; }>> {
+        async apiCoreAgentCandidatesGet(threadId: string, status?: string, pageSize?: number, pageToken?: string, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<{ [key: string]: any; }>> {
             const localVarAxiosArgs = await localVarAxiosParamCreator.apiCoreAgentCandidatesGet(threadId, status, pageSize, pageToken, options);
             const localVarOperationServerIndex = configuration?.serverIndex ?? 0;
             const localVarOperationServerBasePath = operationServerMap['AgentApi.apiCoreAgentCandidatesGet']?.[localVarOperationServerIndex]?.url;
@@ -3707,7 +3702,7 @@ export const AgentApiFactory = function (configuration?: Configuration, basePath
     const localVarFp = AgentApiFp(configuration)
     return {
         /**
-         * Proxies Evo GET /candidates/{candidate_id} after validating the thread_id prefix is known to Core.
+         * Proxies Evo GET /candidates/{candidate_id} after validating the thread_id prefix belongs to the current user.
          * @summary Get Evo candidate
          * @param {AgentApiApiCoreAgentCandidatesCandidateIdGetRequest} requestParameters Request parameters.
          * @param {*} [options] Override http request option.
@@ -3717,13 +3712,13 @@ export const AgentApiFactory = function (configuration?: Configuration, basePath
             return localVarFp.apiCoreAgentCandidatesCandidateIdGet(requestParameters.candidateId, options).then((request) => request(axios, basePath));
         },
         /**
-         * Proxies Evo GET /candidates. When thread_id is provided, Core validates that the thread belongs to the current user before proxying.
+         * Proxies Evo GET /candidates for a current-user thread. The thread_id query parameter is required by Core for ownership enforcement.
          * @summary List Evo candidates
          * @param {AgentApiApiCoreAgentCandidatesGetRequest} requestParameters Request parameters.
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
          */
-        apiCoreAgentCandidatesGet(requestParameters: AgentApiApiCoreAgentCandidatesGetRequest = {}, options?: RawAxiosRequestConfig): AxiosPromise<{ [key: string]: any; }> {
+        apiCoreAgentCandidatesGet(requestParameters: AgentApiApiCoreAgentCandidatesGetRequest, options?: RawAxiosRequestConfig): AxiosPromise<{ [key: string]: any; }> {
             return localVarFp.apiCoreAgentCandidatesGet(requestParameters.threadId, requestParameters.status, requestParameters.pageSize, requestParameters.pageToken, options).then((request) => request(axios, basePath));
         },
         /**
@@ -4009,7 +4004,7 @@ export interface AgentApiApiCoreAgentCandidatesCandidateIdGetRequest {
  * Request parameters for apiCoreAgentCandidatesGet operation in AgentApi.
  */
 export interface AgentApiApiCoreAgentCandidatesGetRequest {
-    readonly threadId?: string
+    readonly threadId: string
 
     readonly status?: string
 
@@ -4275,7 +4270,7 @@ export interface AgentApiApiCoreAgentThreadsThreadIdStepsGetRequest {
  */
 export class AgentApi extends BaseAPI {
     /**
-     * Proxies Evo GET /candidates/{candidate_id} after validating the thread_id prefix is known to Core.
+     * Proxies Evo GET /candidates/{candidate_id} after validating the thread_id prefix belongs to the current user.
      * @summary Get Evo candidate
      * @param {AgentApiApiCoreAgentCandidatesCandidateIdGetRequest} requestParameters Request parameters.
      * @param {*} [options] Override http request option.
@@ -4286,13 +4281,13 @@ export class AgentApi extends BaseAPI {
     }
 
     /**
-     * Proxies Evo GET /candidates. When thread_id is provided, Core validates that the thread belongs to the current user before proxying.
+     * Proxies Evo GET /candidates for a current-user thread. The thread_id query parameter is required by Core for ownership enforcement.
      * @summary List Evo candidates
      * @param {AgentApiApiCoreAgentCandidatesGetRequest} requestParameters Request parameters.
      * @param {*} [options] Override http request option.
      * @throws {RequiredError}
      */
-    public apiCoreAgentCandidatesGet(requestParameters: AgentApiApiCoreAgentCandidatesGetRequest = {}, options?: RawAxiosRequestConfig) {
+    public apiCoreAgentCandidatesGet(requestParameters: AgentApiApiCoreAgentCandidatesGetRequest, options?: RawAxiosRequestConfig) {
         return AgentApiFp(this.configuration).apiCoreAgentCandidatesGet(requestParameters.threadId, requestParameters.status, requestParameters.pageSize, requestParameters.pageToken, options).then((request) => request(this.axios, this.basePath));
     }
 
@@ -29774,45 +29769,6 @@ export const TasksApiAxiosParamCreator = function (configuration?: Configuration
         },
         /**
          * 
-         * @summary Check reusable file hashes
-         * @param {string} dataset 
-         * @param {CheckFileHashesRequest} checkFileHashesRequest 
-         * @param {*} [options] Override http request option.
-         * @throws {RequiredError}
-         */
-        apiCoreDatasetsDatasetUploadsCheckHashesPost: async (dataset: string, checkFileHashesRequest: CheckFileHashesRequest, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
-            // verify required parameter 'dataset' is not null or undefined
-            assertParamExists('apiCoreDatasetsDatasetUploadsCheckHashesPost', 'dataset', dataset)
-            // verify required parameter 'checkFileHashesRequest' is not null or undefined
-            assertParamExists('apiCoreDatasetsDatasetUploadsCheckHashesPost', 'checkFileHashesRequest', checkFileHashesRequest)
-            const localVarPath = `/api/core/datasets/{dataset}/uploads:checkHashes`
-                .replace(`{${"dataset"}}`, encodeURIComponent(String(dataset)));
-            // use dummy base URL string because the URL constructor only accepts absolute URLs.
-            const localVarUrlObj = new URL(localVarPath, DUMMY_BASE_URL);
-            let baseOptions;
-            if (configuration) {
-                baseOptions = configuration.baseOptions;
-            }
-
-            const localVarRequestOptions = { method: 'POST', ...baseOptions, ...options};
-            const localVarHeaderParameter = {} as any;
-            const localVarQueryParameter = {} as any;
-
-            localVarHeaderParameter['Content-Type'] = 'application/json';
-            localVarHeaderParameter['Accept'] = 'application/json';
-
-            setSearchParams(localVarUrlObj, localVarQueryParameter);
-            let headersFromBaseOptions = baseOptions && baseOptions.headers ? baseOptions.headers : {};
-            localVarRequestOptions.headers = {...localVarHeaderParameter, ...headersFromBaseOptions, ...options.headers};
-            localVarRequestOptions.data = serializeDataIfNeeded(checkFileHashesRequest, localVarRequestOptions, configuration)
-
-            return {
-                url: toPathString(localVarUrlObj),
-                options: localVarRequestOptions,
-            };
-        },
-        /**
-         * 
          * @summary Initialize dataset upload
          * @param {string} dataset 
          * @param {InitUploadRequest} initUploadRequest 
@@ -30109,20 +30065,6 @@ export const TasksApiFp = function(configuration?: Configuration) {
         },
         /**
          * 
-         * @summary Check reusable file hashes
-         * @param {string} dataset 
-         * @param {CheckFileHashesRequest} checkFileHashesRequest 
-         * @param {*} [options] Override http request option.
-         * @throws {RequiredError}
-         */
-        async apiCoreDatasetsDatasetUploadsCheckHashesPost(dataset: string, checkFileHashesRequest: CheckFileHashesRequest, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<CheckFileHashesResponse>> {
-            const localVarAxiosArgs = await localVarAxiosParamCreator.apiCoreDatasetsDatasetUploadsCheckHashesPost(dataset, checkFileHashesRequest, options);
-            const localVarOperationServerIndex = configuration?.serverIndex ?? 0;
-            const localVarOperationServerBasePath = operationServerMap['TasksApi.apiCoreDatasetsDatasetUploadsCheckHashesPost']?.[localVarOperationServerIndex]?.url;
-            return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
-        },
-        /**
-         * 
          * @summary Initialize dataset upload
          * @param {string} dataset 
          * @param {InitUploadRequest} initUploadRequest 
@@ -30272,16 +30214,6 @@ export const TasksApiFactory = function (configuration?: Configuration, basePath
         },
         /**
          * 
-         * @summary Check reusable file hashes
-         * @param {TasksApiApiCoreDatasetsDatasetUploadsCheckHashesPostRequest} requestParameters Request parameters.
-         * @param {*} [options] Override http request option.
-         * @throws {RequiredError}
-         */
-        apiCoreDatasetsDatasetUploadsCheckHashesPost(requestParameters: TasksApiApiCoreDatasetsDatasetUploadsCheckHashesPostRequest, options?: RawAxiosRequestConfig): AxiosPromise<CheckFileHashesResponse> {
-            return localVarFp.apiCoreDatasetsDatasetUploadsCheckHashesPost(requestParameters.dataset, requestParameters.checkFileHashesRequest, options).then((request) => request(axios, basePath));
-        },
-        /**
-         * 
          * @summary Initialize dataset upload
          * @param {TasksApiApiCoreDatasetsDatasetUploadsInitUploadPostRequest} requestParameters Request parameters.
          * @param {*} [options] Override http request option.
@@ -30407,15 +30339,6 @@ export interface TasksApiApiCoreDatasetsDatasetTasksTaskSuspendPostRequest {
     readonly task: string
 
     readonly suspendJobRequest: SuspendJobRequest
-}
-
-/**
- * Request parameters for apiCoreDatasetsDatasetUploadsCheckHashesPost operation in TasksApi.
- */
-export interface TasksApiApiCoreDatasetsDatasetUploadsCheckHashesPostRequest {
-    readonly dataset: string
-
-    readonly checkFileHashesRequest: CheckFileHashesRequest
 }
 
 /**
@@ -30552,17 +30475,6 @@ export class TasksApi extends BaseAPI {
      */
     public apiCoreDatasetsDatasetTasksTaskSuspendPost(requestParameters: TasksApiApiCoreDatasetsDatasetTasksTaskSuspendPostRequest, options?: RawAxiosRequestConfig) {
         return TasksApiFp(this.configuration).apiCoreDatasetsDatasetTasksTaskSuspendPost(requestParameters.dataset, requestParameters.task, requestParameters.suspendJobRequest, options).then((request) => request(this.axios, this.basePath));
-    }
-
-    /**
-     * 
-     * @summary Check reusable file hashes
-     * @param {TasksApiApiCoreDatasetsDatasetUploadsCheckHashesPostRequest} requestParameters Request parameters.
-     * @param {*} [options] Override http request option.
-     * @throws {RequiredError}
-     */
-    public apiCoreDatasetsDatasetUploadsCheckHashesPost(requestParameters: TasksApiApiCoreDatasetsDatasetUploadsCheckHashesPostRequest, options?: RawAxiosRequestConfig) {
-        return TasksApiFp(this.configuration).apiCoreDatasetsDatasetUploadsCheckHashesPost(requestParameters.dataset, requestParameters.checkFileHashesRequest, options).then((request) => request(this.axios, this.basePath));
     }
 
     /**
@@ -32601,4 +32513,6 @@ export class WordGroupApi extends BaseAPI {
         return WordGroupApiFp(this.configuration).apiCoreWordGroupUpdatePost(requestParameters.updateWordGroupRequest, options).then((request) => request(this.axios, this.basePath));
     }
 }
+
+
 

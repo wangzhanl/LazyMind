@@ -2927,7 +2927,7 @@ func documentTypeFromName(name string) string {
 		return "DOCX"
 	case ".csv":
 		return "CSV"
-	case ".pptx", ".pptm":
+	case ".pptx":
 		return "PPTX"
 	case ".ppt":
 		return "PPT"

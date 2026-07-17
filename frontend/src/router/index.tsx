@@ -37,7 +37,6 @@ import MemoryGlossaryDetailPage from "@/modules/memory/pages/glossaryDetail";
 import MemorySkillDetailPage from "@/modules/memory/pages/skillDetail";
 import MemoryExperienceDetailPage from "@/modules/memory/pages/experienceDetail";
 import ModelProviderPage from "@/modules/modelProvider";
-import CloudDocumentsLayout from "@/modules/modelProvider/CloudDocumentsLayout";
 import ModelProvidersPage from "@/modules/modelProvider/pages/ModelProvidersPage";
 import ExternalServicesPage from "@/modules/modelProvider/pages/ExternalServicesPage";
 import DefaultServicesPage from "@/modules/modelProvider/pages/DefaultServicesPage";
@@ -132,55 +131,46 @@ export default function AppRouter() {
             />
           </Route>
           <Route path="data-sources" element={<DataSourceManagement />} />
-          <Route
-            path="data-sources/database-connections"
-            element={<Navigate to="/databases" replace />}
-          />
+          <Route path="data-sources/database-connections" element={<DatabaseConnectionsPage />} />
           <Route path="data-sources/:id" element={<DataSourceDetail />} />
           <Route path="dataset-management" element={<DatasetListPage />} />
           <Route
             path="dataset-management/:datasetId"
             element={<DatasetDetailPage />}
           />
-          <Route path="databases" element={<DatabaseConnectionsPage />} />
-          <Route path="cloud-documents" element={<CloudDocumentsLayout />}>
-            <Route index element={<CloudDocumentsPage />} />
-            <Route path="local" element={<LocalDataSourcePage />} />
-            <Route path="feishu" element={<FeishuAccountPage />} />
-            <Route path="docs/feishu-setup" element={<FeishuSetupGuide />} />
-            <Route path="docs/notion-setup" element={<NotionSetupGuide />} />
-          </Route>
           <Route path="model-providers" element={<ModelProviderPage />}>
             <Route index element={<Navigate to="default-services" replace />} />
             <Route path="models" element={<ModelProvidersPage />} />
             <Route
               path="document-parsing"
-              element={<Navigate to="/model-providers/tools" replace />}
+              element={<ExternalServicesPage section="parsing" />}
             />
-            <Route path="tools" element={<ExternalServicesPage />} />
             <Route
-              path="cloud-documents"
-              element={<Navigate to="/cloud-documents" replace />}
+              path="tools"
+              element={<ExternalServicesPage section="tools" />}
             />
+            <Route path="cloud-documents" element={<CloudDocumentsPage />} />
             <Route
               path="cloud-documents/local"
-              element={<Navigate to="/cloud-documents/local" replace />}
+              element={<LocalDataSourcePage />}
             />
             <Route
               path="cloud-documents/feishu"
-              element={<Navigate to="/cloud-documents/feishu" replace />}
+              element={<FeishuAccountPage />}
             />
             <Route
               path="cloud-documents/docs/feishu-setup"
-              element={<Navigate to="/cloud-documents/docs/feishu-setup" replace />}
+              element={<FeishuSetupGuide />}
             />
             <Route
               path="cloud-documents/docs/notion-setup"
-              element={<Navigate to="/cloud-documents/docs/notion-setup" replace />}
+              element={<NotionSetupGuide />}
             />
             <Route
               path="external-services"
-              element={<Navigate to="/model-providers/tools" replace />}
+              element={
+                <Navigate to="/model-providers/document-parsing" replace />
+              }
             />
             <Route path="default-services" element={<DefaultServicesPage />} />
           </Route>

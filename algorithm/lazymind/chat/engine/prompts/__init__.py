@@ -1,14 +1,21 @@
 from __future__ import annotations
 
 from .guidance import (
+    ATTACHED_FILES_GUIDANCE,
     DEFAULT_SYSTEM_PROMPT,
+    IMAGE_REFERENCE_MARKDOWN_GUIDANCE,
+    KNOWLEDGE_EVIDENCE_CITATION_GUIDANCE,
+    TOOL_CALL_STATUS_GUIDANCE,
     VISION_EXTRACT_DEFAULT_INSTRUCTION,
 )
-from .system_prompt import add_standard_system_sections, build_system_prompt
+from .system_prompt import build_system_prompt
 
 __all__ = [
+    'ATTACHED_FILES_GUIDANCE',
     'DEFAULT_SYSTEM_PROMPT',
+    'IMAGE_REFERENCE_MARKDOWN_GUIDANCE',
+    'KNOWLEDGE_EVIDENCE_CITATION_GUIDANCE',
+    'TOOL_CALL_STATUS_GUIDANCE',
     'VISION_EXTRACT_DEFAULT_INSTRUCTION',
-    'add_standard_system_sections',
     'build_system_prompt',
 ]

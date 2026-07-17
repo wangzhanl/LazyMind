@@ -7,7 +7,6 @@ import {
   useState,
 } from "react";
 import { useTranslation } from "react-i18next";
-import { message } from "antd";
 import {
   AppstoreOutlined,
   BookOutlined,
@@ -334,13 +333,6 @@ const MentionEditor = forwardRef<MentionEditorRef, {
     const editor = editorRef.current;
     const currentQuery = queryRef.current;
     if (!editor || !currentQuery) return;
-    if (
-      candidate.type === "plugin" &&
-      serializeEditor(editor).mentions.some((mention) => mention.type === "plugin")
-    ) {
-      message.warning(t("chat.mentionSinglePluginOnly"));
-      return;
-    }
     const selection = window.getSelection();
     currentQuery.range.deleteContents();
     if (candidate.type === "prompt") {
@@ -374,7 +366,7 @@ const MentionEditor = forwardRef<MentionEditorRef, {
     setActiveIndex(-1);
     emit();
     editor.focus();
-  }, [emit, t]);
+  }, [emit]);
 
   const visibleCandidates = candidates.filter((candidate) => {
     if (expandedTypes.has(candidate.type)) return true;

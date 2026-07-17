@@ -16,21 +16,16 @@ async def _collect_streaming_response(response):
 
 def test_handle_chat_constructs_react_agent_from_runtime_context(monkeypatch):
     agent_calls = []
-    agent_queries = []
 
     class FakeAgent:
         def __init__(self, llm, tools, **kwargs):
             agent_calls.append({'llm': llm, 'tools': tools, 'kwargs': kwargs})
 
         def forward(self, query, llm_chat_history=None):
-            agent_queries.append(query)
             chat_service.lazyllm.FileSystemQueue().enqueue(json.dumps({'tag': 'text', 'delta': f'answer:{query}'}))
             return {'text': f'final:{query}'}
 
         __call__ = forward
-
-        def set_stop_tools(self, stop_tools):
-            self.stop_tools = stop_tools
 
     monkeypatch.setattr(chat_service, 'AutoModel', lambda model, config=False: f'{model}:{config}')
     monkeypatch.setattr(chat_service.lazyllm.tools.agent, 'ReactAgent', FakeAgent)
@@ -55,6 +50,7 @@ def test_handle_chat_constructs_react_agent_from_runtime_context(monkeypatch):
                     'url_fetch',
                     'multimodal',
                     'vocab_learn',
+                    'memory_editor',
                     'skill_editor',
                     'feishu',
                 ],
@@ -72,8 +68,5 @@ def test_handle_chat_constructs_react_agent_from_runtime_context(monkeypatch):
     assert agent_calls[0]['tools']
     assert agent_calls[0]['kwargs']['skills'] == ['skill-a']
     assert agent_calls[0]['kwargs']['stream'] is True
-    assert '## Attached Files' not in agent_calls[0]['kwargs']['prompt']
-    assert agent_queries[0] == '### User Instruction\n\nhello'
-    assert 'answer:### User Instruction' in body
-    assert 'hello' in body
+    assert 'answer:hello' in body
     assert '"status": "FINISHED"' in body

@@ -19,7 +19,6 @@ import {
   UnorderedListOutlined,
   HistoryOutlined,
   BookOutlined,
-  CloudOutlined,
 } from "@ant-design/icons";
 import { Navigate, Outlet, useLocation, useNavigate } from "react-router-dom";
 import type { UserDetailResponse } from "@/api/generated/auth-client";
@@ -42,7 +41,6 @@ import {
 } from "@/utils/developerMode";
 import RecordList from "@/modules/chat/components/RecordList";
 import {
-  CHAT_NEW_RUN_IN_BACKGROUND_KEY,
   CHAT_RESUME_CONVERSATION_KEY,
   CHAT_SELECT_CONVERSATION_EVENT,
 } from "@/modules/chat/constants/chat";
@@ -131,11 +129,6 @@ export default function MainLayout() {
   const pathname = location.pathname || "/agent/chat";
 
   const settingsMenuItems = [
-    {
-      key: "/model-providers/default-services",
-      label: t("layout.modelProviderManagement"),
-      icon: <ApiOutlined className="settings-popover-icon" />,
-    },
     ...(!runtimeFeatures.hideCloudAdmin
       ? [
           {
@@ -169,14 +162,9 @@ export default function MainLayout() {
       icon: <DatabaseOutlined />,
     },
     {
-      key: "/cloud-documents",
-      label: t("layout.cloudDocuments"),
-      icon: <CloudOutlined />,
-    },
-    {
-      key: "/databases",
-      label: t("layout.database"),
-      icon: <DatabaseOutlined />,
+      key: "/model-providers/default-services",
+      label: t("layout.modelProviderManagement"),
+      icon: <ApiOutlined />,
     },
   ];
   const hideEvo = runtimeFeatures.hideEvo;
@@ -186,7 +174,6 @@ export default function MainLayout() {
       .VITE_APP_LOGO || "";
   const needsRestoreButtonSafeArea =
     pathname.startsWith("/model-providers") ||
-    pathname.startsWith("/cloud-documents") ||
     pathname.startsWith("/lib/knowledge/detail") ||
     pathname.startsWith("/memory-management") ||
     pathname.startsWith("/self-evolution");
@@ -323,29 +310,22 @@ export default function MainLayout() {
     setIsMenuCollapsed((prev) => !prev);
   };
 
-  const emitConversationSelection = (
-    conversationId: string,
-    runInBackground = false,
-  ) => {
+  const emitConversationSelection = (conversationId: string) => {
     window.dispatchEvent(
       new CustomEvent(CHAT_SELECT_CONVERSATION_EVENT, {
-        detail: { conversationId, runInBackground, source: "sidebar" },
+        detail: { conversationId, source: "sidebar" },
       }),
     );
   };
 
-  const handleNewChat = (runInBackground = false) => {
+  const handleNewChat = () => {
     try {
       sessionStorage.removeItem(CHAT_RESUME_CONVERSATION_KEY);
-      sessionStorage.setItem(
-        CHAT_NEW_RUN_IN_BACKGROUND_KEY,
-        runInBackground ? "1" : "0",
-      );
     } catch {
       // ignore storage errors
     }
     setCurrentSidebarConversationId("");
-    emitConversationSelection("", runInBackground);
+    emitConversationSelection("");
     navigate("/agent/chat/home");
   };
 
@@ -693,7 +673,7 @@ export default function MainLayout() {
             <button
               type="button"
               className="sider-brand"
-              onClick={() => handleNewChat(false)}
+              onClick={handleNewChat}
               aria-label="LazyMind"
               title="LazyMind"
             >
@@ -720,17 +700,9 @@ export default function MainLayout() {
                   type="text"
                   className="sider-new-chat-button"
                   icon={<PlusOutlined />}
-                  onClick={() => handleNewChat(false)}
+                  onClick={handleNewChat}
                 >
                   {t("layout.newChat")}
-                </Button>
-                <Button
-                  type="primary"
-                  className="sider-new-chat-button sider-new-task-button"
-                  icon={<PlusOutlined />}
-                  onClick={() => handleNewChat(true)}
-                >
-                  {t("layout.newTask")}
                 </Button>
               </div>
               <div className="sider-module-actions">

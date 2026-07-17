@@ -23,6 +23,7 @@ DISABLED_TOOLS_EXCEPT_CALCULATOR = [
     'url_fetch',
     'multimodal',
     'vocab_learn',
+    'memory_editor',
     'skill_editor',
     'feishu',
 ]

@@ -10,7 +10,7 @@ from lazyllm.tools.tool_config_inject import inject_tool_config
 router = APIRouter()
 
 
-@router.post('/api/chat/tools', summary='List the tool catalog and Toolkit methods')
+@router.post('/api/chat/tools', summary='List all tool groups with their methods')
 async def list_chat_tools(
     response: Response,
     llm_config: Annotated[
@@ -63,20 +63,4 @@ async def chat(
         ),
     ],
 ):
-    return await handle_chat(request)
-
-
-@router.post('/api/chat/context-usage', summary='Estimate next-request ChatAgent context usage')
-async def context_usage(
-    request: Annotated[ChatRequest, Body(description='Same structured request as chat preview.')],
-):
-    request.runtime.context_usage_preview = True
-    return await handle_chat(request)
-
-
-@router.post('/api/chat/context-prompt', summary='Export next-request ChatAgent context')
-async def context_prompt(
-    request: Annotated[ChatRequest, Body(description='Same structured request as chat preview.')],
-):
-    request.runtime.context_prompt_export = True
     return await handle_chat(request)
