@@ -71,6 +71,60 @@ func TestLoadConfigFromEnv(t *testing.T) {
 	}
 }
 
+func TestDBDSNEnvCompatibilityAndPrecedence(t *testing.T) {
+	tests := []struct {
+		name     string
+		values   map[string]string
+		expected string
+	}{
+		{
+			name: "new variable takes precedence",
+			values: map[string]string{
+				"LAZYMIND_SCAN_CONTROL_PLANE_DB_DSN": "postgres://new",
+				"SCAN_CONTROL_PLANE_DB_DSN":          "postgres://legacy",
+				"DATABASE_URL":                       "postgres://generic",
+			},
+			expected: "postgres://new",
+		},
+		{
+			name: "legacy variable is supported",
+			values: map[string]string{
+				"SCAN_CONTROL_PLANE_DB_DSN": "postgres://legacy",
+				"DATABASE_URL":              "postgres://generic",
+			},
+			expected: "postgres://legacy",
+		},
+		{
+			name: "generic variable is the final fallback",
+			values: map[string]string{
+				"DATABASE_URL": "postgres://generic",
+			},
+			expected: "postgres://generic",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			for _, key := range []string{
+				"LAZYMIND_SCAN_CONTROL_PLANE_DB_DSN",
+				"SCAN_CONTROL_PLANE_DB_DSN",
+				"DATABASE_URL",
+			} {
+				t.Setenv(key, "")
+			}
+			for key, value := range tt.values {
+				t.Setenv(key, value)
+			}
+
+			cfg := defaultConfig()
+			cfg.applyEnv()
+			if cfg.DBDSN != tt.expected {
+				t.Fatalf("db dsn = %q, want %q", cfg.DBDSN, tt.expected)
+			}
+		})
+	}
+}
+
 func validConfigForTest() Config {
 	return Config{
 		Address:                           "127.0.0.1",

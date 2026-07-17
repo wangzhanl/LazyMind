@@ -91,7 +91,11 @@ func (c *Config) applyEnv() {
 			c.Port = -1
 		}
 	}
-	if dsn := strings.TrimSpace(os.Getenv("LAZYMIND_SCAN_CONTROL_PLANE_DB_DSN")); dsn != "" {
+	if dsn := firstNonEmptyEnv(
+		"LAZYMIND_SCAN_CONTROL_PLANE_DB_DSN",
+		"SCAN_CONTROL_PLANE_DB_DSN",
+		"DATABASE_URL",
+	); dsn != "" {
 		c.DBDSN = dsn
 	}
 	if driver := strings.TrimSpace(os.Getenv("LAZYMIND_SCAN_CONTROL_PLANE_DB_DRIVER")); driver != "" {
@@ -151,6 +155,15 @@ func (c *Config) applyEnv() {
 	c.WorkerPollInterval = durationEnv("SOURCEENGINE_WORKER_POLL_INTERVAL", c.WorkerPollInterval)
 	c.CoreResultPollInterval = durationEnv("SOURCEENGINE_CORE_RESULT_POLL_INTERVAL", c.CoreResultPollInterval)
 	c.CompensationPollInterval = durationEnv("SOURCEENGINE_COMPENSATION_POLL_INTERVAL", c.CompensationPollInterval)
+}
+
+func firstNonEmptyEnv(keys ...string) string {
+	for _, key := range keys {
+		if value := strings.TrimSpace(os.Getenv(key)); value != "" {
+			return value
+		}
+	}
+	return ""
 }
 
 func (c Config) Validate() error {
