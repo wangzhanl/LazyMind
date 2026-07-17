@@ -702,11 +702,15 @@ func UsePrompt(w http.ResponseWriter, r *http.Request) {
 		common.ReplyErr(w, "record prompt usage failed", http.StatusInternalServerError)
 		return
 	}
-	_ = corestore.DB().Where("create_user_id = ? AND prompt_id = ?", userID, promptID).First(&state).Error
+	var savedState orm.PromptUserState
+	if err := corestore.DB().Where("create_user_id = ? AND prompt_id = ?", userID, promptID).First(&savedState).Error; err != nil {
+		common.ReplyErr(w, "query prompt usage failed", http.StatusInternalServerError)
+		return
+	}
 	writePromptJSON(w, http.StatusOK, promptStateResponse{
 		ID:         promptID,
-		IsFavorite: state.IsFavorite,
-		UsageCount: state.UsageCount,
-		LastUsedAt: state.LastUsedAt,
+		IsFavorite: savedState.IsFavorite,
+		UsageCount: savedState.UsageCount,
+		LastUsedAt: savedState.LastUsedAt,
 	})
 }
