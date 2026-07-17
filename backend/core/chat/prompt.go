@@ -87,8 +87,9 @@ type promptItemResponse struct {
 }
 
 type promptFacetResponse struct {
-	Scopes     map[string]int64 `json:"scopes"`
-	Categories map[string]int64 `json:"categories"`
+	Scopes        map[string]int64 `json:"scopes"`
+	Categories    map[string]int64 `json:"categories"`
+	CategoryTotal int64            `json:"category_total"`
 }
 
 type promptListResponse struct {
@@ -591,16 +592,21 @@ func ListPrompts(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 		keywordItems = append(keywordItems, item)
-		facets.Scopes["all"]++
-		facets.Categories[item.Category]++
-		if item.UsageCount > 0 {
-			facets.Scopes["recent"]++
+		if category == "" || item.Category == category {
+			facets.Scopes["all"]++
+			if item.UsageCount > 0 {
+				facets.Scopes["recent"]++
+			}
+			if item.IsFavorite {
+				facets.Scopes["favorite"]++
+			}
+			if item.Source == "custom" {
+				facets.Scopes["custom"]++
+			}
 		}
-		if item.IsFavorite {
-			facets.Scopes["favorite"]++
-		}
-		if item.Source == "custom" {
-			facets.Scopes["custom"]++
+		if promptMatchesScope(item, scope) {
+			facets.Categories[item.Category]++
+			facets.CategoryTotal++
 		}
 	}
 	filtered := make([]promptItemResponse, 0, len(keywordItems))
