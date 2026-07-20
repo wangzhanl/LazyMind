@@ -3,6 +3,21 @@ from datetime import datetime
 from typing import Any, Protocol
 
 
+class CloudProviderError(RuntimeError):
+    def __init__(
+        self,
+        message: str,
+        *,
+        provider_code: str = '',
+        retryable: bool = False,
+        requires_reauth: bool = False,
+    ) -> None:
+        super().__init__(message)
+        self.provider_code = (provider_code or '').strip()
+        self.retryable = retryable
+        self.requires_reauth = requires_reauth
+
+
 @dataclass
 class CloudTokenPayload:
     access_token: str

@@ -9,6 +9,7 @@ import (
 
 const defaultMaxTextBytes = 512 * 1024
 const maxInlineDiffCells = 20000
+const targetHunkEditWeight = 6
 
 func CompareContent(old Content, next Content, opts Options) (FileDiff, error) {
 	maxBytes := defaultMaxTextBytes
@@ -124,33 +125,43 @@ func diffLine(typ, text string, oldLine, newLine int) DiffEntryLine {
 func highlightedDiffLine(typ, text string, oldLine, newLine int, class string) DiffEntryLine {
 	line := diffLine(typ, text, oldLine, newLine)
 	line.HTML = wrapDiffSpan(class, html.EscapeString(text))
+	if typ == "DELETION" {
+		line.editWeight = editWeight(text, "")
+	} else {
+		line.editWeight = editWeight("", text)
+	}
 	return line
 }
 
 func changedLinePair(oldText, newText string, oldLine, newLine int) (DiffEntryLine, DiffEntryLine) {
-	oldHTML, newHTML := inlineDiffHTML(oldText, newText)
+	oldHTML, newHTML, weight := inlineDiffHTML(oldText, newText)
 	deletion := diffLine("DELETION", oldText, oldLine, 0)
 	addition := diffLine("ADDITION", newText, 0, newLine)
 	deletion.HTML = oldHTML
 	addition.HTML = newHTML
+	deletion.editWeight = weight
+	addition.editWeight = weight
 	return deletion, addition
 }
 
-func inlineDiffHTML(oldText, newText string) (string, string) {
+func inlineDiffHTML(oldText, newText string) (string, string, int) {
 	oldRunes := []rune(oldText)
 	newRunes := []rune(newText)
 	if len(oldRunes) == 0 {
-		return "", wrapDiffSpan("diff-addition", html.EscapeString(newText))
+		return "", wrapDiffSpan("diff-addition", html.EscapeString(newText)), editWeightFromCounts(0, len(newRunes), 0, len(newRunes))
 	}
 	if len(newRunes) == 0 {
-		return wrapDiffSpan("diff-deletion", html.EscapeString(oldText)), ""
+		return wrapDiffSpan("diff-deletion", html.EscapeString(oldText)), "", editWeightFromCounts(len(oldRunes), 0, len(oldRunes), 0)
 	}
 	if len(oldRunes)*len(newRunes) > maxInlineDiffCells {
-		return wrapDiffSpan("diff-deletion", html.EscapeString(oldText)), wrapDiffSpan("diff-addition", html.EscapeString(newText))
+		oldChanged, newChanged := changedRuneCounts(oldRunes, newRunes)
+		return wrapDiffSpan("diff-deletion", html.EscapeString(oldText)), wrapDiffSpan("diff-addition", html.EscapeString(newText)), editWeightFromCounts(oldChanged, newChanged, len(oldRunes), len(newRunes))
 	}
 
 	oldChanged, newChanged := changedRuneMasks(oldRunes, newRunes)
-	return renderInlineDiffHTML(oldRunes, oldChanged, "diff-deletion"), renderInlineDiffHTML(newRunes, newChanged, "diff-addition")
+	oldChangedCount := countChangedRunes(oldChanged)
+	newChangedCount := countChangedRunes(newChanged)
+	return renderInlineDiffHTML(oldRunes, oldChanged, "diff-deletion"), renderInlineDiffHTML(newRunes, newChanged, "diff-addition"), editWeightFromCounts(oldChangedCount, newChangedCount, len(oldRunes), len(newRunes))
 }
 
 func changedRuneMasks(oldRunes, newRunes []rune) ([]bool, []bool) {
@@ -221,6 +232,35 @@ func wrapDiffSpan(class, escapedText string) string {
 }
 
 func insertHunkHeaders(lines []DiffEntryLine) []DiffEntryLine {
+	hunkStarts := adaptiveHunkStarts(lines)
+	if len(hunkStarts) == 0 {
+		return nil
+	}
+
+	starts := make(map[int]bool, len(hunkStarts))
+	for _, index := range hunkStarts {
+		starts[index] = true
+	}
+	out := make([]DiffEntryLine, 0, len(lines)+len(hunkStarts))
+	hunkIndex := 0
+	for index, line := range lines {
+		if starts[index] {
+			hunkIndex++
+			out = append(out, newHunkHeader(hunkIndex))
+		}
+		out = append(out, line)
+	}
+	updateHunkHeaders(out)
+	return out
+}
+
+type diffEditUnit struct {
+	start  int
+	weight int
+	text   string
+}
+
+func adaptiveHunkStarts(lines []DiffEntryLine) []int {
 	hasChange := false
 	for _, line := range lines {
 		if startsDiffHunk(line) {
@@ -232,29 +272,255 @@ func insertHunkHeaders(lines []DiffEntryLine) []DiffEntryLine {
 		return nil
 	}
 
-	out := make([]DiffEntryLine, 0, len(lines)+1)
-	hunkIndex := 1
-	out = append(out, newHunkHeader(hunkIndex))
-	seenChange := false
-	contextSinceChange := false
-	for _, line := range lines {
-		if startsDiffHunk(line) {
-			if seenChange && contextSinceChange {
-				hunkIndex++
-				out = append(out, newHunkHeader(hunkIndex))
-			}
-			seenChange = true
-			contextSinceChange = false
-			out = append(out, line)
+	starts := []int{0}
+	seenChangedRun := false
+	for index := 0; index < len(lines); {
+		if !startsDiffHunk(lines[index]) {
+			index++
 			continue
 		}
-		if seenChange {
-			contextSinceChange = true
+		runStart := index
+		for index < len(lines) && startsDiffHunk(lines[index]) {
+			index++
 		}
-		out = append(out, line)
+		runEnd := index
+		if seenChangedRun {
+			starts = append(starts, runStart)
+		}
+		units := buildDiffEditUnits(lines, runStart, runEnd)
+		for _, cut := range balancedEditUnitCuts(units) {
+			starts = append(starts, units[cut].start)
+		}
+		seenChangedRun = true
 	}
-	updateHunkHeaders(out)
-	return out
+	return starts
+}
+
+func buildDiffEditUnits(lines []DiffEntryLine, start, end int) []diffEditUnit {
+	units := make([]diffEditUnit, 0, end-start)
+	for index := start; index < end; {
+		unitEnd := index + 1
+		if lines[index].Type == "DELETION" && unitEnd < end && lines[unitEnd].Type == "ADDITION" {
+			unitEnd++
+		}
+		units = append(units, newDiffEditUnit(lines, index, unitEnd))
+		index = unitEnd
+	}
+	return units
+}
+
+func newDiffEditUnit(lines []DiffEntryLine, start, end int) diffEditUnit {
+	unit := diffEditUnit{start: start}
+	var oldText, newText string
+	for _, line := range lines[start:end] {
+		if line.editWeight > unit.weight {
+			unit.weight = line.editWeight
+		}
+		switch line.Type {
+		case "DELETION":
+			oldText = line.Text
+		case "ADDITION":
+			newText = line.Text
+		default:
+			if unit.text == "" {
+				unit.text = line.Text
+			}
+		}
+	}
+	if newText != "" {
+		unit.text = newText
+	} else if oldText != "" {
+		unit.text = oldText
+	}
+	if unit.weight == 0 {
+		unit.weight = editWeight(oldText, newText)
+	}
+	return unit
+}
+
+func editWeight(oldText, newText string) int {
+	oldRunes := []rune(oldText)
+	newRunes := []rune(newText)
+	oldChanged, newChanged := changedRuneCounts(oldRunes, newRunes)
+	return editWeightFromCounts(oldChanged, newChanged, len(oldRunes), len(newRunes))
+}
+
+func editWeightFromCounts(oldChanged, newChanged, oldLength, newLength int) int {
+	changed := oldChanged
+	if newChanged > changed {
+		changed = newChanged
+	}
+	longer := oldLength
+	if newLength > longer {
+		longer = newLength
+	}
+
+	weight := 1
+	if changed > 4 {
+		weight++
+	}
+	if changed > 12 {
+		weight++
+	}
+	if changed > 24 || changed > 4 && longer > 0 && changed*10 >= longer*8 {
+		weight++
+	}
+	if weight > 4 {
+		return 4
+	}
+	return weight
+}
+
+func changedRuneCounts(oldRunes, newRunes []rune) (int, int) {
+	if len(oldRunes) == 0 || len(newRunes) == 0 {
+		return len(oldRunes), len(newRunes)
+	}
+	if len(oldRunes)*len(newRunes) <= maxInlineDiffCells {
+		oldChanged, newChanged := changedRuneMasks(oldRunes, newRunes)
+		return countChangedRunes(oldChanged), countChangedRunes(newChanged)
+	}
+
+	prefix := 0
+	for prefix < len(oldRunes) && prefix < len(newRunes) && oldRunes[prefix] == newRunes[prefix] {
+		prefix++
+	}
+	suffix := 0
+	for suffix < len(oldRunes)-prefix && suffix < len(newRunes)-prefix && oldRunes[len(oldRunes)-1-suffix] == newRunes[len(newRunes)-1-suffix] {
+		suffix++
+	}
+	return len(oldRunes) - prefix - suffix, len(newRunes) - prefix - suffix
+}
+
+func countChangedRunes(changed []bool) int {
+	count := 0
+	for _, isChanged := range changed {
+		if isChanged {
+			count++
+		}
+	}
+	return count
+}
+
+func balancedEditUnitCuts(units []diffEditUnit) []int {
+	if len(units) < 2 {
+		return nil
+	}
+	prefixWeights := make([]int, len(units)+1)
+	for index, unit := range units {
+		prefixWeights[index+1] = prefixWeights[index] + unit.weight
+	}
+	totalWeight := prefixWeights[len(units)]
+	blockCount := (totalWeight + targetHunkEditWeight - 1) / targetHunkEditWeight
+	if blockCount > len(units) {
+		blockCount = len(units)
+	}
+	if blockCount <= 1 {
+		return nil
+	}
+
+	cuts := make([]int, 0, blockCount-1)
+	previousCut := 0
+	searchAt := 1
+	for part := 1; part < blockCount; part++ {
+		minCut := previousCut + 1
+		maxCut := len(units) - (blockCount - part)
+		targetNumerator := totalWeight * part
+		for searchAt < minCut {
+			searchAt++
+		}
+		for searchAt < maxCut && prefixWeights[searchAt]*blockCount < targetNumerator {
+			searchAt++
+		}
+
+		candidateStart := searchAt - 2
+		if candidateStart < minCut {
+			candidateStart = minCut
+		}
+		candidateEnd := searchAt + 2
+		if candidateEnd > maxCut {
+			candidateEnd = maxCut
+		}
+		bestCut := candidateStart
+		bestScore := int(^uint(0) >> 1)
+		for candidate := candidateStart; candidate <= candidateEnd; candidate++ {
+			distance := prefixWeights[candidate]*blockCount - targetNumerator
+			if distance < 0 {
+				distance = -distance
+			}
+			score := distance*4 - structuralBoundaryScore(units[candidate-1].text, units[candidate].text)*blockCount
+			blockWeight := prefixWeights[candidate] - prefixWeights[previousCut]
+			if blockWeight < 2 && !singleHeavyUnit(units, previousCut, candidate) {
+				score += 8 * blockCount
+			}
+			if part == blockCount-1 {
+				tailWeight := totalWeight - prefixWeights[candidate]
+				if tailWeight < 2 && !singleHeavyUnit(units, candidate, len(units)) {
+					score += 8 * blockCount
+				}
+			}
+			if score < bestScore {
+				bestScore = score
+				bestCut = candidate
+			}
+		}
+		cuts = append(cuts, bestCut)
+		previousCut = bestCut
+		searchAt = bestCut + 1
+	}
+	return cuts
+}
+
+func singleHeavyUnit(units []diffEditUnit, start, end int) bool {
+	return end-start == 1 && units[start].weight == 4
+}
+
+func structuralBoundaryScore(previous, next string) int {
+	previousTrimmed := strings.TrimSpace(previous)
+	nextTrimmed := strings.TrimSpace(next)
+	if previousTrimmed == "" || nextTrimmed == "" {
+		return 4
+	}
+	if isMarkdownHeading(nextTrimmed) {
+		return 4
+	}
+	if isTopLevelField(next) {
+		return 3
+	}
+	if isListItem(nextTrimmed) {
+		return 2
+	}
+	return 0
+}
+
+func isMarkdownHeading(text string) bool {
+	for index := 0; index < len(text) && text[index] == '#'; index++ {
+		if index+1 < len(text) && text[index+1] == ' ' {
+			return true
+		}
+	}
+	return false
+}
+
+func isTopLevelField(text string) bool {
+	if text == "" || text != strings.TrimLeft(text, " \t") || strings.HasPrefix(text, "-") || strings.HasPrefix(text, "{") || strings.HasPrefix(text, "[") {
+		return false
+	}
+	colon := strings.IndexByte(text, ':')
+	if colon <= 0 {
+		return false
+	}
+	return !strings.ContainsAny(text[:colon], " \t")
+}
+
+func isListItem(text string) bool {
+	if strings.HasPrefix(text, "- ") || strings.HasPrefix(text, "* ") || strings.HasPrefix(text, "+ ") {
+		return true
+	}
+	index := 0
+	for index < len(text) && text[index] >= '0' && text[index] <= '9' {
+		index++
+	}
+	return index > 0 && index+1 < len(text) && (text[index] == '.' || text[index] == ')') && text[index+1] == ' '
 }
 
 func newHunkHeader(index int) DiffEntryLine {

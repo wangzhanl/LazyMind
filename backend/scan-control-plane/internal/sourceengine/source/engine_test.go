@@ -40,10 +40,11 @@ func TestCreateSourcePersistsTargetsInBindingsOnly(t *testing.T) {
 	engine := newTestSourceEngine(t, repo, core, spy, now)
 
 	resp, err := engine.CreateSource(context.Background(), CreateSourceRequest{
-		CallerID:  "user-1",
-		TenantID:  "tenant-1",
-		RequestID: "request-1",
-		Name:      "Docs",
+		CallerID:   "user-1",
+		CallerName: "User One",
+		TenantID:   "tenant-1",
+		RequestID:  "request-1",
+		Name:       "Docs",
 		Bindings: []BindingInput{{
 			ConnectorType: spyConnectorType,
 			TargetType:    spyTargetType,
@@ -89,8 +90,17 @@ func TestCreateSourcePersistsTargetsInBindingsOnly(t *testing.T) {
 	if len(spy.validateRequests) != 1 || spy.validateRequests[0].TargetRef != "raw-target" || spy.validateRequests[0].UserID != "user-1" {
 		t.Fatalf("ValidateTarget was not called with the binding input and caller: %+v", spy.validateRequests)
 	}
+	if len(core.datasetRequests) != 1 || core.datasetRequests[0].UserName != "User One" {
+		t.Fatalf("core dataset create should carry caller user name: %+v", core.datasetRequests)
+	}
+	if !reflect.DeepEqual(core.datasetRequests[0].Tags, []string{scanDatasetTag}) {
+		t.Fatalf("core dataset create should carry scan tag, got %+v", core.datasetRequests[0].Tags)
+	}
 	if len(core.folderRequests) != 1 || core.folderRequests[0].UserID != "user-1" {
 		t.Fatalf("core folder create should carry caller user id: %+v", core.folderRequests)
+	}
+	if core.folderRequests[0].UserName != "User One" {
+		t.Fatalf("core folder create should carry caller user name: %+v", core.folderRequests)
 	}
 }
 
@@ -182,7 +192,7 @@ func TestCreateSourceAllowsEmptyTenant(t *testing.T) {
 	}
 }
 
-func TestCreateSourceUsesSourceNameForSingleFileBindingRoot(t *testing.T) {
+func TestCreateSourceUsesStemForWikiUploadedFileBindingRoot(t *testing.T) {
 	t.Parallel()
 
 	now := fixedSourceTestTime()
@@ -215,10 +225,10 @@ func TestCreateSourceUsesSourceNameForSingleFileBindingRoot(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create source: %v", err)
 	}
-	if len(core.folderRequests) != 1 || core.folderRequests[0].Name != "132" {
-		t.Fatalf("single-file binding root should use source name, got %+v", core.folderRequests)
+	if len(core.folderRequests) != 1 || core.folderRequests[0].Name != "ALCOHOLDINGS" {
+		t.Fatalf("single-file binding root should use display name stem, got %+v", core.folderRequests)
 	}
-	if len(resp.Bindings) != 1 || resp.Bindings[0].CoreParentDocumentName != "132" {
+	if len(resp.Bindings) != 1 || resp.Bindings[0].CoreParentDocumentName != "ALCOHOLDINGS" {
 		t.Fatalf("binding should keep the core parent name, got %+v", resp.Bindings)
 	}
 }
