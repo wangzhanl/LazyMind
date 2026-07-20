@@ -794,6 +794,100 @@ func TestSkillReviewTaskListUsesBoundAlgorithmTaskID(t *testing.T) {
 	}
 }
 
+func TestSkillOrganizeTaskListUsesAlgorithmRunStatus(t *testing.T) {
+	db := newResourceUpdateTestDB(t)
+	createSkillReviewStatsTable(t, db)
+	ctx := context.Background()
+	now := time.Date(2026, 7, 20, 10, 0, 0, 0, time.UTC)
+
+	insertOrganizeTask := func(id, userID, requestID string) {
+		insertTask(t, db, orm.ResourceUpdateTask{
+			ID:           "core-" + id,
+			TaskType:     orm.ResourceUpdateTaskTypeOrganizeSkill,
+			ResourceType: orm.ResourceUpdateResourceTypeSkill,
+			UserID:       userID,
+			TriggerType:  orm.ResourceUpdateTriggerTypeManual,
+			TriggerID:    "skill_organize:" + userID + ":" + requestID,
+			Status:       orm.ResourceUpdateTaskStatusDone,
+			ResultID:     id,
+			RequestJSON:  marshalJSON(t, skillGenerateRequestJSON{RequestID: requestID}),
+			NextRunAt:    now,
+			CreatedAt:    now,
+			UpdatedAt:    now,
+		})
+	}
+
+	insertOrganizeTask("org-running", "user-1", "request-running")
+	insertOrganizeTask("org-completed", "user-1", "request-completed")
+	insertOrganizeTask("org-failed", "user-1", "request-failed")
+	insertOrganizeTask("org-other-user", "user-2", "request-other-user")
+	insertSkillReviewStats(t, db, map[string]any{
+		"id": "org-running", "requestid": "request-running", "userid": "user-1",
+		"status": "organize_draft", "started_at": "2026-07-20T10:00:00Z", "summary": map[string]any{"stage": "organize_draft"},
+	})
+	insertSkillReviewStats(t, db, map[string]any{
+		"id": "org-completed", "requestid": "request-completed", "userid": "user-1",
+		"status": "completed", "started_at": "2026-07-20T10:01:00Z", "summary": map[string]any{"kind": "skill_organize"},
+	})
+	insertSkillReviewStats(t, db, map[string]any{
+		"id": "org-failed", "requestid": "request-failed", "userid": "user-1",
+		"status": "failed", "started_at": "2026-07-20T10:02:00Z", "summary": map[string]any{"failed_stage": "organize_apply"},
+	})
+	insertSkillReviewStats(t, db, map[string]any{
+		"id": "org-other-user", "requestid": "request-other-user", "userid": "user-2",
+		"status": "organize_plan", "started_at": "2026-07-20T10:03:00Z", "summary": map[string]any{"stage": "organize_plan"},
+	})
+	insertTask(t, db, orm.ResourceUpdateTask{
+		ID:           "review-task",
+		TaskType:     orm.ResourceUpdateTaskTypeGenerateReview,
+		ResourceType: orm.ResourceUpdateResourceTypeSkill,
+		UserID:       "user-1",
+		TriggerType:  orm.ResourceUpdateTriggerTypeManual,
+		TriggerID:    "skill_review_manual:user-1:review-request",
+		Status:       orm.ResourceUpdateTaskStatusPending,
+		RequestJSON:  marshalJSON(t, skillGenerateRequestJSON{RequestID: "review-request"}),
+		NextRunAt:    now,
+		CreatedAt:    now,
+		UpdatedAt:    now,
+	})
+
+	all, err := buildSkillOrganizeTaskList(ctx, db, "user-1", "", "", 1, 1000)
+	if err != nil {
+		t.Fatalf("build organize task list: %v", err)
+	}
+	if all.Total != 3 || len(all.Items) != 3 {
+		t.Fatalf("expected only current user's organize tasks, got %#v", all)
+	}
+	statuses := make(map[string]skillReviewTaskStatusResponse, len(all.Items))
+	for _, item := range all.Items {
+		statuses[item.RequestID] = item
+	}
+	if statuses["request-running"].Status != orm.ResourceUpdateTaskStatusRunning ||
+		statuses["request-running"].RunStatus != "organize_draft" ||
+		statuses["request-completed"].Status != orm.ResourceUpdateTaskStatusDone ||
+		statuses["request-completed"].RunStatus != "completed" ||
+		statuses["request-failed"].Status != orm.ResourceUpdateTaskStatusFailed ||
+		statuses["request-failed"].RunStatus != "failed" {
+		t.Fatalf("unexpected organize statuses: %#v", statuses)
+	}
+
+	running, err := buildSkillOrganizeTaskList(ctx, db, "user-1", orm.ResourceUpdateTaskStatusRunning, "", 1, 1000)
+	if err != nil {
+		t.Fatalf("filter running organize tasks: %v", err)
+	}
+	if running.Total != 1 || running.Items[0].RequestID != "request-running" {
+		t.Fatalf("unexpected running organize tasks: %#v", running)
+	}
+
+	failed, err := buildSkillOrganizeTaskList(ctx, db, "user-1", "", "request-failed", 1, 1000)
+	if err != nil {
+		t.Fatalf("filter organize task by request ID: %v", err)
+	}
+	if failed.Total != 1 || failed.Items[0].Status != orm.ResourceUpdateTaskStatusFailed {
+		t.Fatalf("unexpected request-filtered organize tasks: %#v", failed)
+	}
+}
+
 func TestSkillPreflightFreezesRequestAndSkipsWhenBelowThreshold(t *testing.T) {
 	db := newResourceUpdateTestDB(t)
 	ctx := context.Background()

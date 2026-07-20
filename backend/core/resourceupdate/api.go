@@ -235,6 +235,14 @@ func RunSkillReview(w http.ResponseWriter, r *http.Request) {
 }
 
 func ListSkillReviewTasks(w http.ResponseWriter, r *http.Request) {
+	listSkillTasks(w, r, orm.ResourceUpdateTaskTypeGenerateReview, "skill review task")
+}
+
+func ListSkillOrganizeTasks(w http.ResponseWriter, r *http.Request) {
+	listSkillTasks(w, r, orm.ResourceUpdateTaskTypeOrganizeSkill, "skill organize task")
+}
+
+func listSkillTasks(w http.ResponseWriter, r *http.Request, taskType, errorLabel string) {
 	db, userID, ok := requestDBAndUser(w, r)
 	if !ok {
 		return
@@ -243,21 +251,29 @@ func ListSkillReviewTasks(w http.ResponseWriter, r *http.Request) {
 	pageSize := parsePositiveQueryInt(r.URL.Query().Get("page_size"), 20, 1000)
 	status := strings.TrimSpace(r.URL.Query().Get("status"))
 	requestID := strings.TrimSpace(r.URL.Query().Get("requestid"))
-	resp, err := buildSkillReviewTaskList(r.Context(), db, userID, status, requestID, page, pageSize)
+	resp, err := buildSkillTaskList(r.Context(), db, userID, taskType, status, requestID, page, pageSize)
 	if err != nil {
-		mapReviewError(w, err, "skill review task")
+		mapReviewError(w, err, errorLabel)
 		return
 	}
 	common.ReplyOK(w, resp)
 }
 
 func buildSkillReviewTaskList(ctx context.Context, db *gorm.DB, userID, status, requestID string, page, pageSize int) (skillReviewTaskListResponse, error) {
+	return buildSkillTaskList(ctx, db, userID, orm.ResourceUpdateTaskTypeGenerateReview, status, requestID, page, pageSize)
+}
+
+func buildSkillOrganizeTaskList(ctx context.Context, db *gorm.DB, userID, status, requestID string, page, pageSize int) (skillReviewTaskListResponse, error) {
+	return buildSkillTaskList(ctx, db, userID, orm.ResourceUpdateTaskTypeOrganizeSkill, status, requestID, page, pageSize)
+}
+
+func buildSkillTaskList(ctx context.Context, db *gorm.DB, userID, taskType, status, requestID string, page, pageSize int) (skillReviewTaskListResponse, error) {
 	var tasks []orm.ResourceUpdateTask
 	if err := db.WithContext(ctx).
 		Where(
 			"user_id = ? AND task_type = ? AND resource_type = ? AND trigger_type = ?",
 			strings.TrimSpace(userID),
-			orm.ResourceUpdateTaskTypeGenerateReview,
+			taskType,
 			orm.ResourceUpdateResourceTypeSkill,
 			orm.ResourceUpdateTriggerTypeManual,
 		).

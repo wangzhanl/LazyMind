@@ -2667,6 +2667,14 @@ func registeredCoreOperations() []openAPIOperation {
 			Responses:   map[int]openAPIResponse{200: resp("Skill organize task accepted", skillOrganizeOpenAPIResponse{})},
 		},
 		{
+			Method:      "GET",
+			Path:        "/skill-organize/tasks",
+			Summary:     "List current user's Skill organize tasks",
+			Tags:        []string{"skills"},
+			QueryParams: skillReviewTaskListQueryParams{},
+			Responses:   map[int]openAPIResponse{200: resp("Skill organize task list", skillReviewTaskListOpenAPIResponse{})},
+		},
+		{
 			Method:      "POST",
 			Path:        "/skills",
 			Summary:     "Create directory skill",
