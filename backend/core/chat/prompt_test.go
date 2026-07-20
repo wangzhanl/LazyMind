@@ -13,6 +13,8 @@ import (
 	"time"
 
 	"github.com/gorilla/mux"
+	"gorm.io/driver/postgres"
+	"gorm.io/gorm"
 
 	"lazymind/core/common/orm"
 	corestore "lazymind/core/store"
@@ -30,6 +32,39 @@ func newPromptTestDB(t *testing.T) *orm.DB {
 		t.Fatalf("auto migrate: %v", err)
 	}
 	return db
+}
+
+func TestPromptUsageUpsertQualifiesPostgresUsageCount(t *testing.T) {
+	db, err := gorm.Open(postgres.New(postgres.Config{
+		DSN: "host=localhost user=postgres dbname=core sslmode=disable",
+	}), &gorm.Config{
+		DryRun:                 true,
+		DisableAutomaticPing:   true,
+		SkipDefaultTransaction: true,
+	})
+	if err != nil {
+		t.Fatalf("open postgres dry-run db: %v", err)
+	}
+
+	now := time.Date(2026, time.July, 17, 8, 0, 0, 0, time.UTC)
+	state := orm.PromptUserState{
+		ID:             "pus_test",
+		PromptID:       "preset-document-summary",
+		UsageCount:     1,
+		LastUsedAt:     &now,
+		CreateUserID:   "u1",
+		CreateUserName: "Prompt Tester",
+		CreatedAt:      now,
+		UpdatedAt:      now,
+	}
+	statement := db.Clauses(promptUsageConflictClause(now)).Create(&state).Statement
+	if statement.Error != nil {
+		t.Fatalf("build postgres upsert: %v", statement.Error)
+	}
+	sql := statement.SQL.String()
+	if !strings.Contains(sql, `"prompt_user_states"."usage_count" +`) {
+		t.Fatalf("usage_count is not qualified in postgres upsert: %s", sql)
+	}
 }
 
 func TestPolishPromptCallsRewrite(t *testing.T) {
@@ -167,8 +202,16 @@ func TestPromptLibraryFavoriteAndUsage(t *testing.T) {
 		}
 	}
 	for i := 0; i < 2; i++ {
-		if rec := request(UsePrompt, "u1"); rec.Code != http.StatusOK {
+		rec := request(UsePrompt, "u1")
+		if rec.Code != http.StatusOK {
 			t.Fatalf("use attempt %d failed: status=%d body=%s", i+1, rec.Code, rec.Body.String())
+		}
+		var stateResp promptStateResponse
+		if err := json.Unmarshal(rec.Body.Bytes(), &stateResp); err != nil {
+			t.Fatalf("decode use attempt %d response: %v", i+1, err)
+		}
+		if stateResp.ID != "preset-general-qa" || !stateResp.IsFavorite || stateResp.UsageCount != int64(i+1) || stateResp.LastUsedAt == nil {
+			t.Fatalf("unexpected use attempt %d response: %#v", i+1, stateResp)
 		}
 	}
 
