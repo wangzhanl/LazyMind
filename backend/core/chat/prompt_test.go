@@ -181,6 +181,76 @@ func TestListPromptsFiltersByKeyword(t *testing.T) {
 	}
 }
 
+func TestListPromptsSortsNamesByLocale(t *testing.T) {
+	db := newPromptTestDB(t)
+	corestore.Init(db.DB, nil, nil)
+	t.Cleanup(func() { corestore.Init(nil, nil, nil) })
+
+	tests := []struct {
+		name   string
+		locale string
+		want   []string
+	}{
+		{
+			name:   "Chinese pinyin order",
+			locale: "zh-CN",
+			want: []string{
+				"preset-structured-extraction",
+				"preset-general-qa",
+				"preset-document-summary",
+			},
+		},
+		{
+			name:   "English alphabetical order",
+			locale: "en-US",
+			want: []string{
+				"preset-document-summary",
+				"preset-general-qa",
+				"preset-structured-extraction",
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodGet, "/api/core/prompts?sort=name_asc&locale="+tt.locale, nil)
+			req.Header.Set("X-User-Id", "u1")
+			rec := httptest.NewRecorder()
+
+			ListPrompts(rec, req)
+
+			if rec.Code != http.StatusOK {
+				t.Fatalf("expected status 200, got %d body=%s", rec.Code, rec.Body.String())
+			}
+			var resp promptListResponse
+			if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+				t.Fatalf("decode prompt list: %v", err)
+			}
+			if len(resp.Prompts) != len(tt.want) {
+				t.Fatalf("expected %d prompts, got %d", len(tt.want), len(resp.Prompts))
+			}
+			for index, wantID := range tt.want {
+				if gotID := resp.Prompts[index].ID; gotID != wantID {
+					t.Fatalf("prompt at index %d: got %q, want %q", index, gotID, wantID)
+				}
+			}
+		})
+	}
+}
+
+func TestSortPromptItemsByNameUsesIDAsTieBreaker(t *testing.T) {
+	items := []promptItemResponse{
+		{ID: "prompt-b", DisplayName: "Alpha"},
+		{ID: "prompt-a", DisplayName: "alpha"},
+	}
+
+	sortPromptItems(items, "name_asc", "en-US")
+
+	if items[0].ID != "prompt-a" || items[1].ID != "prompt-b" {
+		t.Fatalf("expected deterministic ID order, got %#v", items)
+	}
+}
+
 func TestPromptLibraryFavoriteAndUsage(t *testing.T) {
 	db := newPromptTestDB(t)
 	corestore.Init(db.DB, nil, nil)
