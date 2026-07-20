@@ -4,6 +4,7 @@ from datetime import datetime, timezone as datetime_timezone
 import re
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
+from . import guidance as _guidance
 from .guidance import (
     ATTACHED_FILES_GUIDANCE,
     DEFAULT_SYSTEM_PROMPT,
@@ -14,11 +15,35 @@ from .guidance import (
     TOOL_CALL_STATUS_GUIDANCE,
     WEB_SEARCH_GUIDANCE,
 )
+from .task_profile import TaskProfile
+
+ANALYSIS_GUIDANCE = getattr(_guidance, 'ANALYSIS_GUIDANCE', '')
+CLARIFICATION_GUIDANCE = getattr(_guidance, 'CLARIFICATION_GUIDANCE', '')
+CLOUD_DOCUMENT_GUIDANCE = getattr(
+    _guidance,
+    'CLOUD_DOCUMENT_GUIDANCE',
+    (
+        'Use `FeishuWikiFS_search` and `FeishuWikiFS_find` for Feishu documents, and '
+        '`NotionFS_search` and `NotionFS_find` for Notion pages, and `GoogleDriveFS_search` '
+        'and `GoogleDriveFS_find` for Google Drive files. Feishu search searches all '
+        'Wiki documents accessible to the authenticated account; do not ask the user to provide '
+        'a space id, node id, document id, or local knowledge base identifier. These tools search '
+        'the cloud document provider, not the local knowledge base.'
+    ),
+)
+DECISION_PLANNING_GUIDANCE = getattr(_guidance, 'DECISION_PLANNING_GUIDANCE', '')
+DELIVERABLE_GUIDANCE = getattr(_guidance, 'DELIVERABLE_GUIDANCE', {})
+FRESH_RESEARCH_GUIDANCE = getattr(_guidance, 'FRESH_RESEARCH_GUIDANCE', '')
+LEARNING_GUIDANCE = getattr(_guidance, 'LEARNING_GUIDANCE', '')
+REQUEST_ANALYSIS_GUIDANCE = getattr(_guidance, 'REQUEST_ANALYSIS_GUIDANCE', '')
+SKILL_RESTRAINT_GUIDANCE = getattr(_guidance, 'SKILL_RESTRAINT_GUIDANCE', '')
+TRANSFORMATION_GUIDANCE = getattr(_guidance, 'TRANSFORMATION_GUIDANCE', '')
 
 _KNOWLEDGE_EVIDENCE_GROUPS = {'kb', 'temp_kb'}
 _DEFAULT_UI_LOCALE = 'zh-CN'
 _CJK_PATTERN = re.compile(r'[\u3400-\u9fff]')
 _LATIN_PATTERN = re.compile(r'[A-Za-z]')
+_URL_PATTERN = re.compile(r'https?://\S+|www\.\S+', re.IGNORECASE)
 _EXPLICIT_LANGUAGE_PATTERNS = (
     (
         'Chinese',
@@ -68,7 +93,7 @@ def _explicit_language(text: object) -> str:
 
 
 def _dominant_language(text: object) -> str:
-    value = str(text or '')[:2000]
+    value = _URL_PATTERN.sub(' ', str(text or '')[:2000])
     cjk_count = len(_CJK_PATTERN.findall(value))
     latin_count = len(_LATIN_PATTERN.findall(value))
     if cjk_count >= 2 and cjk_count * 2 >= latin_count:
@@ -192,6 +217,74 @@ def _build_attached_files_prompt(files: list | None = None) -> str:
     return '\n'.join(lines) + '\n\n' + ATTACHED_FILES_GUIDANCE
 
 
+def _task_profile_system_parts(task_profile: TaskProfile | None) -> list[str]:
+    if task_profile is None:
+        return []
+    outcomes = {task_profile.primary_outcome, *task_profile.secondary_outcomes}
+    parts = []
+    if 'learn' in outcomes:
+        parts.append(LEARNING_GUIDANCE)
+    if task_profile.research_required or task_profile.freshness == 'current':
+        parts.append(FRESH_RESEARCH_GUIDANCE)
+    if outcomes.intersection({'decide', 'plan'}):
+        parts.append(DECISION_PLANNING_GUIDANCE)
+    if 'analyze' in outcomes:
+        parts.append(ANALYSIS_GUIDANCE)
+    if 'transform' in outcomes:
+        parts.append(TRANSFORMATION_GUIDANCE)
+    deliverables = [task_profile.deliverable_kind, *task_profile.secondary_deliverables][:2]
+    contracts = [DELIVERABLE_GUIDANCE[item] for item in deliverables if item in DELIVERABLE_GUIDANCE]
+    if contracts and not (
+        task_profile.complexity == 'simple' and task_profile.deliverable_kind == 'direct_answer'
+    ):
+        parts.append('# Deliverable contract\n' + '\n'.join(contracts))
+    if task_profile.skill_mode != 'explicit':
+        parts.append(SKILL_RESTRAINT_GUIDANCE)
+    assessment = task_profile.request_assessment
+    if assessment.status != 'ready' or task_profile.complexity == 'compound':
+        parts.append(REQUEST_ANALYSIS_GUIDANCE)
+    if assessment.interaction_need == 'blocking':
+        parts.append(CLARIFICATION_GUIDANCE)
+    return parts
+
+
+def _task_profile_runtime_sections(task_profile: TaskProfile | None) -> list[tuple[str, str]]:
+    if task_profile is None:
+        return []
+    sections = []
+    excluded = task_profile.excluded_resources
+    excluded_lines = [
+        *(f'- Skill: {value}' for value in excluded.skill_names),
+        *(f'- Knowledge base: {value}' for value in excluded.knowledge_base_ids),
+        *(f'- Plugin: {value}' for value in excluded.plugin_refs),
+    ]
+    if excluded_lines:
+        sections.append(('Resource Usage Policy', '\n'.join([
+            'Do not use, invoke, cite, or rely on these resources in this turn:',
+            *excluded_lines,
+        ])))
+    assessment = task_profile.request_assessment
+    if assessment.status != 'ready':
+        issue_lines = [
+            f'- {issue.issue_type} ({issue.impact}): {issue.description} '
+            f'[evidence: {issue.evidence}]'
+            for issue in assessment.issues
+        ]
+        question_lines = [
+            f'- {question.question}'
+            + (f' Options: {", ".join(question.options)}.' if question.options else '')
+            + (f' Recommended: {question.recommended}.' if question.recommended else '')
+            for question in assessment.clarification_questions
+        ]
+        sections.append(('Request Assessment', '\n'.join([
+            f'Status: {assessment.status}',
+            f'Interaction need: {assessment.interaction_need}',
+            *issue_lines,
+            *question_lines,
+        ])))
+    return sections
+
+
 def build_system_prompt(
     active_groups: set[str],
     *,
@@ -202,6 +295,8 @@ def build_system_prompt(
     files: list | None = None,
     current_query: str | None = None,
     conversation_history: list[dict] | None = None,
+    task_profile: TaskProfile | None = None,
+    dynamic_prompt_modules: bool = False,
 ) -> str:
     prompt_parts = [
         DEFAULT_SYSTEM_PROMPT,
@@ -212,55 +307,54 @@ def build_system_prompt(
             user_preference=user_preference,
         ),
     ]
-
     environment_prompt = _build_environment_context_prompt(environment_context)
     if environment_prompt:
         prompt_parts.append(environment_prompt)
-
     attached_files_prompt = _build_attached_files_prompt(files)
     if attached_files_prompt:
         prompt_parts.append(attached_files_prompt)
-
+    if dynamic_prompt_modules:
+        prompt_parts.extend(_task_profile_system_parts(task_profile))
+        prompt_parts.extend(
+            f'## {title} [AUTHORITATIVE]\n{content}'
+            for title, content in _task_profile_runtime_sections(task_profile)
+        )
     if use_memory:
         if isinstance(user_preference, str) and user_preference.strip():
-            preference_block = (
-                '## User Profile / Preferences\n'
-                "The following profile entries describe the user's long-term preferences"
-                ' and identity.\n'
-                '`agent_persona` describes the identity, responsibilities, and boundaries'
-                ' the assistant should maintain when replying. If `agent_persona` is'
-                ' set, use it as the assistant identity, including for questions such'
-                ' as "who are you" or "what is your name". If `agent_persona` is not'
-                ' set, the assistant may identify itself as LAZYMIND.\n'
-                '`preferred_name` is how replies should address the user.\n'
-                '`response_style` describes expression habits, length preference, and'
-                ' structure preference.\n'
-                "Apply a preference **only when it is relevant to the user's current"
-                ' intent**.\n'
-                'If a preference conflicts with or is unrelated to what the user is'
-                ' actually asking for in this turn, ignore it.\n'
-                'Do not force-apply style, format, or persona preferences when the'
-                " user's question is factual, technical, or unrelated to that"
-                ' preference.\n\n'
-                + user_preference.strip()
-                + '\n\n<!-- end of User Profile / Preferences -->'
-            )
-            prompt_parts.append(preference_block)
+            prompt_parts.append('## User Profile / Preferences\n' + user_preference.strip())
         if isinstance(memory, str) and memory.strip():
             prompt_parts.append(f'## Agent Working Memory\n{memory.strip()}')
-
     if active_groups:
         prompt_parts.append(TOOL_CALL_STATUS_GUIDANCE)
     if active_groups & _KNOWLEDGE_EVIDENCE_GROUPS:
-        prompt_parts.append(SEARCH_GUIDANCE)
-        prompt_parts.append(KNOWLEDGE_EVIDENCE_CITATION_GUIDANCE)
+        prompt_parts.extend([SEARCH_GUIDANCE, KNOWLEDGE_EVIDENCE_CITATION_GUIDANCE])
     if 'web_search' in active_groups:
         prompt_parts.append(WEB_SEARCH_GUIDANCE)
-    if (
-        files
-        or 'image_generator' in active_groups
-        or 'image_editor' in active_groups
-    ):
+    if active_groups.intersection({'feishu', 'notion', 'google_drive'}):
+        prompt_parts.append(CLOUD_DOCUMENT_GUIDANCE)
+    if files or active_groups.intersection({'image_generator', 'image_editor'}):
         prompt_parts.append(IMAGE_REFERENCE_MARKDOWN_GUIDANCE)
-
     return '\n\n'.join(prompt_parts)
+
+
+def add_standard_system_sections(builder, has_tools: bool, **kwargs):
+    """Compatibility adapter for callers that still use the structured prompt builder."""
+    task_profile = kwargs.get('task_profile')
+    prompt = build_system_prompt(
+        {'tools'} if has_tools else set(),
+        environment_context=kwargs.get('environment_context'),
+        use_memory=kwargs.get('use_memory', True),
+        user_preference=kwargs.get('user_preference'),
+        memory=kwargs.get('memory'),
+        current_query=kwargs.get('current_query'),
+        conversation_history=kwargs.get('conversation_history'),
+        task_profile=task_profile,
+        dynamic_prompt_modules=kwargs.get('dynamic_prompt_modules', False),
+    )
+    builder.system('standard_prompt', '', prompt, 'platform.guidance', priority=10)
+    for index, (title, content) in enumerate(_task_profile_runtime_sections(task_profile)):
+        builder.runtime(
+            f'task_runtime_{index}', title, content, 'runtime.task',
+            priority=4 + index, authoritative=True, content_kind='state',
+        )
+    return builder

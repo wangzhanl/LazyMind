@@ -20,6 +20,7 @@ class ChatConversationOptions(BaseModel):
     conversation_id: Optional[str] = None
     user_id: Optional[str] = None
     mode: Optional[str] = 'auto'
+    intent_context: Optional[Dict[str, Any]] = None
 
 
 class ChatRetrievalOptions(BaseModel):
@@ -59,6 +60,14 @@ class ChatPluginOptions(BaseModel):
     plugin_context: Optional[Dict[str, Any]] = None
     catalog: List[Dict[str, Any]] = Field(default_factory=list)
     disabled_builtin_plugins: List[str] = Field(default_factory=list)
+    allowed_plugin_refs: List[str] = Field(default_factory=list)
+
+
+class ExplicitResourceBindingsOptions(BaseModel):
+    skill_names: List[str] = Field(default_factory=list)
+    knowledge_base_ids: List[str] = Field(default_factory=list)
+    plugin_refs: List[str] = Field(default_factory=list)
+    mentions: List[Dict[str, str]] = Field(default_factory=list)
 
 
 class ChatRequest(BaseModel):
@@ -69,3 +78,6 @@ class ChatRequest(BaseModel):
     personalization: ChatPersonalizationOptions = Field(default_factory=ChatPersonalizationOptions)
     agent: ChatAgentOptions = Field(default_factory=ChatAgentOptions)
     plugin: ChatPluginOptions = Field(default_factory=ChatPluginOptions)
+    explicit_resource_bindings: ExplicitResourceBindingsOptions = Field(
+        default_factory=ExplicitResourceBindingsOptions,
+    )

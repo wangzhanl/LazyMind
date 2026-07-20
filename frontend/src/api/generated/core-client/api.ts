@@ -376,6 +376,7 @@ export interface ConversationHistoryItem {
     'result'?: string;
     'seq'?: number;
     'sources'?: Array<object>;
+    'thinking_time_s'?: number;
 }
 export interface ConversationHistoryListResponse {
     'conversation_id'?: string;
@@ -32513,6 +32514,3 @@ export class WordGroupApi extends BaseAPI {
         return WordGroupApiFp(this.configuration).apiCoreWordGroupUpdatePost(requestParameters.updateWordGroupRequest, options).then((request) => request(this.axios, this.basePath));
     }
 }
-
-
-

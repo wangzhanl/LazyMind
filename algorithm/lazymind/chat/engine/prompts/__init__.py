@@ -8,7 +8,18 @@ from .guidance import (
     TOOL_CALL_STATUS_GUIDANCE,
     VISION_EXTRACT_DEFAULT_INSTRUCTION,
 )
-from .system_prompt import build_system_prompt
+from .system_prompt import add_standard_system_sections, build_system_prompt
+from .task_profile import (
+    ClarificationQuestion,
+    ExplicitResourceBindings,
+    RequestAssessment,
+    RequestIssue,
+    TaskProfile,
+    fallback_task_profile,
+    resolve_task_profile,
+    select_skill_candidates,
+    selected_prompt_modules,
+)
 
 __all__ = [
     'ATTACHED_FILES_GUIDANCE',
@@ -18,4 +29,13 @@ __all__ = [
     'TOOL_CALL_STATUS_GUIDANCE',
     'VISION_EXTRACT_DEFAULT_INSTRUCTION',
     'build_system_prompt',
+    'ClarificationQuestion',
+    'ExplicitResourceBindings',
+    'RequestAssessment',
+    'RequestIssue',
+    'TaskProfile',
+    'fallback_task_profile',
+    'resolve_task_profile',
+    'select_skill_candidates',
+    'selected_prompt_modules',
 ]

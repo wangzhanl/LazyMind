@@ -35,6 +35,30 @@ def test_lazy_tool_group_gateway_uses_group_expansion_preview_in_chinese():
     assert '正在展开**KBToolGroup**工具组。' in call_text
     assert '已经展开**KBToolGroup**工具组。' in result_text
 
+def test_google_drive_search_uses_provider_specific_preview():
+    tool_call = {
+        'id': 'call_drive',
+        'function': {
+            'name': 'GoogleDriveFS_search',
+            'arguments': json.dumps({'keywords': ['release', 'owner']}),
+        },
+    }
+
+    call_text, preview_value = _tool_call_frame_text(tool_call, 'zh')
+    result_text = _tool_result_frame_text(
+        {
+            'id': 'call_drive',
+            'name': 'GoogleDriveFS_search',
+            'result': [{'title': 'Release Plan'}],
+        },
+        'zh',
+        preview_value,
+    )
+
+    assert '正在 Google Drive 中搜索' in call_text
+    assert '已查询到' in result_text
+    assert 'Google Drive 搜索结果' in result_text
+
 
 def test_plugin_preflight_result_renders_outcome_and_reason_in_chinese():
     reason = 'The request can be answered directly without a multi-stage workflow.'

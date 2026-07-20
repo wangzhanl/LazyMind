@@ -90,6 +90,12 @@ export function TaskServiceApi() {
         options,
       );
     },
+    listConversationArtifacts(conversationId: string, options?: RawAxiosRequestConfig) {
+      return axiosInstance.get(
+        `${coreApiBaseUrl}/conversations/${encodeURIComponent(conversationId)}/artifacts`,
+        options,
+      );
+    },
     getTaskDetail(taskId: string, options?: RawAxiosRequestConfig) {
       return axiosInstance.get(
         `${coreApiBaseUrl}/tasks/${encodeURIComponent(taskId)}`,
@@ -104,7 +110,6 @@ export function TaskServiceApi() {
     },
   };
 }
-
 // Plugin Info API — fetches plugin spec (including ui.tabs) from Go /api/core/plugins.
 export function PluginInfoApi() {
   return {

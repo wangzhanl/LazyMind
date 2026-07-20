@@ -5,6 +5,8 @@ package main
 import (
 	"os"
 	"os/exec"
+	"strconv"
+	"strings"
 	"syscall"
 )
 
@@ -39,7 +41,14 @@ func processAlive(pid int) bool {
 		return false
 	}
 	err := syscall.Kill(pid, 0)
-	return err == nil || err == syscall.EPERM
+	if err != nil && err != syscall.EPERM {
+		return false
+	}
+	status, statusErr := exec.Command("ps", "-o", "stat=", "-p", strconv.Itoa(pid)).Output()
+	if statusErr == nil && strings.HasPrefix(strings.TrimSpace(string(status)), "Z") {
+		return false
+	}
+	return true
 }
 
 func nativeProcessGroupID(pid int) int {

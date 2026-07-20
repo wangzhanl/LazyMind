@@ -25,6 +25,8 @@ import DataSourceDetail from "@/modules/dataSource/detail";
 import DataSourceFeishuCallback from "@/modules/dataSource/common/feishuCallback";
 import CloudDocumentsPage from "@/modules/modelProvider/pages/CloudDocumentsPage";
 import FeishuAccountPage from "@/modules/modelProvider/pages/FeishuAccountPage";
+import GoogleDriveConnectionPage from "@/modules/modelProvider/pages/GoogleDriveConnectionPage";
+import GoogleDriveSetupGuide from "@/modules/modelProvider/pages/GoogleDriveSetupGuide";
 import LocalDataSourcePage from "@/modules/modelProvider/pages/LocalDataSourcePage";
 import FeishuSetupGuide from "@/modules/modelProvider/pages/FeishuSetupGuide";
 import NotionSetupGuide from "@/modules/modelProvider/pages/NotionSetupGuide";
@@ -98,6 +100,14 @@ export default function AppRouter() {
           element={<DataSourceFeishuCallback provider="notion" />}
         />
         <Route
+          path="/oauth/googledrive/data-source/callback"
+          element={<DataSourceFeishuCallback provider="googledrive" />}
+        />
+        <Route
+          path="/oauth/googledrive/callback"
+          element={<DataSourceFeishuCallback provider="googledrive" />}
+        />
+        <Route
           path="/loginTransition"
           element={
             localSessionEnabled ? (
@@ -159,12 +169,20 @@ export default function AppRouter() {
               element={<FeishuAccountPage />}
             />
             <Route
+              path="cloud-documents/google-drive"
+              element={<GoogleDriveConnectionPage />}
+            />
+            <Route
               path="cloud-documents/docs/feishu-setup"
               element={<FeishuSetupGuide />}
             />
             <Route
               path="cloud-documents/docs/notion-setup"
               element={<NotionSetupGuide />}
+            />
+            <Route
+              path="cloud-documents/docs/google-drive-setup"
+              element={<GoogleDriveSetupGuide />}
             />
             <Route
               path="external-services"

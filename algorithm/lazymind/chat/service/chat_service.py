@@ -15,7 +15,13 @@ from lazymind.chat.config import (
     SENSITIVE_FILTER_RESPONSE_TEXT,
     SENSITIVE_WORDS_PATH,
 )
-from lazymind.chat.engine.prompts import build_system_prompt
+from lazymind.chat.engine.prompts import (
+    build_system_prompt,
+    fallback_task_profile,
+    resolve_task_profile,
+    select_skill_candidates,
+    selected_prompt_modules,
+)
 from lazymind.chat.service.chat_request import ChatRequest
 from lazymind.chat.service.component import (
     AgentEventFrameTranslator,
@@ -150,6 +156,12 @@ def _build_subagent_chat_tools(has_subagents: bool) -> list:
             get_subagent_artifacts,
         ])
     return tools
+
+
+def _build_chat_artifact_tools() -> list:
+    """Tools for artifacts produced directly by the main ChatAgent."""
+    from lazymind.chat.engine.tools.chat_artifact import save_chat_artifact
+    return [save_chat_artifact]
 
 
 def _build_user_attachment_tools(has_files: bool) -> list:
@@ -352,6 +364,7 @@ async def handle_chat(request: ChatRequest) -> Union[Dict[str, Any], StreamingRe
     personalization = request.personalization
     agent = request.agent
     plugin = request.plugin
+    explicit_resources = request.explicit_resource_bindings
     from lazymind.chat.plugin.plugin_manager import (
         _build_chat_agent_task_context,
         guard_plugin_agent_stream,
@@ -404,6 +417,15 @@ async def handle_chat(request: ChatRequest) -> Union[Dict[str, Any], StreamingRe
     resolved_files = validate_and_resolve_files(flat_files)
     filters['kb_id'] = _normalize_kb_id_filter(filters.get('kb_id'))
     LOG.info(f'[KBToolGroup_DEBUG] filters={filters!r} kb_id={filters.get("kb_id")!r}')
+    explicit_resource_payload = explicit_resources.model_dump()
+    selected_kb_ids = filters.get('kb_id')
+    if selected_kb_ids and not explicit_resource_payload['knowledge_base_ids']:
+        explicit_resource_payload['knowledge_base_ids'] = (
+            selected_kb_ids if isinstance(selected_kb_ids, list) else [selected_kb_ids]
+        )
+    active_plugin_ref = str((plugin.plugin_context or {}).get('plugin_ref') or '').strip()
+    if active_plugin_ref and not explicit_resource_payload['plugin_refs']:
+        explicit_resource_payload['plugin_refs'] = [active_plugin_ref]
 
     raw_history = list(message.history) if isinstance(message.history, list) else []
     agent_history = normalize_history_for_agent(raw_history)
@@ -477,9 +499,89 @@ async def handle_chat(request: ChatRequest) -> Union[Dict[str, Any], StreamingRe
     inject_reader_config(ocr_config=runtime.ocr_config)
     lazyllm.globals['agentic_config'] = agentic_config
 
-    plugin_tools, plugin_system_prompt, plugin_stop_tools, agentic_config_patch, plugin_artifact_context = \
-        resolve_plugin_injection(plugin.plugin_context, conversation_id=conversation_id, plugin_catalog=plugin.catalog,
-                                 disabled_builtin_plugins=plugin.disabled_builtin_plugins)
+    task_profile = None
+    if _cfg['dynamic_prompt_modules']:
+        allow_routing_model = _cfg['task_profile_llm_fallback']
+        routing_model = AutoModel(model='llm') if allow_routing_model else None
+        profile_started = time.monotonic()
+        try:
+            task_profile = await asyncio.wait_for(
+                asyncio.to_thread(
+                    resolve_task_profile,
+                    language_query,
+                    history=agent_history,
+                    intent=conversation.intent_context,
+                    classifier=routing_model,
+                    enable_llm_fallback=allow_routing_model,
+                    has_attachments=bool(files_map),
+                    explicit_resources=explicit_resource_payload,
+                ),
+                timeout=max(1, _cfg['task_profile_llm_timeout']),
+            )
+        except asyncio.TimeoutError as exc:
+            task_profile = fallback_task_profile(
+                language_query,
+                error=exc,
+                latency_ms=int((time.monotonic() - profile_started) * 1000),
+                has_attachments=bool(files_map),
+                explicit_resources=explicit_resource_payload,
+            )
+        LOG.info(
+            '[ChatServer] [TASK_PROFILE] [sid=%s] source=%s outcome=%s deliverable=%s '
+            'modules_dynamic=true skill_mode=%s latency_ms=%s error=%s',
+            conversation.session_id,
+            task_profile.source,
+            task_profile.primary_outcome,
+            task_profile.deliverable_kind,
+            task_profile.skill_mode,
+            task_profile.router_latency_ms,
+            task_profile.router_error,
+        )
+
+        excluded_kb_ids = set(task_profile.excluded_resources.knowledge_base_ids)
+        if excluded_kb_ids and agentic_config.get('filters'):
+            effective_filters = dict(agentic_config['filters'])
+            configured_kb_ids = effective_filters.get('kb_id')
+            configured_kb_ids = (
+                configured_kb_ids if isinstance(configured_kb_ids, list) else [configured_kb_ids]
+            )
+            remaining_kb_ids = [
+                value for value in configured_kb_ids
+                if value and value not in excluded_kb_ids
+            ]
+            effective_filters['kb_id'] = (
+                remaining_kb_ids[0] if len(remaining_kb_ids) == 1 else (remaining_kb_ids or None)
+            )
+            agentic_config['filters'] = effective_filters
+
+    excluded_plugin_refs = set(
+        task_profile.excluded_resources.plugin_refs if task_profile else ()
+    )
+    effective_plugin_context = plugin.plugin_context
+    if str((effective_plugin_context or {}).get('plugin_ref') or '') in excluded_plugin_refs:
+        effective_plugin_context = None
+    effective_plugin_catalog = [
+        item for item in plugin.catalog
+        if str(item.get('plugin_ref') or '') not in excluded_plugin_refs
+    ]
+    effective_disabled_builtin_plugins = list(plugin.disabled_builtin_plugins)
+    effective_disabled_builtin_plugins.extend(
+        ref.removeprefix('builtin:') for ref in excluded_plugin_refs
+        if ref.startswith('builtin:')
+    )
+
+    (
+        plugin_tools,
+        plugin_system_prompt,
+        plugin_stop_tools,
+        agentic_config_patch,
+        plugin_artifact_context,
+    ) = resolve_plugin_injection(
+        effective_plugin_context,
+        conversation_id=conversation_id,
+        plugin_catalog=effective_plugin_catalog,
+        disabled_builtin_plugins=list(dict.fromkeys(effective_disabled_builtin_plugins)),
+    )
     agentic_config.update(agentic_config_patch)
 
     # Inject SubAgent task context into the system prompt independently of plugin state.
@@ -525,6 +627,7 @@ async def handle_chat(request: ChatRequest) -> Union[Dict[str, Any], StreamingRe
     disabled = set(agent.disabled_tools or [])
     active_configs = filter_tools(
         [cfg for cfg in DEFAULT_TOOLS if cfg.name not in disabled],
+        user_query=language_query,
     )
     agent_tools = build_agent_tools(active_configs)
     # Respect enable_subagent flag: when false, suppress create_subagent and related tools.
@@ -542,8 +645,14 @@ async def handle_chat(request: ChatRequest) -> Union[Dict[str, Any], StreamingRe
     # not merely discouraged by prompt text.
     allow_ask_user = _should_register_ask_user(agentic_config)
     ask_user_tools = _build_ask_user_tool() if allow_ask_user else []
-    all_tools = (agent_tools + subagent_tools + attachment_tools
+    artifact_tools = _build_chat_artifact_tools()
+    all_tools = (agent_tools + artifact_tools + subagent_tools + attachment_tools
                  + schedule_tools + ask_user_tools + plugin_tools + mcp_tools)
+    skill_config = agent.available_skills
+    selected_skills = agent.available_skills
+    if task_profile is not None:
+        selected_skills = select_skill_candidates(agent.available_skills, language_query, task_profile)
+        skill_config = selected_skills or False
     set_trace_context({
         'enabled': bool(runtime.trace),
         'trace_id': conversation.session_id if runtime.trace else None,
@@ -551,6 +660,12 @@ async def handle_chat(request: ChatRequest) -> Union[Dict[str, Any], StreamingRe
         'sampled': True,
         'module_trace': {'default': True},
         'request_tags': ['handle_chat'],
+        'task_profile_source': task_profile.source if task_profile else 'disabled',
+        'task_profile': task_profile.to_trace_dict() if task_profile else {},
+        'router_latency_ms': task_profile.router_latency_ms if task_profile else 0,
+        'router_error': task_profile.router_error if task_profile else '',
+        'prompt_modules': selected_prompt_modules(task_profile) if task_profile else [],
+        'skills_exposed': list(selected_skills or []),
     })
     runtime_prompt = build_system_prompt(
         {cfg.name for cfg in active_configs},
@@ -561,6 +676,8 @@ async def handle_chat(request: ChatRequest) -> Union[Dict[str, Any], StreamingRe
         files=display_files,
         current_query=language_query,
         conversation_history=agent_history,
+        task_profile=task_profile,
+        dynamic_prompt_modules=_cfg['dynamic_prompt_modules'],
     )
     if plugin_system_prompt:
         runtime_prompt = runtime_prompt + '\n\n' + plugin_system_prompt
@@ -572,7 +689,7 @@ async def handle_chat(request: ChatRequest) -> Union[Dict[str, Any], StreamingRe
         tools=all_tools,
         force_summarize_context=query,
         prompt=runtime_prompt,
-        skills=agent.available_skills,
+        skills=skill_config,
         workspace=_cfg['agentic_workspace'],
         keep_full_turns=_cfg['agentic_keep_full_turns'],
         fs=FS,

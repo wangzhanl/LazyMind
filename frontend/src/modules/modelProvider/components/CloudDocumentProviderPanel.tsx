@@ -9,18 +9,24 @@ import {
 } from "../utils/cloudDocumentUrls";
 import type { CloudDocumentProvidersVm } from "../hooks/useCloudDocumentProviders";
 
-function getProviderTitle(type: "feishu" | "notion" | "local", t: CloudDocumentProvidersVm["t"]) {
+function getProviderTitle(
+  type: "feishu" | "notion" | "local" | "googledrive",
+  t: CloudDocumentProvidersVm["t"],
+) {
   if (type === "local") {
     return t("modelProvider.cloudDocuments.localTitle");
   }
   if (type === "feishu") {
     return t("modelProvider.cloudDocuments.feishuTitle");
   }
+  if (type === "googledrive") {
+    return t("modelProvider.external.googleDriveTitle");
+  }
   return t("modelProvider.cloudDocuments.notionTitle");
 }
 
 function getProviderDescription(
-  type: "feishu" | "notion" | "local",
+  type: "feishu" | "notion" | "local" | "googledrive",
   t: CloudDocumentProvidersVm["t"],
   vm: CloudDocumentProvidersVm,
 ) {
@@ -41,6 +47,13 @@ function getProviderDescription(
     }
     return t("modelProvider.cloudDocuments.feishuAuthReadyHint");
   }
+  if (type === "googledrive") {
+    return vm.googleDriveConnection
+      ? t("admin.dataSourceGoogleDriveConnected", {
+          account: vm.googleDriveConnection.accountName,
+        })
+      : t("modelProvider.external.googleDriveDesc");
+  }
 
   if (vm.isNotionAuthValid) {
     return t("modelProvider.cloudDocuments.notionConnected", {
@@ -59,10 +72,12 @@ export default function CloudDocumentProviderPanel({ vm }: { vm: CloudDocumentPr
     canCreateLocalSource,
     isFeishuAuthValid,
     isNotionAuthValid,
+    isGoogleDriveAuthValid,
     isFeishuSetupReady,
     isNotionSetupReady,
     handleManageFeishuAuth,
     handleManageLocalSource,
+    handleManageGoogleDrive,
     handleOpenNotionSetup,
   } = vm;
 
@@ -99,9 +114,14 @@ export default function CloudDocumentProviderPanel({ vm }: { vm: CloudDocumentPr
 
       {cloudAuthProviderOptions.map((item) => {
         const isFeishu = item.type === "feishu";
-        const isAuthValid = isFeishu ? isFeishuAuthValid : isNotionAuthValid;
+        const isGoogleDrive = item.type === "googledrive";
+        const isAuthValid = isFeishu
+          ? isFeishuAuthValid
+          : isGoogleDrive
+            ? isGoogleDriveAuthValid
+            : isNotionAuthValid;
         const isSetupReady = isFeishu ? isFeishuSetupReady : isNotionSetupReady;
-        const isProviderLocked = !isAuthValid && !isSetupReady;
+        const isProviderLocked = !isGoogleDrive && !isAuthValid && !isSetupReady;
         const authStatusText = isAuthValid
           ? t("modelProvider.cloudDocuments.authValid")
           : isProviderLocked
@@ -116,6 +136,10 @@ export default function CloudDocumentProviderPanel({ vm }: { vm: CloudDocumentPr
             onClick={() => {
               if (isFeishu) {
                 handleManageFeishuAuth();
+                return;
+              }
+              if (isGoogleDrive) {
+                handleManageGoogleDrive();
                 return;
               }
               handleOpenNotionSetup();

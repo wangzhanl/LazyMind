@@ -137,27 +137,42 @@ func subagentWorkspaceRoot() string {
 	return "/data/subagent"
 }
 
+func relativePathUnderRoot(fullPath, root string) (string, bool) {
+	cleanPath := filepath.Clean(strings.TrimSpace(fullPath))
+	cleanRoot := filepath.Clean(strings.TrimSpace(root))
+	rel, err := filepath.Rel(cleanRoot, cleanPath)
+	if err == nil && rel != "." && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return rel, true
+	}
+
+	resolvedPath, pathErr := filepath.EvalSymlinks(cleanPath)
+	resolvedRoot, rootErr := filepath.EvalSymlinks(cleanRoot)
+	if pathErr != nil || rootErr != nil {
+		return "", false
+	}
+	rel, err = filepath.Rel(resolvedRoot, resolvedPath)
+	if err != nil || rel == "." || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return "", false
+	}
+	return rel, true
+}
+
 func fileRelativePath(fullPath string) string {
 	p := strings.TrimSpace(fullPath)
 	if p == "" {
 		return ""
 	}
-	cleanPath := filepath.Clean(p)
-	subRoot := filepath.Clean(subagentWorkspaceRoot())
-	if rel, err := filepath.Rel(subRoot, cleanPath); err == nil &&
-		rel != "." && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+	if rel, ok := relativePathUnderRoot(p, subagentWorkspaceRoot()); ok {
 		return "subagent/" + filepath.ToSlash(rel)
 	}
 	root := strings.TrimSpace(uploadRoot())
 	if root == "" {
 		return ""
 	}
-	cleanRoot := filepath.Clean(root)
-	rel, err := filepath.Rel(cleanRoot, cleanPath)
-	if err != nil || rel == "." || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
-		return ""
+	if rel, ok := relativePathUnderRoot(p, root); ok {
+		return filepath.ToSlash(rel)
 	}
-	return filepath.ToSlash(rel)
+	return ""
 }
 
 func relFromStaticFilesURL(raw string) string {

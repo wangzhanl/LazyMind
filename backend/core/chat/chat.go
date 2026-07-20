@@ -52,13 +52,21 @@ type DatasetFilters struct {
 }
 
 type LazyChatRequest struct {
-	Message         ChatMessageOptions         `json:"message"`
-	Conversation    ChatConversationOptions    `json:"conversation"`
-	Retrieval       ChatRetrievalOptions       `json:"retrieval,omitempty"`
-	Runtime         ChatRuntimeOptions         `json:"runtime,omitempty"`
-	Personalization ChatPersonalizationOptions `json:"personalization,omitempty"`
-	Agent           ChatAgentOptions           `json:"agent,omitempty"`
-	Plugin          ChatPluginOptions          `json:"plugin,omitempty"`
+	Message           ChatMessageOptions         `json:"message"`
+	Conversation      ChatConversationOptions    `json:"conversation"`
+	Retrieval         ChatRetrievalOptions       `json:"retrieval,omitempty"`
+	Runtime           ChatRuntimeOptions         `json:"runtime,omitempty"`
+	Personalization   ChatPersonalizationOptions `json:"personalization,omitempty"`
+	Agent             ChatAgentOptions           `json:"agent,omitempty"`
+	Plugin            ChatPluginOptions          `json:"plugin,omitempty"`
+	ExplicitResources ExplicitResourceBindings   `json:"explicit_resource_bindings,omitempty"`
+}
+
+type ExplicitResourceBindings struct {
+	SkillNames       []string            `json:"skill_names,omitempty"`
+	KnowledgeBaseIDs []string            `json:"knowledge_base_ids,omitempty"`
+	PluginRefs       []string            `json:"plugin_refs,omitempty"`
+	Mentions         []map[string]string `json:"mentions,omitempty"`
 }
 
 type ChatMessageOptions struct {
@@ -70,10 +78,11 @@ type ChatMessageOptions struct {
 }
 
 type ChatConversationOptions struct {
-	SessionID      string `json:"session_id"`
-	ConversationID string `json:"conversation_id,omitempty"`
-	UserID         string `json:"user_id"`
-	Mode           string `json:"mode,omitempty"`
+	SessionID      string         `json:"session_id"`
+	ConversationID string         `json:"conversation_id,omitempty"`
+	UserID         string         `json:"user_id"`
+	Mode           string         `json:"mode,omitempty"`
+	IntentContext  map[string]any `json:"intent_context,omitempty"`
 }
 
 type ChatRetrievalOptions struct {
@@ -113,6 +122,7 @@ type ChatPluginOptions struct {
 	PluginContext          map[string]any   `json:"plugin_context,omitempty"`
 	Catalog                []map[string]any `json:"catalog,omitempty"`
 	DisabledBuiltinPlugins []string         `json:"disabled_builtin_plugins,omitempty"`
+	AllowedPluginRefs      []string         `json:"allowed_plugin_refs,omitempty"`
 }
 
 // LazyChatData text data text。
@@ -122,6 +132,7 @@ type LazyChatData struct {
 	Status                 string                       `json:"status"`
 	ReasoningText          string                       `json:"think"`
 	TaskCreated            *TaskCreatedEvent            `json:"task_created,omitempty"`
+	ArtifactCreated        *ArtifactCreatedEvent        `json:"artifact_created,omitempty"`
 	AskPending             *AskPendingEvent             `json:"ask_pending,omitempty"`
 	IntentUpdated          *IntentUpdatedEvent          `json:"intent_updated,omitempty"`
 	PluginPreflightUpdated *PluginPreflightUpdatedEvent `json:"plugin_preflight_updated,omitempty"`
@@ -142,6 +153,16 @@ type TaskCreatedEvent struct {
 	OutputSlots []string       `json:"output_slots"`
 	Tools       []string       `json:"tools,omitempty"`
 	Resume      bool           `json:"resume,omitempty"`
+}
+
+// ArtifactCreatedEvent is emitted by the main Agent's artifact tools.
+// Core binds it to the authoritative conversation and history IDs of this request.
+type ArtifactCreatedEvent struct {
+	ArtifactID  string          `json:"artifact_id"`
+	Filename    string          `json:"filename"`
+	ContentType string          `json:"content_type"`
+	Value       json.RawMessage `json:"value"`
+	Caption     *string         `json:"caption,omitempty"`
 }
 
 // AskQuestion is a single question within an AskPendingEvent.
@@ -333,6 +354,7 @@ type UpstreamStreamChunk struct {
 	Sources                []any                        `json:"sources"`
 	ReasoningText          string                       `json:"reasoning_text"` // text think
 	TaskCreated            *TaskCreatedEvent            `json:"task_created,omitempty"`
+	ArtifactCreated        *ArtifactCreatedEvent        `json:"artifact_created,omitempty"`
 	AskPending             *AskPendingEvent             `json:"ask_pending,omitempty"`
 	IntentUpdated          *IntentUpdatedEvent          `json:"intent_updated,omitempty"`
 	PluginPreflightUpdated *PluginPreflightUpdatedEvent `json:"plugin_preflight_updated,omitempty"`
@@ -403,6 +425,9 @@ func buildLazyChatRequest(body map[string]any) *LazyChatRequest {
 	if convID, ok := body["conversation_id"].(string); ok {
 		req.Conversation.ConversationID = strings.TrimSpace(convID)
 	}
+	if intentContext, ok := body["intent_context"].(map[string]any); ok {
+		req.Conversation.IntentContext = intentContext
+	}
 	if debug, ok := body["debug"].(bool); ok {
 		req.Runtime.Debug = debug
 	}
@@ -465,6 +490,17 @@ func buildLazyChatRequest(body map[string]any) *LazyChatRequest {
 	}
 	if ids, ok := body["disabled_builtin_plugins"].([]string); ok {
 		req.Plugin.DisabledBuiltinPlugins = ids
+	}
+	if refs, ok := body["allowed_plugin_refs"].([]string); ok {
+		req.Plugin.AllowedPluginRefs = refs
+	}
+	if bindings, ok := body["explicit_resource_bindings"].(map[string]any); ok {
+		req.ExplicitResources = ExplicitResourceBindings{
+			SkillNames:       stringSlice(bindings["skill_names"]),
+			KnowledgeBaseIDs: stringSlice(bindings["knowledge_base_ids"]),
+			PluginRefs:       stringSlice(bindings["plugin_refs"]),
+			Mentions:         stringMapSlice(bindings["mentions"]),
+		}
 	}
 	// current_turn_seq is an int in the body map. JSON numbers decode as float64.
 	switch v := body["current_turn_seq"].(type) {
@@ -614,6 +650,33 @@ func stringSlice(v any) []string {
 	return result
 }
 
+func stringMapSlice(v any) []map[string]string {
+	if typed, ok := v.([]map[string]string); ok {
+		return typed
+	}
+	raw, ok := v.([]any)
+	if !ok {
+		return nil
+	}
+	result := make([]map[string]string, 0, len(raw))
+	for _, item := range raw {
+		values, ok := item.(map[string]any)
+		if !ok {
+			continue
+		}
+		entry := map[string]string{}
+		for _, key := range []string{"resource_type", "resource_ref", "display_name"} {
+			if value, ok := values[key].(string); ok && strings.TrimSpace(value) != "" {
+				entry[key] = strings.TrimSpace(value)
+			}
+		}
+		if entry["resource_type"] != "" && entry["resource_ref"] != "" {
+			result = append(result, entry)
+		}
+	}
+	return result
+}
+
 func anySlice(v any) []any {
 	if raw, ok := v.([]any); ok {
 		if len(raw) == 0 {
@@ -722,6 +785,7 @@ func StreamChatUpstream(ctx context.Context, baseURL string, body map[string]any
 				Sources:                d.Resp.Data.Sources,
 				ReasoningText:          d.Resp.Data.ReasoningText,
 				TaskCreated:            d.Resp.Data.TaskCreated,
+				ArtifactCreated:        d.Resp.Data.ArtifactCreated,
 				AskPending:             d.Resp.Data.AskPending,
 				IntentUpdated:          d.Resp.Data.IntentUpdated,
 				PluginPreflightUpdated: d.Resp.Data.PluginPreflightUpdated,
