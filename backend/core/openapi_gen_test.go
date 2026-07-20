@@ -425,6 +425,7 @@ func TestOpenAPISpecCoversEvolutionSkillMemoryPreferenceOperations(t *testing.T)
 		{"get", "/api/core/skills", false, true, true},
 		{"get", "/api/core/skills/tags", false, false, true},
 		{"get", "/api/core/skills/categories", false, false, true},
+		{"get", "/api/core/skill-market/tags", false, false, true},
 		{"post", "/api/core/skills", true, false, true},
 		{"get", "/api/core/skills/{skill_id}", false, true, true},
 		{"patch", "/api/core/skills/{skill_id}", true, true, true},
@@ -476,7 +477,6 @@ func TestOpenAPISpecCoversEvolutionSkillMemoryPreferenceOperations(t *testing.T)
 		{"get", "/api/core/skill-review:summary", false, false, false},
 		{"post", "/api/core/skill-review:run", false, false, false},
 		{"get", "/api/core/skill-review/tasks", false, false, false},
-		{"get", "/api/core/skill-review-results/{review_result_id}", false, false, false},
 		{"get", "/api/core/agent/threads", false, true, true},
 		{"get", "/api/core/conversations/{name}:history", false, true, true},
 	}
@@ -540,6 +540,7 @@ func TestOpenAPISpecCoversEvolutionSkillMemoryPreferenceOperations(t *testing.T)
 		"/api/core/user-preference:confirm",
 		"/api/core/user-preference:discard",
 		"/api/core/skill-review-results",
+		"/api/core/skill-review-results/{review_result_id}",
 		"/api/core/skill-review-results/{review_result_id}:accept",
 		"/api/core/skill-review-results/{review_result_id}:reject",
 		"/api/core/memory-review-results",

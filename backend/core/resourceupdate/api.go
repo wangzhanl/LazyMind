@@ -390,21 +390,6 @@ type skillReviewStatsCounts struct {
 	FailedCount  int64
 }
 
-func findSkillReviewStatsRow(ctx context.Context, db *gorm.DB, userID, idOrRequestID string) (skillReviewStatsRow, error) {
-	key := strings.TrimSpace(idOrRequestID)
-	if key == "" {
-		return skillReviewStatsRow{}, errReviewInvalid
-	}
-	var row skillReviewStatsRow
-	err := db.WithContext(ctx).
-		Table("skill_review_stats").
-		Select("id, requestid, userid, status, started_at, duration_ms, summary").
-		Where("userid = ? AND (id = ? OR requestid = ?)", strings.TrimSpace(userID), key, key).
-		Order("started_at DESC, id DESC").
-		Take(&row).Error
-	return row, err
-}
-
 func skillReviewStatsToResponse(row skillReviewStatsRow) skillReviewStatsResponse {
 	summary, counts := parseSkillReviewStatsSummary(row.Summary)
 	return skillReviewStatsResponse{
@@ -560,20 +545,6 @@ func summaryArrayLen(summary map[string]any, keys ...string) int64 {
 		}
 	}
 	return 0
-}
-
-func GetSkillReviewResult(w http.ResponseWriter, r *http.Request) {
-	db, userID, ok := requestDBAndUser(w, r)
-	if !ok {
-		return
-	}
-	statsID := common.PathVar(r, "review_result_id")
-	row, err := findSkillReviewStatsRow(r.Context(), db, userID, statsID)
-	if err != nil {
-		mapReviewError(w, err, "query skill review result")
-		return
-	}
-	common.ReplyOK(w, skillReviewStatsToResponse(row))
 }
 
 func AcceptSkillReviewResult(w http.ResponseWriter, r *http.Request) {

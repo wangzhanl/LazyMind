@@ -78,7 +78,7 @@ func TestAutoEvoDraftWaitsForEditorThenCommits(t *testing.T) {
 		Content: skillContent("auto-draft", "old"), Version: 1, AutoEvo: true, IsEnabled: true,
 		CreatedAt: now.Add(-time.Hour), UpdatedAt: now.Add(-time.Hour), CreateUserID: "user-1",
 	})
-	newContent := skillContent("auto-draft", "new")
+	newContent := skillContent("auto-draft-renamed", "new")
 	newHash := evolution.HashContent(newContent)
 	if err := db.Create(&orm.SkillV2Blob{
 		Hash: newHash, Size: int64(len(newContent)), Mime: "text/markdown; charset=utf-8", FileType: "markdown",
@@ -136,6 +136,13 @@ func TestAutoEvoDraftWaitsForEditorThenCommits(t *testing.T) {
 	}
 	if got := readSkillV2HeadContent(t, db, "skill-auto-draft"); got != newContent {
 		t.Fatalf("committed content = %q, want %q", got, newContent)
+	}
+	var published orm.SkillV2Skill
+	if err := db.Where("id = ?", "skill-auto-draft").Take(&published).Error; err != nil {
+		t.Fatalf("load published skill: %v", err)
+	}
+	if published.SkillName != "auto-draft-renamed" || published.Description != "auto-draft-renamed description" || published.RelativeRoot != "system/auto-draft-renamed" {
+		t.Fatalf("auto-committed metadata not synchronized: %#v", published)
 	}
 	var draft orm.SkillV2Draft
 	if err := db.Take(&draft, "skill_id = ?", "skill-auto-draft").Error; err != nil {
@@ -249,35 +256,6 @@ func TestAutoEvoCreateDraftCommitsInitialRevisionAfterEditorIdle(t *testing.T) {
 	}
 	if draft.BaseRevisionID == nil || *draft.BaseRevisionID != *skill.HeadRevisionID || draft.DraftStatus != "" {
 		t.Fatalf("reset draft = %#v", draft)
-	}
-}
-
-func TestAcceptSkillReviewResultsMapsDraftTaskIDToRequestID(t *testing.T) {
-	db := newResourceUpdateTestDB(t)
-	createSkillReviewResultsTable(t, db)
-	now := time.Date(2026, 7, 13, 10, 0, 0, 0, time.UTC)
-	insertSkillReviewStats(t, db, map[string]any{
-		"id":          "review_request_20260713100000_user-1",
-		"requestid":   "review_request",
-		"userid":      "user-1",
-		"status":      "completed",
-		"started_at":  now.Format(time.RFC3339Nano),
-		"duration_ms": 100,
-		"summary":     "{}",
-	})
-	insertFullSkillReviewResult(t, db, SkillReviewResult{
-		ID:           "result-1",
-		UserID:       "user-1",
-		RequestID:    "review_request",
-		ReviewStatus: reviewStatusPending,
-		Time:         now,
-	})
-
-	if err := acceptSkillReviewResultsForDraftTask(context.Background(), db, "user-1", "review_request_20260713100000_user-1"); err != nil {
-		t.Fatalf("accept review result: %v", err)
-	}
-	if status := skillReviewResultStatus(t, db, "result-1"); status != reviewStatusAccepted {
-		t.Fatalf("review result status = %q, want accepted", status)
 	}
 }
 
@@ -1468,7 +1446,7 @@ func TestMemoryWorkerSendsCombinedMemoryReviewRequest(t *testing.T) {
 	}
 }
 
-func TestScannerCreatesAutoApplyTasksAndExpiresOlderSkillPatches(t *testing.T) {
+func TestScannerIgnoresDeprecatedSkillResultsAndScansMemory(t *testing.T) {
 	db := newResourceUpdateTestDB(t)
 	createSkillReviewResultsTable(t, db)
 	createMemoryReviewTable(t, db)
@@ -1519,26 +1497,17 @@ func TestScannerCreatesAutoApplyTasksAndExpiresOlderSkillPatches(t *testing.T) {
 	if err != nil {
 		t.Fatalf("scanner run: %v", err)
 	}
-	if result.SkillResultsExpired != 1 || result.SkillTasksCreated != 1 || result.MemoryTasksCreated != 1 || result.UserPreferenceTasksCreated != 0 {
+	if result.SkillResultsExpired != 0 || result.SkillTasksCreated != 0 || result.MemoryTasksCreated != 1 || result.UserPreferenceTasksCreated != 0 {
 		t.Fatalf("unexpected scanner result: %#v", result)
 	}
-	if status := skillReviewResultStatus(t, db, "patch-old"); status != reviewStatusExpired {
-		t.Fatalf("expected old patch expired, got %s", status)
-	}
-	for _, id := range []string{"patch-new", "manual-patch"} {
+	for _, id := range []string{"patch-old", "patch-new", "new-skill", "manual-patch"} {
 		if status := skillReviewResultStatus(t, db, id); status != reviewStatusPending {
 			t.Fatalf("expected %s pending, got %s", id, status)
 		}
 	}
-	if status := skillReviewResultStatus(t, db, "new-skill"); status != reviewStatusAccepted {
-		t.Fatalf("expected new-skill accepted, got %s", status)
-	}
 	var createdSkill orm.SkillV2Skill
-	if err := db.Take(&createdSkill, "owner_user_id = ? AND skill_name = ?", "user-1", "brand-new").Error; err != nil {
-		t.Fatalf("read auto-created skill: %v", err)
-	}
-	if createdSkill.AutoEvo {
-		t.Fatal("expected auto-created new skill auto_evo=false")
+	if err := db.Take(&createdSkill, "owner_user_id = ? AND skill_name = ?", "user-1", "brand-new").Error; !errors.Is(err, gorm.ErrRecordNotFound) {
+		t.Fatalf("deprecated result created skill: %v", err)
 	}
 	result, err = scanner.RunOnce(ctx)
 	if err != nil {
@@ -1551,8 +1520,8 @@ func TestScannerCreatesAutoApplyTasksAndExpiresOlderSkillPatches(t *testing.T) {
 	if err := db.Model(&orm.ResourceUpdateTask{}).Where("task_type = ?", orm.ResourceUpdateTaskTypeAutoApplyReview).Count(&taskCount).Error; err != nil {
 		t.Fatalf("count tasks: %v", err)
 	}
-	if taskCount != 2 {
-		t.Fatalf("expected two auto apply tasks, got %d", taskCount)
+	if taskCount != 1 {
+		t.Fatalf("expected one memory auto apply task, got %d", taskCount)
 	}
 	var tasks []orm.ResourceUpdateTask
 	if err := db.Order("resource_type ASC").Find(&tasks, "task_type = ?", orm.ResourceUpdateTaskTypeAutoApplyReview).Error; err != nil {
@@ -1562,16 +1531,13 @@ func TestScannerCreatesAutoApplyTasksAndExpiresOlderSkillPatches(t *testing.T) {
 		if task.TriggerType != orm.ResourceUpdateTriggerTypeReviewResult {
 			t.Fatalf("expected review_result trigger, got %#v", task)
 		}
-		if task.ResourceType == orm.ResourceUpdateResourceTypeSkill && task.TriggerID != "skill_review_results:patch-new" {
-			t.Fatalf("unexpected skill trigger id: %s", task.TriggerID)
-		}
 		if task.ResourceType == orm.ResourceUpdateResourceTypeMemory && task.TriggerID != "memory_review:memory-result" {
 			t.Fatalf("unexpected memory trigger id: %s", task.TriggerID)
 		}
 	}
 }
 
-func TestScannerExpiresUnmappableSkillPatchAndFailedAutoApplyBlocksRecreate(t *testing.T) {
+func TestScannerLeavesDeprecatedSkillResultsUntouched(t *testing.T) {
 	db := newResourceUpdateTestDB(t)
 	createSkillReviewResultsTable(t, db)
 	createMemoryReviewTable(t, db)
@@ -1615,11 +1581,11 @@ func TestScannerExpiresUnmappableSkillPatchAndFailedAutoApplyBlocksRecreate(t *t
 	if err != nil {
 		t.Fatalf("scanner run: %v", err)
 	}
-	if result.SkillResultsExpired != 1 || result.SkillTasksCreated != 0 {
+	if result.SkillResultsExpired != 0 || result.SkillTasksCreated != 0 {
 		t.Fatalf("unexpected scanner result: %#v", result)
 	}
-	if status := skillReviewResultStatus(t, db, "missing-skill"); status != reviewStatusExpired {
-		t.Fatalf("expected missing skill patch expired, got %s", status)
+	if status := skillReviewResultStatus(t, db, "missing-skill"); status != reviewStatusPending {
+		t.Fatalf("expected missing skill patch pending, got %s", status)
 	}
 	if status := skillReviewResultStatus(t, db, "blocked-result"); status != reviewStatusPending {
 		t.Fatalf("expected blocked result to remain pending, got %s", status)
@@ -1636,7 +1602,7 @@ func TestScannerExpiresUnmappableSkillPatchAndFailedAutoApplyBlocksRecreate(t *t
 	}
 }
 
-func TestScanPendingResultsForResourceUsesAutoEvoEnabledTrigger(t *testing.T) {
+func TestScanPendingResultsForSkillIgnoresDeprecatedResults(t *testing.T) {
 	db := newResourceUpdateTestDB(t)
 	createSkillReviewResultsTable(t, db)
 	ctx := context.Background()
@@ -1662,19 +1628,16 @@ func TestScanPendingResultsForResourceUsesAutoEvoEnabledTrigger(t *testing.T) {
 	if err := ScanPendingResultsForResource(ctx, db, orm.ResourceUpdateResourceTypeSkill, "user-1", "skill-compensate"); err != nil {
 		t.Fatalf("scan pending result for resource: %v", err)
 	}
-	var task orm.ResourceUpdateTask
-	if err := db.Take(&task, "review_result_id = ?", "pending-compensate").Error; err != nil {
-		t.Fatalf("read compensation task: %v", err)
+	var count int64
+	if err := db.Model(&orm.ResourceUpdateTask{}).Where("review_result_id = ?", "pending-compensate").Count(&count).Error; err != nil {
+		t.Fatalf("count compensation tasks: %v", err)
 	}
-	if task.TriggerType != orm.ResourceUpdateTriggerTypeAutoEvoEnabled {
-		t.Fatalf("expected auto_evo_enabled trigger, got %s", task.TriggerType)
-	}
-	if task.TriggerID != "skill:skill-compensate:pending-compensate:3" {
-		t.Fatalf("unexpected compensation trigger id: %s", task.TriggerID)
+	if count != 0 {
+		t.Fatalf("compensation task count = %d, want 0", count)
 	}
 }
 
-func TestAutoApplyReviewRechecksAutoEvoAndAppliesWhenStillValid(t *testing.T) {
+func TestAutoApplyReviewSkipsDeprecatedSkillResult(t *testing.T) {
 	db := newResourceUpdateTestDB(t)
 	createSkillReviewResultsTable(t, db)
 	ctx := context.Background()
@@ -1718,19 +1681,19 @@ func TestAutoApplyReviewRechecksAutoEvoAndAppliesWhenStillValid(t *testing.T) {
 	if err != nil {
 		t.Fatalf("worker run: %v", err)
 	}
-	if result.Done != 1 {
-		t.Fatalf("expected done auto apply, got %#v", result)
+	if result.Skipped != 1 {
+		t.Fatalf("expected skipped auto apply, got %#v", result)
 	}
 	var updated orm.SkillV2Skill
 	if err := db.Take(&updated, "id = ?", "skill-apply").Error; err != nil {
 		t.Fatalf("read skill: %v", err)
 	}
 	updatedContent := readSkillV2HeadContent(t, db, updated.ID)
-	if updatedContent != newContent || updated.Version != 3 {
-		t.Fatalf("skill not applied correctly: version=%d content=%q", updated.Version, updatedContent)
+	if updatedContent != oldContent || updated.Version != 2 {
+		t.Fatalf("deprecated result changed skill: version=%d content=%q", updated.Version, updatedContent)
 	}
-	if status := skillReviewResultStatus(t, db, "patch-apply"); status != reviewStatusAccepted {
-		t.Fatalf("expected accepted result, got %s", status)
+	if status := skillReviewResultStatus(t, db, "patch-apply"); status != reviewStatusPending {
+		t.Fatalf("expected pending result, got %s", status)
 	}
 }
 
@@ -1847,77 +1810,6 @@ func TestSkillAcceptRejectAndUserFiltering(t *testing.T) {
 	}
 	if status := skillReviewResultStatus(t, db, "reject-1"); status != reviewStatusRejected {
 		t.Fatalf("expected rejected status, got %s", status)
-	}
-}
-
-func TestSkillReviewResultDetailReturnsRunStats(t *testing.T) {
-	db := newResourceUpdateTestDB(t)
-	createSkillReviewStatsTable(t, db)
-	store.Init(db, nil, nil)
-	t.Cleanup(func() { store.Init(nil, nil, nil) })
-	now := time.Date(2026, 6, 9, 10, 0, 0, 0, time.UTC)
-	insertSkillReviewStats(t, db, map[string]any{
-		"id":          "stats-detail",
-		"requestid":   "request-detail",
-		"userid":      "user-1",
-		"status":      "completed",
-		"started_at":  now.Format(time.RFC3339),
-		"duration_ms": 1000,
-		"summary": map[string]any{
-			"skill_count":    5,
-			"created_count":  1,
-			"updated_count":  2,
-			"skipped_count":  1,
-			"failed_count":   1,
-			"accepted_count": 3,
-		},
-	})
-	insertSkillReviewStats(t, db, map[string]any{
-		"id":          "stats-other-user",
-		"requestid":   "request-detail",
-		"userid":      "user-2",
-		"status":      "completed",
-		"started_at":  now.Format(time.RFC3339),
-		"duration_ms": 1000,
-		"summary": map[string]any{
-			"skill_count": 99,
-		},
-	})
-
-	req := mux.SetURLVars(httptest.NewRequest(http.MethodGet, "/api/core/skill-review-results/request-detail", nil), map[string]string{"review_result_id": "request-detail"})
-	req.Header.Set("X-User-Id", "user-1")
-	rec := httptest.NewRecorder()
-	GetSkillReviewResult(rec, req)
-	if rec.Code != http.StatusOK {
-		t.Fatalf("detail failed: code=%d body=%s", rec.Code, rec.Body.String())
-	}
-	var resp struct {
-		Code int                      `json:"code"`
-		Data skillReviewStatsResponse `json:"data"`
-	}
-	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
-		t.Fatalf("decode detail: %v", err)
-	}
-	if resp.Data.ID != "stats-detail" ||
-		resp.Data.RequestID != "request-detail" ||
-		resp.Data.UserID != "user-1" ||
-		resp.Data.Status != "completed" ||
-		resp.Data.DurationMS != 1000 {
-		t.Fatalf("unexpected stats detail response: %#v", resp.Data)
-	}
-	if resp.Data.SkillCount != 5 ||
-		resp.Data.CreatedCount != 1 ||
-		resp.Data.UpdatedCount != 2 ||
-		resp.Data.SkippedCount != 1 ||
-		resp.Data.FailedCount != 1 {
-		t.Fatalf("unexpected stats counts: %#v", resp.Data)
-	}
-	var summary map[string]int
-	if err := json.Unmarshal(resp.Data.Summary, &summary); err != nil {
-		t.Fatalf("decode summary: %v", err)
-	}
-	if summary["accepted_count"] != 3 {
-		t.Fatalf("expected raw summary to be preserved, got %#v", summary)
 	}
 }
 
