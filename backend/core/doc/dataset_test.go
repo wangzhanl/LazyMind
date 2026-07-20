@@ -152,14 +152,22 @@ func TestListDatasetsFiltersScanDeniedSourceDatasets(t *testing.T) {
 
 	prevTransport := http.DefaultTransport
 	http.DefaultTransport = roundTripFunc(func(r *http.Request) (*http.Response, error) {
-		if r.Method != http.MethodPost || r.URL.Path != "/api/scan/internal/source-access/by-dataset:batch" {
+		if r.Method != http.MethodPost {
 			t.Errorf("unexpected scan request %s %q", r.Method, r.URL.Path)
 			return testJSONResponse(http.StatusNotFound, `{"message":"not found"}`), nil
 		}
-		if got := r.Header.Get("Authorization"); got != "Bearer user-token" {
-			t.Errorf("expected Authorization to be forwarded, got %q", got)
+		switch r.URL.Path {
+		case "/api/scan/internal/source-access/by-dataset:batch":
+			if got := r.Header.Get("Authorization"); got != "Bearer user-token" {
+				t.Errorf("expected Authorization to be forwarded, got %q", got)
+			}
+			return testJSONResponse(http.StatusOK, `{"items":[{"dataset_id":"ds-local","source_id":"source-local","exists":true,"allowed":false},{"dataset_id":"ds-manual","exists":false,"allowed":true}]}`), nil
+		case "/api/scan/internal/sources/by-datasets":
+			return testJSONResponse(http.StatusOK, `{"source_map":{"ds-manual":false}}`), nil
+		default:
+			t.Errorf("unexpected scan request %s %q", r.Method, r.URL.Path)
+			return testJSONResponse(http.StatusNotFound, `{"message":"not found"}`), nil
 		}
-		return testJSONResponse(http.StatusOK, `{"items":[{"dataset_id":"ds-local","source_id":"source-local","exists":true,"allowed":false},{"dataset_id":"ds-manual","exists":false,"allowed":true}]}`), nil
 	})
 	t.Cleanup(func() { http.DefaultTransport = prevTransport })
 	t.Setenv("LAZYMIND_SCAN_CONTROL_PLANE_URL", "http://scan.test")

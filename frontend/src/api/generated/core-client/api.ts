@@ -480,7 +480,6 @@ export interface CreateServerRequest {
     'url': string;
 }
 export interface CreateTaskItem {
-    'content_hash'?: string;
     'cross_dataset'?: boolean;
     'task': TaskPayload;
     'task_id'?: string;
@@ -1005,10 +1004,6 @@ export interface ListModelProviderGroupModelsOpenAPIItem {
     'group_name': string;
     'id': string;
     'is_default': boolean;
-    /**
-     * Maximum catalog LLM or VLM input context window, for example 128K or 1M; null for other, custom, or unknown models
-     */
-    'max_input_tokens'?: string | null;
     'model_type': string;
     'name': string;
     'provider_name': string;
@@ -1359,7 +1354,6 @@ export interface RevisionSummary {
     'created_at': string;
     'created_by'?: string;
     'id': string;
-    'is_head': boolean;
     'message': string;
     'parent_revision_id'?: string;
     'path': string;
@@ -1407,10 +1401,6 @@ export interface SearchWordGroupsRequest {
 export interface SelectedModelOpenAPIItem {
     'base_url': string;
     'group_name': string;
-    /**
-     * Maximum selected catalog LLM or VLM input context window, for example 128K or 1M; null for other, custom, or unknown models
-     */
-    'max_input_tokens'?: string | null;
     'model_id': string;
     'model_key': string;
     'name': string;
@@ -1621,18 +1611,6 @@ export interface SkillListOpenAPIResponse {
     'page_size': number;
     'total': number;
 }
-export interface SkillMaintenanceStatusOpenAPIResponse {
-    'has_active_task': boolean;
-    'message'?: string;
-    'task'?: SkillMaintenanceTaskOpenAPIResponse;
-}
-export interface SkillMaintenanceTaskOpenAPIResponse {
-    'id': string;
-    'request_id': string;
-    'started_at': string;
-    'status': string;
-    'type': string;
-}
 export interface SkillOrganizeOpenAPIRequest {
     'artifact_dir'?: string;
     'requestid': string;
@@ -1652,7 +1630,6 @@ export interface SkillRevisionOpenAPIResponse {
     'created_by'?: string;
     'file_content'?: string;
     'id': string;
-    'is_head': boolean;
     'message'?: string;
     'parent_revision_id'?: string;
     'revision_id': string;
@@ -2044,7 +2021,6 @@ export interface UpdateWordGroupRequest {
     'term': string;
 }
 export interface UploadFileResponse {
-    'content_hash'?: string;
     'content_type'?: string;
     'content_url'?: string;
     'dataset_id'?: string;
@@ -2131,7 +2107,7 @@ export interface WordGroupConflictResponse {
 export const AgentApiAxiosParamCreator = function (configuration?: Configuration) {
     return {
         /**
-         * Proxies Evo GET /candidates/{candidate_id} after validating the thread_id prefix belongs to the current user.
+         * Proxies Evo GET /candidates/{candidate_id} after validating the thread_id prefix is known to Core.
          * @summary Get Evo candidate
          * @param {string} candidateId 
          * @param {*} [options] Override http request option.
@@ -2165,18 +2141,16 @@ export const AgentApiAxiosParamCreator = function (configuration?: Configuration
             };
         },
         /**
-         * Proxies Evo GET /candidates for a current-user thread. The thread_id query parameter is required by Core for ownership enforcement.
+         * Proxies Evo GET /candidates. When thread_id is provided, Core validates that the thread belongs to the current user before proxying.
          * @summary List Evo candidates
-         * @param {string} threadId 
+         * @param {string} [threadId]
          * @param {string} [status] 
          * @param {number} [pageSize] 
          * @param {string} [pageToken] 
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
          */
-        apiCoreAgentCandidatesGet: async (threadId: string, status?: string, pageSize?: number, pageToken?: string, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
-            // verify required parameter 'threadId' is not null or undefined
-            assertParamExists('apiCoreAgentCandidatesGet', 'threadId', threadId)
+        apiCoreAgentCandidatesGet: async (threadId?: string, status?: string, pageSize?: number, pageToken?: string, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
             const localVarPath = `/api/core/agent/candidates`;
             // use dummy base URL string because the URL constructor only accepts absolute URLs.
             const localVarUrlObj = new URL(localVarPath, DUMMY_BASE_URL);
@@ -2333,7 +2307,7 @@ export const AgentApiAxiosParamCreator = function (configuration?: Configuration
         /**
          * Proxies Evo GET /router/algorithms.
          * @summary List Evo router algorithms
-         * @param {string} [threadId] 
+         * @param {string} [threadId]
          * @param {string} [algorithmId] 
          * @param {string} [status] 
          * @param {string} [routerAdminUrl] 
@@ -3310,7 +3284,7 @@ export const AgentApiFp = function(configuration?: Configuration) {
     const localVarAxiosParamCreator = AgentApiAxiosParamCreator(configuration)
     return {
         /**
-         * Proxies Evo GET /candidates/{candidate_id} after validating the thread_id prefix belongs to the current user.
+         * Proxies Evo GET /candidates/{candidate_id} after validating the thread_id prefix is known to Core.
          * @summary Get Evo candidate
          * @param {string} candidateId 
          * @param {*} [options] Override http request option.
@@ -3323,16 +3297,16 @@ export const AgentApiFp = function(configuration?: Configuration) {
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
         },
         /**
-         * Proxies Evo GET /candidates for a current-user thread. The thread_id query parameter is required by Core for ownership enforcement.
+         * Proxies Evo GET /candidates. When thread_id is provided, Core validates that the thread belongs to the current user before proxying.
          * @summary List Evo candidates
-         * @param {string} threadId 
+         * @param {string} [threadId]
          * @param {string} [status] 
          * @param {number} [pageSize] 
          * @param {string} [pageToken] 
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
          */
-        async apiCoreAgentCandidatesGet(threadId: string, status?: string, pageSize?: number, pageToken?: string, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<{ [key: string]: any; }>> {
+        async apiCoreAgentCandidatesGet(threadId?: string, status?: string, pageSize?: number, pageToken?: string, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<{ [key: string]: any; }>> {
             const localVarAxiosArgs = await localVarAxiosParamCreator.apiCoreAgentCandidatesGet(threadId, status, pageSize, pageToken, options);
             const localVarOperationServerIndex = configuration?.serverIndex ?? 0;
             const localVarOperationServerBasePath = operationServerMap['AgentApi.apiCoreAgentCandidatesGet']?.[localVarOperationServerIndex]?.url;
@@ -3733,7 +3707,7 @@ export const AgentApiFactory = function (configuration?: Configuration, basePath
     const localVarFp = AgentApiFp(configuration)
     return {
         /**
-         * Proxies Evo GET /candidates/{candidate_id} after validating the thread_id prefix belongs to the current user.
+         * Proxies Evo GET /candidates/{candidate_id} after validating the thread_id prefix is known to Core.
          * @summary Get Evo candidate
          * @param {AgentApiApiCoreAgentCandidatesCandidateIdGetRequest} requestParameters Request parameters.
          * @param {*} [options] Override http request option.
@@ -3743,13 +3717,13 @@ export const AgentApiFactory = function (configuration?: Configuration, basePath
             return localVarFp.apiCoreAgentCandidatesCandidateIdGet(requestParameters.candidateId, options).then((request) => request(axios, basePath));
         },
         /**
-         * Proxies Evo GET /candidates for a current-user thread. The thread_id query parameter is required by Core for ownership enforcement.
+         * Proxies Evo GET /candidates. When thread_id is provided, Core validates that the thread belongs to the current user before proxying.
          * @summary List Evo candidates
          * @param {AgentApiApiCoreAgentCandidatesGetRequest} requestParameters Request parameters.
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
          */
-        apiCoreAgentCandidatesGet(requestParameters: AgentApiApiCoreAgentCandidatesGetRequest, options?: RawAxiosRequestConfig): AxiosPromise<{ [key: string]: any; }> {
+        apiCoreAgentCandidatesGet(requestParameters: AgentApiApiCoreAgentCandidatesGetRequest = {}, options?: RawAxiosRequestConfig): AxiosPromise<{ [key: string]: any; }> {
             return localVarFp.apiCoreAgentCandidatesGet(requestParameters.threadId, requestParameters.status, requestParameters.pageSize, requestParameters.pageToken, options).then((request) => request(axios, basePath));
         },
         /**
@@ -4035,7 +4009,7 @@ export interface AgentApiApiCoreAgentCandidatesCandidateIdGetRequest {
  * Request parameters for apiCoreAgentCandidatesGet operation in AgentApi.
  */
 export interface AgentApiApiCoreAgentCandidatesGetRequest {
-    readonly threadId: string
+    readonly threadId?: string
 
     readonly status?: string
 
@@ -4301,7 +4275,7 @@ export interface AgentApiApiCoreAgentThreadsThreadIdStepsGetRequest {
  */
 export class AgentApi extends BaseAPI {
     /**
-     * Proxies Evo GET /candidates/{candidate_id} after validating the thread_id prefix belongs to the current user.
+     * Proxies Evo GET /candidates/{candidate_id} after validating the thread_id prefix is known to Core.
      * @summary Get Evo candidate
      * @param {AgentApiApiCoreAgentCandidatesCandidateIdGetRequest} requestParameters Request parameters.
      * @param {*} [options] Override http request option.
@@ -4312,13 +4286,13 @@ export class AgentApi extends BaseAPI {
     }
 
     /**
-     * Proxies Evo GET /candidates for a current-user thread. The thread_id query parameter is required by Core for ownership enforcement.
+     * Proxies Evo GET /candidates. When thread_id is provided, Core validates that the thread belongs to the current user before proxying.
      * @summary List Evo candidates
      * @param {AgentApiApiCoreAgentCandidatesGetRequest} requestParameters Request parameters.
      * @param {*} [options] Override http request option.
      * @throws {RequiredError}
      */
-    public apiCoreAgentCandidatesGet(requestParameters: AgentApiApiCoreAgentCandidatesGetRequest, options?: RawAxiosRequestConfig) {
+    public apiCoreAgentCandidatesGet(requestParameters: AgentApiApiCoreAgentCandidatesGetRequest = {}, options?: RawAxiosRequestConfig) {
         return AgentApiFp(this.configuration).apiCoreAgentCandidatesGet(requestParameters.threadId, requestParameters.status, requestParameters.pageSize, requestParameters.pageToken, options).then((request) => request(this.axios, this.basePath));
     }
 
@@ -9912,40 +9886,6 @@ export const DefaultApiAxiosParamCreator = function (configuration?: Configurati
         },
         /**
          * 
-         * @summary Record prompt usage
-         * @param {string} name 
-         * @param {*} [options] Override http request option.
-         * @throws {RequiredError}
-         */
-        apiCorePromptsNameUsePost: async (name: string, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
-            // verify required parameter 'name' is not null or undefined
-            assertParamExists('apiCorePromptsNameUsePost', 'name', name)
-            const localVarPath = `/api/core/prompts/{name}:use`
-                .replace(`{${"name"}}`, encodeURIComponent(String(name)));
-            // use dummy base URL string because the URL constructor only accepts absolute URLs.
-            const localVarUrlObj = new URL(localVarPath, DUMMY_BASE_URL);
-            let baseOptions;
-            if (configuration) {
-                baseOptions = configuration.baseOptions;
-            }
-
-            const localVarRequestOptions = { method: 'POST', ...baseOptions, ...options};
-            const localVarHeaderParameter = {} as any;
-            const localVarQueryParameter = {} as any;
-
-            localVarHeaderParameter['Accept'] = 'application/json';
-
-            setSearchParams(localVarUrlObj, localVarQueryParameter);
-            let headersFromBaseOptions = baseOptions && baseOptions.headers ? baseOptions.headers : {};
-            localVarRequestOptions.headers = {...localVarHeaderParameter, ...headersFromBaseOptions, ...options.headers};
-
-            return {
-                url: toPathString(localVarUrlObj),
-                options: localVarRequestOptions,
-            };
-        },
-        /**
-         * 
          * @summary Polish prompt
          * @param {PromptPolishRequest} promptPolishRequest 
          * @param {*} [options] Override http request option.
@@ -12684,19 +12624,6 @@ export const DefaultApiFp = function(configuration?: Configuration) {
         },
         /**
          * 
-         * @summary Record prompt usage
-         * @param {string} name 
-         * @param {*} [options] Override http request option.
-         * @throws {RequiredError}
-         */
-        async apiCorePromptsNameUsePost(name: string, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<PromptStateResponse>> {
-            const localVarAxiosArgs = await localVarAxiosParamCreator.apiCorePromptsNameUsePost(name, options);
-            const localVarOperationServerIndex = configuration?.serverIndex ?? 0;
-            const localVarOperationServerBasePath = operationServerMap['DefaultApi.apiCorePromptsNameUsePost']?.[localVarOperationServerIndex]?.url;
-            return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
-        },
-        /**
-         * 
          * @summary Polish prompt
          * @param {PromptPolishRequest} promptPolishRequest 
          * @param {*} [options] Override http request option.
@@ -14267,16 +14194,6 @@ export const DefaultApiFactory = function (configuration?: Configuration, basePa
         },
         /**
          * 
-         * @summary Record prompt usage
-         * @param {DefaultApiApiCorePromptsNameUsePostRequest} requestParameters Request parameters.
-         * @param {*} [options] Override http request option.
-         * @throws {RequiredError}
-         */
-        apiCorePromptsNameUsePost(requestParameters: DefaultApiApiCorePromptsNameUsePostRequest, options?: RawAxiosRequestConfig): AxiosPromise<PromptStateResponse> {
-            return localVarFp.apiCorePromptsNameUsePost(requestParameters.name, options).then((request) => request(axios, basePath));
-        },
-        /**
-         * 
          * @summary Polish prompt
          * @param {DefaultApiApiCorePromptsPolishPostRequest} requestParameters Request parameters.
          * @param {*} [options] Override http request option.
@@ -15384,13 +15301,6 @@ export interface DefaultApiApiCorePromptsNameSetDefaultPostRequest {
  * Request parameters for apiCorePromptsNameUnsetDefaultPost operation in DefaultApi.
  */
 export interface DefaultApiApiCorePromptsNameUnsetDefaultPostRequest {
-    readonly name: string
-}
-
-/**
- * Request parameters for apiCorePromptsNameUsePost operation in DefaultApi.
- */
-export interface DefaultApiApiCorePromptsNameUsePostRequest {
     readonly name: string
 }
 
@@ -16751,17 +16661,6 @@ export class DefaultApi extends BaseAPI {
      */
     public apiCorePromptsNameUnsetDefaultPost(requestParameters: DefaultApiApiCorePromptsNameUnsetDefaultPostRequest, options?: RawAxiosRequestConfig) {
         return DefaultApiFp(this.configuration).apiCorePromptsNameUnsetDefaultPost(requestParameters.name, options).then((request) => request(this.axios, this.basePath));
-    }
-
-    /**
-     * 
-     * @summary Record prompt usage
-     * @param {DefaultApiApiCorePromptsNameUsePostRequest} requestParameters Request parameters.
-     * @param {*} [options] Override http request option.
-     * @throws {RequiredError}
-     */
-    public apiCorePromptsNameUsePost(requestParameters: DefaultApiApiCorePromptsNameUsePostRequest, options?: RawAxiosRequestConfig) {
-        return DefaultApiFp(this.configuration).apiCorePromptsNameUsePost(requestParameters.name, options).then((request) => request(this.axios, this.basePath));
     }
 
     /**
@@ -20605,7 +20504,7 @@ export const ModelProvidersApiAxiosParamCreator = function (configuration?: Conf
             };
         },
         /**
-         * Lists non-deleted user_model_provider_group_models for the group. Each item includes is_default (true when copied from default_models seeding; false for user-added models) and nullable max_input_tokens, the catalog LLM or VLM model\'s maximum input context window expressed as a string such as 128K or 1M. Other, custom, or unknown models return null.
+         * Lists non-deleted user_model_provider_group_models for the group. Each item includes is_default (true when copied from default_models seeding; false for user-added models).
          * @summary List models under a connection group
          * @param {string} modelProviderId 
          * @param {string} groupId 
@@ -20810,7 +20709,7 @@ export const ModelProvidersApiAxiosParamCreator = function (configuration?: Conf
             };
         },
         /**
-         * Requires query model_type (e.g. llm or vlm). Returns all non-deleted user_model_provider_group_models for the current user with that model_type across all providers and groups. Each item includes nullable max_input_tokens, the catalog LLM or VLM model\'s maximum input context window expressed as a string such as 128K or 1M; other, custom, or unknown models return null. Ordered by user_model_provider_id, group id, then name. Same items as GET .../groups/{group_id}/models.
+         * Requires query model_type (e.g. llm, embedding). Returns all non-deleted user_model_provider_group_models for the current user with that model_type across all providers and groups. Ordered by user_model_provider_id, group id, then name. Same items as GET .../groups/{group_id}/models.
          * @summary List current user\'s models by model_type
          * @param {string} [modelType] 
          * @param {*} [options] Override http request option.
@@ -20880,7 +20779,7 @@ export const ModelProvidersApiAxiosParamCreator = function (configuration?: Conf
             };
         },
         /**
-         * Returns the current user\'s selected model for each model_type. Each selection includes nullable max_input_tokens, the selected catalog LLM or VLM model\'s maximum input context window expressed as a string such as 128K or 1M; other, custom, or unknown models return null.
+         * Returns the current user\'s selected model for each model_type.
          * @summary Get selected models by model_type
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
@@ -21188,7 +21087,7 @@ export const ModelProvidersApiFp = function(configuration?: Configuration) {
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
         },
         /**
-         * Lists non-deleted user_model_provider_group_models for the group. Each item includes is_default (true when copied from default_models seeding; false for user-added models) and nullable max_input_tokens, the catalog LLM or VLM model\'s maximum input context window expressed as a string such as 128K or 1M. Other, custom, or unknown models return null.
+         * Lists non-deleted user_model_provider_group_models for the group. Each item includes is_default (true when copied from default_models seeding; false for user-added models).
          * @summary List models under a connection group
          * @param {string} modelProviderId 
          * @param {string} groupId 
@@ -21261,7 +21160,7 @@ export const ModelProvidersApiFp = function(configuration?: Configuration) {
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
         },
         /**
-         * Requires query model_type (e.g. llm or vlm). Returns all non-deleted user_model_provider_group_models for the current user with that model_type across all providers and groups. Each item includes nullable max_input_tokens, the catalog LLM or VLM model\'s maximum input context window expressed as a string such as 128K or 1M; other, custom, or unknown models return null. Ordered by user_model_provider_id, group id, then name. Same items as GET .../groups/{group_id}/models.
+         * Requires query model_type (e.g. llm, embedding). Returns all non-deleted user_model_provider_group_models for the current user with that model_type across all providers and groups. Ordered by user_model_provider_id, group id, then name. Same items as GET .../groups/{group_id}/models.
          * @summary List current user\'s models by model_type
          * @param {string} [modelType] 
          * @param {*} [options] Override http request option.
@@ -21287,7 +21186,7 @@ export const ModelProvidersApiFp = function(configuration?: Configuration) {
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
         },
         /**
-         * Returns the current user\'s selected model for each model_type. Each selection includes nullable max_input_tokens, the selected catalog LLM or VLM model\'s maximum input context window expressed as a string such as 128K or 1M; other, custom, or unknown models return null.
+         * Returns the current user\'s selected model for each model_type.
          * @summary Get selected models by model_type
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
@@ -21433,7 +21332,7 @@ export const ModelProvidersApiFactory = function (configuration?: Configuration,
             return localVarFp.apiCoreModelProvidersModelProviderIdGroupsGroupIdDelete(requestParameters.modelProviderId, requestParameters.groupId, options).then((request) => request(axios, basePath));
         },
         /**
-         * Lists non-deleted user_model_provider_group_models for the group. Each item includes is_default (true when copied from default_models seeding; false for user-added models) and nullable max_input_tokens, the catalog LLM or VLM model\'s maximum input context window expressed as a string such as 128K or 1M. Other, custom, or unknown models return null.
+         * Lists non-deleted user_model_provider_group_models for the group. Each item includes is_default (true when copied from default_models seeding; false for user-added models).
          * @summary List models under a connection group
          * @param {ModelProvidersApiApiCoreModelProvidersModelProviderIdGroupsGroupIdModelsGetRequest} requestParameters Request parameters.
          * @param {*} [options] Override http request option.
@@ -21483,7 +21382,7 @@ export const ModelProvidersApiFactory = function (configuration?: Configuration,
             return localVarFp.apiCoreModelProvidersModelProviderIdGroupsPost(requestParameters.modelProviderId, requestParameters.createModelProviderGroupOpenAPIRequest, options).then((request) => request(axios, basePath));
         },
         /**
-         * Requires query model_type (e.g. llm or vlm). Returns all non-deleted user_model_provider_group_models for the current user with that model_type across all providers and groups. Each item includes nullable max_input_tokens, the catalog LLM or VLM model\'s maximum input context window expressed as a string such as 128K or 1M; other, custom, or unknown models return null. Ordered by user_model_provider_id, group id, then name. Same items as GET .../groups/{group_id}/models.
+         * Requires query model_type (e.g. llm, embedding). Returns all non-deleted user_model_provider_group_models for the current user with that model_type across all providers and groups. Ordered by user_model_provider_id, group id, then name. Same items as GET .../groups/{group_id}/models.
          * @summary List current user\'s models by model_type
          * @param {ModelProvidersApiApiCoreModelProvidersModelsGetRequest} requestParameters Request parameters.
          * @param {*} [options] Override http request option.
@@ -21503,7 +21402,7 @@ export const ModelProvidersApiFactory = function (configuration?: Configuration,
             return localVarFp.apiCoreModelProvidersProviderGroupsGet(requestParameters.category, options).then((request) => request(axios, basePath));
         },
         /**
-         * Returns the current user\'s selected model for each model_type. Each selection includes nullable max_input_tokens, the selected catalog LLM or VLM model\'s maximum input context window expressed as a string such as 128K or 1M; other, custom, or unknown models return null.
+         * Returns the current user\'s selected model for each model_type.
          * @summary Get selected models by model_type
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
@@ -21762,7 +21661,7 @@ export class ModelProvidersApi extends BaseAPI {
     }
 
     /**
-     * Lists non-deleted user_model_provider_group_models for the group. Each item includes is_default (true when copied from default_models seeding; false for user-added models) and nullable max_input_tokens, the catalog LLM or VLM model\'s maximum input context window expressed as a string such as 128K or 1M. Other, custom, or unknown models return null.
+     * Lists non-deleted user_model_provider_group_models for the group. Each item includes is_default (true when copied from default_models seeding; false for user-added models).
      * @summary List models under a connection group
      * @param {ModelProvidersApiApiCoreModelProvidersModelProviderIdGroupsGroupIdModelsGetRequest} requestParameters Request parameters.
      * @param {*} [options] Override http request option.
@@ -21817,7 +21716,7 @@ export class ModelProvidersApi extends BaseAPI {
     }
 
     /**
-     * Requires query model_type (e.g. llm or vlm). Returns all non-deleted user_model_provider_group_models for the current user with that model_type across all providers and groups. Each item includes nullable max_input_tokens, the catalog LLM or VLM model\'s maximum input context window expressed as a string such as 128K or 1M; other, custom, or unknown models return null. Ordered by user_model_provider_id, group id, then name. Same items as GET .../groups/{group_id}/models.
+     * Requires query model_type (e.g. llm, embedding). Returns all non-deleted user_model_provider_group_models for the current user with that model_type across all providers and groups. Ordered by user_model_provider_id, group id, then name. Same items as GET .../groups/{group_id}/models.
      * @summary List current user\'s models by model_type
      * @param {ModelProvidersApiApiCoreModelProvidersModelsGetRequest} requestParameters Request parameters.
      * @param {*} [options] Override http request option.
@@ -21839,7 +21738,7 @@ export class ModelProvidersApi extends BaseAPI {
     }
 
     /**
-     * Returns the current user\'s selected model for each model_type. Each selection includes nullable max_input_tokens, the selected catalog LLM or VLM model\'s maximum input context window expressed as a string such as 128K or 1M; other, custom, or unknown models return null.
+     * Returns the current user\'s selected model for each model_type.
      * @summary Get selected models by model_type
      * @param {*} [options] Override http request option.
      * @throws {RequiredError}
@@ -28465,36 +28364,6 @@ export const SkillsApiAxiosParamCreator = function (configuration?: Configuratio
             };
         },
         /**
-         * 
-         * @summary Get current user\'s active Skill maintenance task
-         * @param {*} [options] Override http request option.
-         * @throws {RequiredError}
-         */
-        apiCoreSkillsMaintenanceTaskGet: async (options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
-            const localVarPath = `/api/core/skills/maintenance-task`;
-            // use dummy base URL string because the URL constructor only accepts absolute URLs.
-            const localVarUrlObj = new URL(localVarPath, DUMMY_BASE_URL);
-            let baseOptions;
-            if (configuration) {
-                baseOptions = configuration.baseOptions;
-            }
-
-            const localVarRequestOptions = { method: 'GET', ...baseOptions, ...options};
-            const localVarHeaderParameter = {} as any;
-            const localVarQueryParameter = {} as any;
-
-            localVarHeaderParameter['Accept'] = 'application/json';
-
-            setSearchParams(localVarUrlObj, localVarQueryParameter);
-            let headersFromBaseOptions = baseOptions && baseOptions.headers ? baseOptions.headers : {};
-            localVarRequestOptions.headers = {...localVarHeaderParameter, ...headersFromBaseOptions, ...options.headers};
-
-            return {
-                url: toPathString(localVarUrlObj),
-                options: localVarRequestOptions,
-            };
-        },
-        /**
          * Creates one directory-based skill from an uploaded ZIP or URL. The package must contain SKILL.md; description is product metadata and is not written into SKILL.md front matter.
          * @summary Create directory skill
          * @param {SkillCreateManagedOpenAPIRequest} skillCreateManagedOpenAPIRequest 
@@ -28959,18 +28828,6 @@ export const SkillsApiFp = function(configuration?: Configuration) {
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
         },
         /**
-         * 
-         * @summary Get current user\'s active Skill maintenance task
-         * @param {*} [options] Override http request option.
-         * @throws {RequiredError}
-         */
-        async apiCoreSkillsMaintenanceTaskGet(options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<SkillMaintenanceStatusOpenAPIResponse>> {
-            const localVarAxiosArgs = await localVarAxiosParamCreator.apiCoreSkillsMaintenanceTaskGet(options);
-            const localVarOperationServerIndex = configuration?.serverIndex ?? 0;
-            const localVarOperationServerBasePath = operationServerMap['SkillsApi.apiCoreSkillsMaintenanceTaskGet']?.[localVarOperationServerIndex]?.url;
-            return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
-        },
-        /**
          * Creates one directory-based skill from an uploaded ZIP or URL. The package must contain SKILL.md; description is product metadata and is not written into SKILL.md front matter.
          * @summary Create directory skill
          * @param {SkillCreateManagedOpenAPIRequest} skillCreateManagedOpenAPIRequest 
@@ -29171,15 +29028,6 @@ export const SkillsApiFactory = function (configuration?: Configuration, basePat
          */
         apiCoreSkillsGet(requestParameters: SkillsApiApiCoreSkillsGetRequest = {}, options?: RawAxiosRequestConfig): AxiosPromise<SkillListOpenAPIResponse> {
             return localVarFp.apiCoreSkillsGet(requestParameters.keyword, requestParameters.category, requestParameters.tags, requestParameters.page, requestParameters.pageSize, options).then((request) => request(axios, basePath));
-        },
-        /**
-         * 
-         * @summary Get current user\'s active Skill maintenance task
-         * @param {*} [options] Override http request option.
-         * @throws {RequiredError}
-         */
-        apiCoreSkillsMaintenanceTaskGet(options?: RawAxiosRequestConfig): AxiosPromise<SkillMaintenanceStatusOpenAPIResponse> {
-            return localVarFp.apiCoreSkillsMaintenanceTaskGet(options).then((request) => request(axios, basePath));
         },
         /**
          * Creates one directory-based skill from an uploaded ZIP or URL. The package must contain SKILL.md; description is product metadata and is not written into SKILL.md front matter.
@@ -29453,16 +29301,6 @@ export class SkillsApi extends BaseAPI {
      */
     public apiCoreSkillsGet(requestParameters: SkillsApiApiCoreSkillsGetRequest = {}, options?: RawAxiosRequestConfig) {
         return SkillsApiFp(this.configuration).apiCoreSkillsGet(requestParameters.keyword, requestParameters.category, requestParameters.tags, requestParameters.page, requestParameters.pageSize, options).then((request) => request(this.axios, this.basePath));
-    }
-
-    /**
-     * 
-     * @summary Get current user\'s active Skill maintenance task
-     * @param {*} [options] Override http request option.
-     * @throws {RequiredError}
-     */
-    public apiCoreSkillsMaintenanceTaskGet(options?: RawAxiosRequestConfig) {
-        return SkillsApiFp(this.configuration).apiCoreSkillsMaintenanceTaskGet(options).then((request) => request(this.axios, this.basePath));
     }
 
     /**
@@ -32763,6 +32601,4 @@ export class WordGroupApi extends BaseAPI {
         return WordGroupApiFp(this.configuration).apiCoreWordGroupUpdatePost(requestParameters.updateWordGroupRequest, options).then((request) => request(this.axios, this.basePath));
     }
 }
-
-
 

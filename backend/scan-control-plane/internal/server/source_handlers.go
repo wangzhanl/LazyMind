@@ -145,6 +145,26 @@ func (h *Handler) getSourceByDataset(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, http.StatusOK, resp)
 }
+func (h *Handler) batchGetSourcesByDatasetIDs(w http.ResponseWriter, r *http.Request) {
+	if h.sources == nil {
+		writeError(w, missingDependency("source engine"))
+		return
+	}
+	var req struct {
+		DatasetIDs []string `json:"dataset_ids"`
+	}
+	if err := decodeJSON(r, &req); err != nil {
+		writeError(w, invalidJSON(err))
+		return
+	}
+	result, err := h.sources.BatchGetSourcesByDatasetIDs(r.Context(), req.DatasetIDs)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"source_map": result})
+}
+
 
 type sourceAccessByDatasetBatchRequest struct {
 	DatasetIDs []string `json:"dataset_ids"`
@@ -541,3 +561,4 @@ func boolQueryDefault(r *http.Request, key string, fallback bool) bool {
 	}
 	return parsed
 }
+
