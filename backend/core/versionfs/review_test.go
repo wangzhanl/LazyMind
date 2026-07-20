@@ -1,19 +1,22 @@
 package versionfs
 
 import (
-	"fmt"
 	"strings"
 	"testing"
 
 	"lazymind/core/filediff"
 )
 
-func TestApplyTextReviewAcceptsAdaptiveHunksIndependently(t *testing.T) {
-	oldLines := make([]string, 0, 7)
-	newLines := make([]string, 0, 7)
-	for index := 1; index <= 7; index++ {
-		oldLines = append(oldLines, fmt.Sprintf("preference_%02d: common value a suffix", index))
-		newLines = append(newLines, fmt.Sprintf("preference_%02d: common value b suffix", index))
+func TestApplyTextReviewAcceptsWholeLineGroupAndRejectsLocalEdit(t *testing.T) {
+	oldLines := []string{
+		"- 当遇到错误时详细解释旧逻辑",
+		"- 根据旧参数调用原来的处理流程",
+		"preference: keep concise",
+	}
+	newLines := []string{
+		"- 2222222222222222222222",
+		"- 3333333333333333333333",
+		"preference: keep very concise",
 	}
 	headContent := strings.Join(oldLines, "\n") + "\n"
 	draftContent := strings.Join(newLines, "\n") + "\n"
@@ -49,7 +52,7 @@ func TestApplyTextReviewAcceptsAdaptiveHunksIndependently(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ApplyTextReview returned error: %v", err)
 	}
-	wantLines := append(append([]string{}, newLines[:3]...), oldLines[3:]...)
+	wantLines := append(append([]string{}, newLines[:2]...), oldLines[2:]...)
 	want := strings.Join(wantLines, "\n") + "\n"
 	if got != want {
 		t.Fatalf("merged content mismatch\ngot:\n%s\nwant:\n%s", got, want)

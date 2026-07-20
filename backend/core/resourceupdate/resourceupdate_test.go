@@ -351,6 +351,35 @@ func TestCountSkillReviewHistoryStatsCountsTrajectoryToolCalls(t *testing.T) {
 	}
 }
 
+func TestCountSkillReviewHistoryStatsExcludesPluginConversations(t *testing.T) {
+	db := newResourceUpdateTestDB(t)
+	ctx := context.Background()
+	start := time.Date(2026, 6, 9, 10, 0, 0, 0, time.UTC)
+	end := start.Add(time.Hour)
+	insertSkillReviewConversation(t, db, "conv-regular", "user-1", start.Add(10*time.Minute), 2, 2)
+	insertSkillReviewConversation(t, db, "conv-plugin", "user-1", start.Add(20*time.Minute), 3, 4)
+	if err := db.Create(&orm.PluginSession{
+		ID:             "plugin-session-1",
+		ConversationID: "conv-plugin",
+		PluginID:       "image-plugin",
+		Status:         "completed",
+		Dismissed:      true,
+		CreateUserID:   "user-1",
+		CreatedAt:      start.Add(20 * time.Minute),
+		UpdatedAt:      start.Add(30 * time.Minute),
+	}).Error; err != nil {
+		t.Fatalf("insert plugin session: %v", err)
+	}
+
+	stats, err := CountSkillReviewHistoryStats(ctx, db, "user-1", start, end, 2, 2)
+	if err != nil {
+		t.Fatalf("count stats: %v", err)
+	}
+	if stats.UserTurnCount != 2 || stats.ToolCallCount != 2 || stats.QualifiedSessionCount != 1 {
+		t.Fatalf("expected only regular conversation to count, got %#v", stats)
+	}
+}
+
 func TestCountSkillReviewHistoryStatsDoesNotCombineWeakConversations(t *testing.T) {
 	db := newResourceUpdateTestDB(t)
 	ctx := context.Background()
@@ -2138,6 +2167,7 @@ func newResourceUpdateTestDB(t *testing.T) *gorm.DB {
 	if err := db.AutoMigrate(
 		&orm.Conversation{},
 		&orm.ChatHistory{},
+		&orm.PluginSession{},
 		&orm.ResourceUpdateTask{},
 		&orm.SkillReviewSchedulerState{},
 		&orm.PersonalResource{},
