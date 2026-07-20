@@ -16,6 +16,8 @@ import (
 	"lazymind/core/modelconfig"
 	corestore "lazymind/core/store"
 
+	"golang.org/x/text/collate"
+	"golang.org/x/text/language"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 )
@@ -485,7 +487,16 @@ func promptMatchesScope(item promptItemResponse, scope string) bool {
 	}
 }
 
-func sortPromptItems(items []promptItemResponse, sortBy string) {
+func sortPromptItems(items []promptItemResponse, sortBy, locale string) {
+	var nameCollator *collate.Collator
+	if sortBy == "name_asc" {
+		localeTag := language.SimplifiedChinese
+		if strings.HasPrefix(strings.ToLower(strings.TrimSpace(locale)), "en") {
+			localeTag = language.English
+		}
+		nameCollator = collate.New(localeTag, collate.IgnoreCase)
+	}
+
 	sort.SliceStable(items, func(i, j int) bool {
 		left, right := items[i], items[j]
 		switch sortBy {
@@ -494,7 +505,10 @@ func sortPromptItems(items []promptItemResponse, sortBy string) {
 				return left.UsageCount > right.UsageCount
 			}
 		case "name_asc":
-			return strings.ToLower(left.DisplayName) < strings.ToLower(right.DisplayName)
+			if comparison := nameCollator.CompareString(left.DisplayName, right.DisplayName); comparison != 0 {
+				return comparison < 0
+			}
+			return left.ID < right.ID
 		default:
 			if left.UpdatedAt != nil || right.UpdatedAt != nil {
 				if left.UpdatedAt == nil {
@@ -551,6 +565,7 @@ func ListPrompts(w http.ResponseWriter, r *http.Request) {
 		common.ReplyErr(w, "invalid sort", http.StatusBadRequest)
 		return
 	}
+	locale := r.URL.Query().Get("locale")
 	keyword := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("keyword")))
 	states, err := loadPromptStates(userID)
 	if err != nil {
@@ -569,7 +584,7 @@ func ListPrompts(w http.ResponseWriter, r *http.Request) {
 	}
 	allItems := make([]promptItemResponse, 0, len(presetPrompts)+len(customPrompts))
 	for _, preset := range presetPrompts {
-		allItems = append(allItems, localizedPresetItem(preset, r.URL.Query().Get("locale"), states[preset.ID]))
+		allItems = append(allItems, localizedPresetItem(preset, locale, states[preset.ID]))
 	}
 	for _, prompt := range customPrompts {
 		allItems = append(allItems, customPromptItem(prompt, states[prompt.ID]))
@@ -611,7 +626,7 @@ func ListPrompts(w http.ResponseWriter, r *http.Request) {
 			filtered = append(filtered, item)
 		}
 	}
-	sortPromptItems(filtered, sortBy)
+	sortPromptItems(filtered, sortBy, locale)
 	total := len(filtered)
 	if start > total {
 		start = total
