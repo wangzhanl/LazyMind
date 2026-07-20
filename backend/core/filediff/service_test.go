@@ -1,6 +1,10 @@
 package filediff
 
-import "testing"
+import (
+	"fmt"
+	"strings"
+	"testing"
+)
 
 func TestCompareContentSplitsSeparatedChangeBlocksIntoHunks(t *testing.T) {
 	oldText := "test123\nfirst\n\n\nsecond\n\n\n\nmiddle\n\n\nthird\n\n\ntail\n"
@@ -41,4 +45,111 @@ func hunkLines(lines []DiffEntryLine) []DiffEntryLine {
 		}
 	}
 	return out
+}
+
+func TestCompareContentAdaptivelySplitsContinuousChangesByEditWeight(t *testing.T) {
+	tests := []struct {
+		name       string
+		lineCount  int
+		oldValue   string
+		newValue   string
+		wantRanges []int
+	}{
+		{
+			name:       "three light edits stay together",
+			lineCount:  3,
+			oldValue:   "common value a suffix",
+			newValue:   "common value b suffix",
+			wantRanges: []int{3},
+		},
+		{
+			name:       "seven light edits split without a line-count threshold",
+			lineCount:  7,
+			oldValue:   "common value a suffix",
+			newValue:   "common value b suffix",
+			wantRanges: []int{3, 4},
+		},
+		{
+			name:       "ten light edits form two balanced hunks",
+			lineCount:  10,
+			oldValue:   "common value a suffix",
+			newValue:   "common value b suffix",
+			wantRanges: []int{5, 5},
+		},
+		{
+			name:       "ten medium edits form four hunks",
+			lineCount:  10,
+			oldValue:   "common abcde suffix",
+			newValue:   "common vwxyz suffix",
+			wantRanges: []int{2, 3, 2, 3},
+		},
+		{
+			name:       "ten heavy edits form five hunks",
+			lineCount:  10,
+			oldValue:   "common 甲乙丙丁戊己庚辛壬癸子丑寅 suffix",
+			newValue:   "common 天地玄黄宇宙洪荒日月盈昃辰 suffix",
+			wantRanges: []int{2, 2, 2, 2, 2},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			oldText, newText := continuousChangedLines(tt.lineCount, tt.oldValue, tt.newValue)
+			diff, err := CompareContent(
+				Content{Path: "memory.md", Data: []byte(oldText), EditableText: true},
+				Content{Path: "memory.md", Data: []byte(newText), EditableText: true},
+				Options{},
+			)
+			if err != nil {
+				t.Fatalf("CompareContent returned error: %v", err)
+			}
+
+			hunks := hunkLines(diff.DiffEntryLines)
+			if len(hunks) != len(tt.wantRanges) {
+				t.Fatalf("hunk count = %d, want %d; lines = %#v", len(hunks), len(tt.wantRanges), diff.DiffEntryLines)
+			}
+			for index, wantLines := range tt.wantRanges {
+				if hunks[index].OldLines != wantLines || hunks[index].NewLines != wantLines {
+					t.Fatalf("hunk %d ranges = old:%d new:%d, want %d; header = %#v", index, hunks[index].OldLines, hunks[index].NewLines, wantLines, hunks[index])
+				}
+			}
+		})
+	}
+}
+
+func TestCompareContentPrefersNearbyDocumentBoundary(t *testing.T) {
+	oldLines := []string{
+		"plain line 1 a", "plain line 2 a", "plain line 3 a", "plain line 4 a",
+		"plain line 5 a", "plain line 6 a", "plain line 7 a", "plain line 8 a",
+	}
+	newLines := []string{
+		"plain line 1 b", "plain line 2 b", "plain line 3 b", "# New section b",
+		"plain line 5 b", "plain line 6 b", "plain line 7 b", "plain line 8 b",
+	}
+	diff, err := CompareContent(
+		Content{Path: "skill.md", Data: []byte(strings.Join(oldLines, "\n") + "\n"), EditableText: true},
+		Content{Path: "skill.md", Data: []byte(strings.Join(newLines, "\n") + "\n"), EditableText: true},
+		Options{},
+	)
+	if err != nil {
+		t.Fatalf("CompareContent returned error: %v", err)
+	}
+
+	hunks := hunkLines(diff.DiffEntryLines)
+	if len(hunks) != 2 {
+		t.Fatalf("hunk count = %d, want 2; lines = %#v", len(hunks), diff.DiffEntryLines)
+	}
+	if hunks[0].OldLines != 3 || hunks[1].OldLines != 5 {
+		t.Fatalf("hunk ranges = %d/%d, want 3/5; hunks = %#v", hunks[0].OldLines, hunks[1].OldLines, hunks)
+	}
+}
+
+func continuousChangedLines(lineCount int, oldValue, newValue string) (string, string) {
+	oldLines := make([]string, 0, lineCount)
+	newLines := make([]string, 0, lineCount)
+	for index := 1; index <= lineCount; index++ {
+		oldLines = append(oldLines, fmt.Sprintf("preference_%02d: %s", index, oldValue))
+		newLines = append(newLines, fmt.Sprintf("preference_%02d: %s", index, newValue))
+	}
+	return strings.Join(oldLines, "\n") + "\n", strings.Join(newLines, "\n") + "\n"
 }
