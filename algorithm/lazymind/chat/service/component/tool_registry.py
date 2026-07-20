@@ -507,7 +507,9 @@ DEFAULT_TOOLS: list[ToolConfig] = [
     ToolConfig(
         name='video_generator',
         label='文生视频',
+        label_en='Video Generator',
         description='根据文字描述生成视频，可选首帧参考图；同轮多次调用并行，视频侧最多同时3路',
+        description_en='Generate videos from text descriptions, with optional first-frame reference images.',
         tool=video_generator, module='content',
         model_role='video_generator',
         capability_id='video_generation',
@@ -518,7 +520,9 @@ DEFAULT_TOOLS: list[ToolConfig] = [
     ToolConfig(
         name='video_to_gif',
         label='视频转GIF',
+        label_en='GIF Converter',
         description='将本地视频转换为 GIF 动图；同轮多次调用并行，GIF 侧最多同时3路',
+        description_en='Convert local videos to GIF animations.',
         tool=video_to_gif, module='content',
         capability_id='video_to_gif',
         input_schema={'url': 'string'}, output_schema={'image': 'file'},
