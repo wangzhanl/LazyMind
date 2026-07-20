@@ -421,6 +421,28 @@ func TestTriggerSourceSyncSplitsObjectKeysScope(t *testing.T) {
 	}
 }
 
+func TestTriggerSourceSyncQueuesSingleCleanupForDeletingBinding(t *testing.T) {
+	t.Parallel()
+
+	now := fixedSourceTestTime()
+	repo := newSourceEngineRepoStub()
+	repo.sources["source-1"] = store.Source{SourceID: "source-1", Status: SourceStatusActive, CreatedAt: now, UpdatedAt: now}
+	repo.bindings["source-1"] = []store.Binding{{SourceID: "source-1", BindingID: "binding-1", BindingGeneration: 1, Status: BindingStatusDeleting, CreatedAt: now, UpdatedAt: now}}
+	scheduler := &sourceScheduleSpy{}
+	engine := newTestSourceEngineWithSchedule(t, repo, &sourceCoreSpy{}, &sourceSpyConnector{}, scheduler, now)
+
+	resp, err := engine.TriggerSourceSync(context.Background(), TriggerSourceSyncRequest{
+		SourceID: "source-1", BindingID: "binding-1", ScopeType: string(connector.ScopeTypePartial),
+		ScopeRef: map[string]any{"object_keys": []any{"doc-1", "doc-2"}},
+	})
+	if err != nil {
+		t.Fatalf("trigger cleanup sync: %v", err)
+	}
+	if len(resp.RunIDs) != 1 || len(scheduler.manual) != 1 || scheduler.manual[0].ScopeType != connector.ScopeTypeCleanup || len(scheduler.manual[0].ScopeRef) != 0 {
+		t.Fatalf("deleting binding should enqueue one full cleanup run: resp=%+v manual=%+v", resp, scheduler.manual)
+	}
+}
+
 func TestTriggerSourceSyncSplitsGenerateScopes(t *testing.T) {
 	t.Parallel()
 
@@ -1331,7 +1353,7 @@ func TestCreateSourceReturnsOperationUpdateError(t *testing.T) {
 	}
 }
 
-func TestDeleteBindingSoftDeletesAndDeletesCoreFolder(t *testing.T) {
+func TestDeleteBindingSoftDeletesWithoutDeletingCoreFolder(t *testing.T) {
 	t.Parallel()
 
 	now := fixedSourceTestTime()
@@ -1357,11 +1379,8 @@ func TestDeleteBindingSoftDeletesAndDeletesCoreFolder(t *testing.T) {
 	if deleted.Status != BindingStatusDeleting || deleted.DeletedAt == nil {
 		t.Fatalf("binding was not soft deleted: %+v", deleted)
 	}
-	if len(core.deletedFolders) != 1 || core.deletedFolders[0] != "folder-1" {
-		t.Fatalf("core folder was not deleted: %v", core.deletedFolders)
-	}
-	if len(core.deleteRequests) != 1 || core.deleteRequests[0].DatasetID != "dataset-1" || core.deleteRequests[0].DocumentID != "folder-1" {
-		t.Fatalf("binding cleanup should call core document delete with dataset scope: %+v", core.deleteRequests)
+	if len(core.deletedFolders) != 0 || len(core.deleteRequests) != 0 {
+		t.Fatalf("path removal must defer core deletion until sync: folders=%v requests=%+v", core.deletedFolders, core.deleteRequests)
 	}
 }
 
@@ -1544,6 +1563,45 @@ func TestUpdateSourceWithBindingsUsesAtomicStoreContract(t *testing.T) {
 	}
 	if len(core.createdFolders) != 1 || len(core.deletedFolders) != 1 || core.createdFolders[0] != core.deletedFolders[0] {
 		t.Fatalf("new target folder was not compensated after failed mutation: created=%v deleted=%v", core.createdFolders, core.deletedFolders)
+	}
+}
+
+func TestUpdateSourceTargetChangeCreatesNewBindingAndDefersOldCleanup(t *testing.T) {
+	t.Parallel()
+
+	now := fixedSourceTestTime()
+	repo := newSourceEngineRepoStub()
+	repo.sources["source-1"] = store.Source{SourceID: "source-1", TenantID: "tenant-1", CreatedBy: "user-1", Name: "Docs", DatasetID: "dataset-1", Status: SourceStatusActive, ConfigVersion: 7, CreatedAt: now, UpdatedAt: now}
+	repo.bindings["source-1"] = []store.Binding{{
+		BindingID: "binding-old", SourceID: "source-1", ConnectorType: string(spyConnectorType), TargetType: string(spyTargetType), TargetRef: "old", TargetFingerprint: "fp-old", TreeKey: "root-old", BindingGeneration: 1, CoreParentDocumentID: "folder-old", SyncMode: SyncModeManual, Status: BindingStatusActive, CreatedAt: now, UpdatedAt: now,
+	}}
+	core := &sourceCoreSpy{}
+	engine := newTestSourceEngine(t, repo, core, &sourceSpyConnector{}, now)
+
+	resp, err := engine.UpdateSource(context.Background(), "user-1", "source-1", UpdateSourceRequest{
+		ConfigVersion: 7, BindingsProvided: true,
+		Bindings: []BindingInput{{BindingID: "binding-old", ConnectorType: spyConnectorType, TargetType: spyTargetType, TargetRef: "new", SyncMode: SyncModeManual}},
+	})
+	if err != nil {
+		t.Fatalf("update source target: %v", err)
+	}
+	if len(resp.CreatedBindingIDs) != 1 || !reflect.DeepEqual(resp.RemovedBindingIDs, []string{"binding-old"}) || len(resp.UpdatedBindingIDs) != 0 {
+		t.Fatalf("target replacement should be create+deferred delete: %+v", resp)
+	}
+	if len(resp.Bindings) != 1 || resp.Bindings[0].BindingID != resp.CreatedBindingIDs[0] || resp.Bindings[0].TargetRef != "new" {
+		t.Fatalf("response should expose only the replacement binding: %+v", resp.Bindings)
+	}
+	if len(core.deletedFolders) != 0 {
+		t.Fatalf("old binding root must not be deleted before cleanup sync: %v", core.deletedFolders)
+	}
+	foundDeleting := false
+	for _, binding := range repo.bindings["source-1"] {
+		if binding.BindingID == "binding-old" && binding.Status == BindingStatusDeleting {
+			foundDeleting = true
+		}
+	}
+	if !foundDeleting {
+		t.Fatalf("old binding was not retained for deferred cleanup: %+v", repo.bindings["source-1"])
 	}
 }
 
@@ -1865,15 +1923,15 @@ func (c *sourceSpyConnector) MapObject(context.Context, connector.RawObject) (co
 }
 
 type sourceCoreSpy struct {
-	createdDatasets  []string
-	deletedDatasets  []string
-	createdFolders   []string
-	deletedFolders   []string
-	datasetRequests  []coreclient.CreateDatasetRequest
-	folderRequests   []coreclient.CreateBindingRootDocumentRequest
-	datasetDeletes   []coreclient.DeleteDatasetRequest
-	deleteRequests   []coreclient.DeleteDocumentRequest
-	batchDeletes     []coreclient.BatchDeleteDocumentsRequest
+	createdDatasets []string
+	deletedDatasets []string
+	createdFolders  []string
+	deletedFolders  []string
+	datasetRequests []coreclient.CreateDatasetRequest
+	folderRequests  []coreclient.CreateBindingRootDocumentRequest
+	datasetDeletes  []coreclient.DeleteDatasetRequest
+	deleteRequests  []coreclient.DeleteDocumentRequest
+	batchDeletes    []coreclient.BatchDeleteDocumentsRequest
 }
 
 func (c *sourceCoreSpy) CreateDataset(_ context.Context, req coreclient.CreateDatasetRequest) (coreclient.CreateDatasetResponse, error) {
@@ -2009,7 +2067,6 @@ func (r *sourceEngineRepoStub) ListSourcesByDatasetIDs(_ context.Context, datase
 	}
 	return result, nil
 }
-
 
 func (r *sourceEngineRepoStub) UpdateSource(context.Context, store.Source) error {
 	panic("sourceEngineRepoStub.UpdateSource is not used by these tests")
@@ -2222,7 +2279,6 @@ func operationKey(callerID, requestID string) string {
 	return callerID + "\x00" + requestID
 }
 
-
 func (r *sourceEngineRepoStub) UpdateBindingChatEnabled(_ context.Context, bindingID string, chatEnabled bool) error {
 	for sourceID, bindings := range r.bindings {
 		for i := range bindings {
@@ -2235,6 +2291,7 @@ func (r *sourceEngineRepoStub) UpdateBindingChatEnabled(_ context.Context, bindi
 	}
 	return store.NewStoreError(store.ErrCodeBindingNotFound, "binding not found")
 }
+
 var _ SourceRepository = (*sourceEngineRepoStub)(nil)
 var _ coreclient.ResourceClient = (*sourceCoreSpy)(nil)
 var _ connector.SourceConnector = (*sourceSpyConnector)(nil)
