@@ -16,7 +16,7 @@ from services.cloud_oauth_provider import (
     CloudProviderError,
     CloudTokenPayload,
 )
-from services.providers import FeishuOAuthProvider, NotionOAuthProvider
+from services.providers import FeishuOAuthProvider, GoogleDriveOAuthProvider, NotionOAuthProvider
 
 
 _AUTH_MODES = {'tenant', 'oauth_user', 'service_account'}
@@ -96,9 +96,11 @@ def _json_loads(raw: str | None) -> dict[str, Any]:
 class CloudOAuthService:
     def __init__(self):
         feishu = FeishuOAuthProvider()
+        google_drive = GoogleDriveOAuthProvider()
         notion = NotionOAuthProvider()
         self._providers: dict[str, CloudOAuthProvider] = {
             feishu.provider_name(): feishu,
+            google_drive.provider_name(): google_drive,
             notion.provider_name(): notion,
         }
         self._cache_lock = threading.Lock()
