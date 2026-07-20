@@ -810,6 +810,7 @@ type datasetQueryParams struct {
 	OrderBy   string   `query:"order_by"`
 	Keyword   string   `query:"keyword"`
 	Tags      []string `query:"tags"`
+	Source    string   `query:"source" enum:"manual,cloud" desc:"Filter datasets by creation source."`
 }
 
 type createDatasetQueryParams struct {

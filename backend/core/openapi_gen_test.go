@@ -65,6 +65,31 @@ func TestOpenAPISpecCoversAllRegisteredRoutes(t *testing.T) {
 	}
 }
 
+func TestOpenAPISpecIncludesDatasetSourceFilter(t *testing.T) {
+	r := mux.NewRouter()
+	registerCoreRoutes(r)
+
+	specJSON, err := buildOpenAPISpecFromRouter(r)
+	if err != nil {
+		t.Fatalf("build openapi spec: %v", err)
+	}
+
+	var spec map[string]any
+	if err := json.Unmarshal(specJSON, &spec); err != nil {
+		t.Fatalf("decode openapi spec: %v", err)
+	}
+
+	op := openAPIOperationForTest(t, spec, "get", "/api/core/datasets")
+	params := openAPIParameterNamesForTest(t, op)
+	if _, ok := params["source"]; !ok {
+		t.Fatalf("dataset list must document the source query parameter")
+	}
+	sourceSchema := openAPIParameterSchemaForTest(t, op, "source")
+	if !reflect.DeepEqual(sourceSchema["enum"], []any{"manual", "cloud"}) {
+		t.Fatalf("unexpected dataset source values: %#v", sourceSchema["enum"])
+	}
+}
+
 func TestOpenAPISpecRevisionSchemasIncludeHeadMarker(t *testing.T) {
 	r := mux.NewRouter()
 	registerCoreRoutes(r)
