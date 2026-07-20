@@ -7,15 +7,17 @@ class CloudProviderError(RuntimeError):
     def __init__(
         self,
         message: str,
-        *,
         provider_code: str = '',
         retryable: bool = False,
         requires_reauth: bool = False,
     ) -> None:
-        super().__init__(message)
+        super().__init__(message, provider_code, retryable, requires_reauth)
         self.provider_code = (provider_code or '').strip()
         self.retryable = retryable
         self.requires_reauth = requires_reauth
+
+    def __str__(self) -> str:
+        return str(self.args[0])
 
 
 @dataclass
