@@ -255,6 +255,88 @@ func TestPromptLibraryFavoriteAndUsage(t *testing.T) {
 	}
 }
 
+func TestPromptLibraryFacetsRespectCategoryAndScope(t *testing.T) {
+	db := newPromptTestDB(t)
+	corestore.Init(db.DB, nil, nil)
+	t.Cleanup(func() { corestore.Init(nil, nil, nil) })
+
+	now := time.Date(2026, time.July, 17, 9, 0, 0, 0, time.UTC)
+	states := []orm.PromptUserState{
+		{
+			ID:             "pus_general",
+			PromptID:       "preset-general-qa",
+			IsFavorite:     true,
+			UsageCount:     2,
+			LastUsedAt:     &now,
+			CreateUserID:   "u1",
+			CreateUserName: "Prompt Tester",
+			CreatedAt:      now,
+			UpdatedAt:      now,
+		},
+		{
+			ID:             "pus_document",
+			PromptID:       "preset-document-summary",
+			IsFavorite:     true,
+			CreateUserID:   "u1",
+			CreateUserName: "Prompt Tester",
+			CreatedAt:      now,
+			UpdatedAt:      now,
+		},
+	}
+	if err := db.Create(&states).Error; err != nil {
+		t.Fatalf("create prompt states: %v", err)
+	}
+
+	request := func(query string) promptListResponse {
+		t.Helper()
+		req := httptest.NewRequest(http.MethodGet, "/api/core/prompts?"+query, nil)
+		req.Header.Set("X-User-Id", "u1")
+		rec := httptest.NewRecorder()
+		ListPrompts(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("list prompts failed: status=%d body=%s", rec.Code, rec.Body.String())
+		}
+		var response promptListResponse
+		if err := json.Unmarshal(rec.Body.Bytes(), &response); err != nil {
+			t.Fatalf("decode prompt list: %v", err)
+		}
+		return response
+	}
+
+	generalAll := request("category=general&scope=all")
+	if generalAll.Total != 1 || len(generalAll.Prompts) != 1 || generalAll.Prompts[0].ID != "preset-general-qa" {
+		t.Fatalf("unexpected general prompt list: %#v", generalAll)
+	}
+	if generalAll.Facets.Scopes["all"] != 1 || generalAll.Facets.Scopes["recent"] != 1 || generalAll.Facets.Scopes["favorite"] != 1 || generalAll.Facets.Scopes["custom"] != 0 {
+		t.Fatalf("unexpected general scope facets: %#v", generalAll.Facets.Scopes)
+	}
+	if generalAll.Facets.CategoryTotal != 3 || generalAll.Facets.Categories["general"] != 1 || generalAll.Facets.Categories["document_processing"] != 1 || generalAll.Facets.Categories["information_extraction"] != 1 {
+		t.Fatalf("unexpected all-scope category facets: %#v", generalAll.Facets)
+	}
+
+	generalFavorite := request("category=general&scope=favorite")
+	if generalFavorite.Total != 1 || len(generalFavorite.Prompts) != 1 {
+		t.Fatalf("unexpected favorite general list: %#v", generalFavorite)
+	}
+	if generalFavorite.Facets.CategoryTotal != 2 || generalFavorite.Facets.Categories["general"] != 1 || generalFavorite.Facets.Categories["document_processing"] != 1 || generalFavorite.Facets.Categories["information_extraction"] != 0 {
+		t.Fatalf("unexpected favorite category facets: %#v", generalFavorite.Facets)
+	}
+	if generalFavorite.Facets.Scopes["all"] != 1 || generalFavorite.Facets.Scopes["recent"] != 1 || generalFavorite.Facets.Scopes["favorite"] != 1 {
+		t.Fatalf("scope facets must ignore the selected scope: %#v", generalFavorite.Facets.Scopes)
+	}
+
+	informationFavorite := request("category=information_extraction&scope=favorite")
+	if informationFavorite.Total != 0 || len(informationFavorite.Prompts) != 0 {
+		t.Fatalf("unexpected favorite information extraction list: %#v", informationFavorite)
+	}
+	if informationFavorite.Facets.Scopes["all"] != 1 || informationFavorite.Facets.Scopes["recent"] != 0 || informationFavorite.Facets.Scopes["favorite"] != 0 {
+		t.Fatalf("unexpected information extraction scope facets: %#v", informationFavorite.Facets.Scopes)
+	}
+	if informationFavorite.Facets.CategoryTotal != 2 || informationFavorite.Facets.Categories["general"] != 1 || informationFavorite.Facets.Categories["document_processing"] != 1 {
+		t.Fatalf("category facets must ignore the selected category: %#v", informationFavorite.Facets)
+	}
+}
+
 func TestPromptLibraryRejectsInvalidCategoryAndPresetMutation(t *testing.T) {
 	db := newPromptTestDB(t)
 	corestore.Init(db.DB, nil, nil)
