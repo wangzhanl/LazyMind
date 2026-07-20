@@ -49,11 +49,6 @@ def read_session(
             FROM conversations c
             WHERE c.updated_at >= :start_time
               AND c.updated_at < :end_time
-              AND NOT EXISTS (
-                  SELECT 1
-                  FROM plugin_sessions ps
-                  WHERE ps.conversation_id = c.id
-              )
               {user_filter}
         )
         SELECT ch.*, us.create_user_id
