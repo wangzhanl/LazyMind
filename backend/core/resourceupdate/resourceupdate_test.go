@@ -1413,6 +1413,59 @@ func TestMemoryWorkerRetriesThenFailsAndDoesNotPersistLLMConfig(t *testing.T) {
 	}
 }
 
+func TestMemoryWorkerDoesNotRetryUnprocessableRequest(t *testing.T) {
+	db := newResourceUpdateTestDB(t)
+	ctx := context.Background()
+	now := time.Date(2026, 6, 9, 10, 0, 0, 0, time.UTC)
+	task := insertTask(t, db, orm.ResourceUpdateTask{
+		ID:           "task-memory-invalid",
+		TaskType:     orm.ResourceUpdateTaskTypeGenerateReview,
+		ResourceType: orm.ResourceUpdateResourceTypeMemory,
+		UserID:       "user-1",
+		ResourceID:   "memory",
+		TriggerType:  orm.ResourceUpdateTriggerTypeConversationIdle,
+		TriggerID:    "idle-invalid",
+		Status:       orm.ResourceUpdateTaskStatusPending,
+		RequestJSON: marshalJSON(t, memoryGenerateRequestJSON{
+			SessionID: "session-invalid",
+			History:   json.RawMessage(`[{"role":"user","content":"hello"}]`),
+		}),
+		NextRunAt: now,
+		CreatedAt: now,
+		UpdatedAt: now,
+	})
+
+	worker := NewWorker(db, Config{
+		WorkerBatchSize:  1,
+		WorkerLockTTL:    time.Minute,
+		MaxAttempts:      3,
+		RetryBackoffBase: time.Minute,
+		RetryBackoffMax:  time.Minute,
+	}, "worker-invalid-request")
+	worker.clock = func() time.Time { return now }
+	worker.loadLLMConfig = func(context.Context, *gorm.DB, string) (map[string]any, error) {
+		return map[string]any{}, nil
+	}
+	worker.callers.Memory = func(context.Context, algo.MemoryReviewRequest) (*algo.MemoryReviewResponse, int, error) {
+		return nil, http.StatusUnprocessableEntity, errors.New("validation failed")
+	}
+
+	result, err := worker.RunOnce(ctx)
+	if err != nil {
+		t.Fatalf("worker run: %v", err)
+	}
+	if result.Failed != 1 || result.Retried != 0 {
+		t.Fatalf("unexpected worker result: %#v", result)
+	}
+	var got orm.ResourceUpdateTask
+	if err := db.First(&got, "id = ?", task.ID).Error; err != nil {
+		t.Fatalf("read failed task: %v", err)
+	}
+	if got.Status != orm.ResourceUpdateTaskStatusFailed || got.AttemptCount != 1 || got.ErrorCode != "memory_review_invalid_request" {
+		t.Fatalf("unexpected failed task: %#v", got)
+	}
+}
+
 func TestMemoryWorkerMarksSuccessfulReviewDone(t *testing.T) {
 	db := newResourceUpdateTestDB(t)
 	ctx := context.Background()
@@ -1429,7 +1482,7 @@ func TestMemoryWorkerMarksSuccessfulReviewDone(t *testing.T) {
 		RequestJSON: marshalJSON(t, memoryGenerateRequestJSON{
 			SessionID:      "session-2",
 			Target:         orm.ResourceUpdateResourceTypeUserPreference,
-			History:        json.RawMessage(`[{"role":"assistant","content":"ok"}]`),
+			History:        json.RawMessage(`[{"role":"user","content":"hello"}]`),
 			CurrentContent: "current preference",
 		}),
 		NextRunAt: now,
@@ -1451,7 +1504,7 @@ func TestMemoryWorkerMarksSuccessfulReviewDone(t *testing.T) {
 	}
 	worker.callers.Memory = func(_ context.Context, req algo.MemoryReviewRequest) (*algo.MemoryReviewResponse, int, error) {
 		captured = req
-		return &algo.MemoryReviewResponse{Status: "success"}, 200, nil
+		return &algo.MemoryReviewResponse{Status: "success", TaskID: req.TaskID}, http.StatusOK, nil
 	}
 
 	result, err := worker.RunOnce(ctx)
@@ -1461,7 +1514,8 @@ func TestMemoryWorkerMarksSuccessfulReviewDone(t *testing.T) {
 	if result.Done != 1 {
 		t.Fatalf("expected done result, got %#v", result)
 	}
-	if captured.UserID != "user-1" || captured.User != "current preference" || captured.Memory != "" {
+	expectedTaskID := "memory_review_" + task.ID
+	if captured.TaskID != expectedTaskID || captured.UserID != "user-1" {
 		t.Fatalf("unexpected memory review request: %#v", captured)
 	}
 	if captured.History == nil || captured.LLMConfig == nil {
@@ -1471,13 +1525,13 @@ func TestMemoryWorkerMarksSuccessfulReviewDone(t *testing.T) {
 	if err := db.First(&got, "id = ?", task.ID).Error; err != nil {
 		t.Fatalf("read done task: %v", err)
 	}
-	if got.Status != orm.ResourceUpdateTaskStatusDone || got.ResultID != "" {
+	if got.Status != orm.ResourceUpdateTaskStatusDone || got.ResultID != expectedTaskID {
 		t.Fatalf("unexpected done task: %#v", got)
 	}
 	assertRequestJSONHasNoSensitiveFields(t, got.RequestJSON)
 }
 
-func TestMemoryWorkerSendsCombinedMemoryReviewRequest(t *testing.T) {
+func TestMemoryWorkerSendsAlgorithmContractRequest(t *testing.T) {
 	db := newResourceUpdateTestDB(t)
 	ctx := context.Background()
 	now := time.Date(2026, 6, 9, 10, 0, 0, 0, time.UTC)
@@ -1515,7 +1569,7 @@ func TestMemoryWorkerSendsCombinedMemoryReviewRequest(t *testing.T) {
 	}
 	worker.callers.Memory = func(_ context.Context, req algo.MemoryReviewRequest) (*algo.MemoryReviewResponse, int, error) {
 		captured = req
-		return &algo.MemoryReviewResponse{Status: "success"}, 200, nil
+		return &algo.MemoryReviewResponse{Status: "success", TaskID: req.TaskID}, http.StatusOK, nil
 	}
 
 	result, err := worker.RunOnce(ctx)
@@ -1525,7 +1579,7 @@ func TestMemoryWorkerSendsCombinedMemoryReviewRequest(t *testing.T) {
 	if result.Done != 1 {
 		t.Fatalf("expected done result, got %#v", result)
 	}
-	if captured.UserID != "user-1" || captured.Memory != "current memory" || captured.User != "current preference" {
+	if captured.TaskID != "memory_review_"+task.ID || captured.UserID != "user-1" {
 		t.Fatalf("unexpected memory review request: %#v", captured)
 	}
 	if captured.History == nil || captured.LLMConfig == nil {
