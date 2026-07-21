@@ -983,6 +983,7 @@ const enUS = {
     docImageExclusive: "Cannot upload documents and images at the same time",
     maxFilesWarning: "Maximum 3 files allowed",
     unsupportedFileType: "Only {{types}} file formats are supported",
+    supportedUploadTypeSummary: "images, PDF/Office documents, and common plain-text/code/config files",
     thinking: "Thinking...",
     cite: "Cite",
     clearCitation: "Remove citation",

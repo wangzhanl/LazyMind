@@ -27,6 +27,7 @@ import AddIcon from "../../assets/icons/add.svg?react";
 import ImageUpload, {
   allowedImageTypes,
   allowedFileTypes,
+  allowedTextTypes,
   allowedUploadTypes,
   ImageUploadImperativeProps,
   OnBeforeAddFilesResult,
@@ -236,7 +237,9 @@ function isImage(f: { name?: string }) {
 }
 function isDoc(f: { name?: string }) {
   const suffix = getSuffix(f);
-  return suffix !== "" && allowedFileTypes.includes(suffix);
+  return suffix !== "" && (
+    allowedFileTypes.includes(suffix) || allowedTextTypes.includes(suffix)
+  );
 }
 
 const MARKDOWN_IMAGE_PATTERN =
@@ -930,7 +933,7 @@ const ChatInput = forwardRef<ChatInputImperativeProps, ChatInputProps>(
           if (invalidFiles.length > 0) {
             message.warning(
               t("chat.unsupportedFileType", {
-                types: allowedUploadTypes.join(","),
+                types: t("chat.supportedUploadTypeSummary"),
               }),
             );
           }

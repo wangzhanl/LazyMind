@@ -946,6 +946,7 @@ const zhCN = {
     docImageExclusive: "不支持同时传入文档与图片",
     maxFilesWarning: "最多只能上传 3 个文件",
     unsupportedFileType: "仅支持上传{{types}}格式的文件",
+    supportedUploadTypeSummary: "图片、PDF/Office 文档及常见纯文本/代码/配置",
     thinking: "思考中...",
     cite: "引用",
     clearCitation: "取消引用",
