@@ -111,7 +111,6 @@ function PromptModalComponent(
   const [facets, setFacets] = useState<{
     scopes?: Record<string, number>; // 各范围数量
     categories?: Record<string, number>; // 各分类数量
-    category_total?: number; // 全部分类数量
   }>({});
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(false);
@@ -505,7 +504,7 @@ function PromptModalComponent(
               >
                 <UnorderedListOutlined aria-hidden />
                 <span>{t("chat.promptAllCategories")}</span>
-                <strong>{facets.category_total ?? 0}</strong>
+                <strong>{facets.scopes?.all ?? 0}</strong>
               </button>
               {CATEGORY_KEYS.map((key) => (
                 <button
