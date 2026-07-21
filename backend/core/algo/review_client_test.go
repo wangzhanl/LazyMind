@@ -29,7 +29,12 @@ func TestReviewSkillUsesRegisteredChatRoute(t *testing.T) {
 	t.Cleanup(server.Close)
 	t.Setenv("LAZYMIND_CHAT_SERVICE_URL", server.URL)
 
-	response, status, err := ReviewSkill(context.Background(), SkillReviewRequest{RequestID: "request-1"})
+	response, status, err := ReviewSkill(context.Background(), SkillReviewRequest{
+		RequestID:       "request-1",
+		UserID:          "user-1",
+		SessionIDs:      []string{"conversation-1"},
+		PendingSkillIDs: []string{"pending-skill-1"},
+	})
 	if err != nil {
 		t.Fatalf("ReviewSkill() error = %v", err)
 	}
@@ -44,6 +49,18 @@ func TestReviewSkillUsesRegisteredChatRoute(t *testing.T) {
 	}
 	if _, ok := gotBody["fs_base_url"]; ok {
 		t.Fatalf("ReviewSkill() sent non-contract field fs_base_url: %#v", gotBody)
+	}
+	if _, ok := gotBody["start_time"]; ok {
+		t.Fatalf("ReviewSkill() sent removed field start_time: %#v", gotBody)
+	}
+	if _, ok := gotBody["end_time"]; ok {
+		t.Fatalf("ReviewSkill() sent removed field end_time: %#v", gotBody)
+	}
+	if sessionIDs, ok := gotBody["session_ids"].([]any); !ok || len(sessionIDs) != 1 || sessionIDs[0] != "conversation-1" {
+		t.Fatalf("ReviewSkill() session_ids = %#v", gotBody["session_ids"])
+	}
+	if pendingSkillIDs, ok := gotBody["pending_skill_ids"].([]any); !ok || len(pendingSkillIDs) != 1 || pendingSkillIDs[0] != "pending-skill-1" {
+		t.Fatalf("ReviewSkill() pending_skill_ids = %#v", gotBody["pending_skill_ids"])
 	}
 	if modelConfigs, ok := gotBody["model_configs"].(map[string]any); !ok || len(modelConfigs) != 0 {
 		t.Fatalf("ReviewSkill() model_configs = %#v, want empty object", gotBody["model_configs"])
